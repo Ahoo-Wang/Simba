@@ -1,14 +1,15 @@
 # Simba(Distributed Mutex)
 
-## Introduction
+## 介绍
 
-Simba aims to provide easy-to-use and flexible distributed lock services and supports multiple storage implementations: relational databases, Redis, and Zookeeper.
+Simba 旨在提供易用、灵活的分布式锁服务，支持多种存储后端实现：关系型数据库、Redis、Zookeeper。
+
 
 ### JdbcMutexContendService
 
 ![JdbcMutexContendService](docs/JdbcMutexContendService.png)
 
-## Installation
+## 安装
 
 ### Gradle
 
@@ -70,7 +71,7 @@ spring:
 
 [Simba-Examples](https://github.com/Ahoo-Wang/Simba/tree/main/simba-example)
 
-## Usage
+## 使用入门
 
 ### SimbaLocker
 
