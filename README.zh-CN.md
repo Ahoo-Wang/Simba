@@ -4,11 +4,6 @@
 
 Simba 旨在提供易用、灵活的分布式锁服务，支持多种存储后端实现：关系型数据库、Redis、Zookeeper。
 
-
-### JdbcMutexContendService
-
-![JdbcMutexContendService](docs/JdbcMutexContendService.png)
-
 ## 安装
 
 ### Gradle
@@ -18,7 +13,6 @@ Simba 旨在提供易用、灵活的分布式锁服务，支持多种存储后�
 ``` kotlin
     val simbaVersion = "0.1.8";
     implementation("me.ahoo.simba:simba-spring-boot-starter:${simbaVersion}")
-    implementation("me.ahoo.simba:simba-jdbc:${simbaVersion}")
 ```
 
 ### Maven
@@ -42,11 +36,6 @@ Simba 旨在提供易用、灵活的分布式锁服务，支持多种存储后�
             <artifactId>simba-spring-boot-starter</artifactId>
             <version>${simba.version}</version>
         </dependency>
-        <dependency>
-            <groupId>me.ahoo.simba</groupId>
-            <artifactId>simba-jdbc</artifactId>
-            <version>${simba.version}</version>
-        </dependency>
     </dependencies>
     
 </project>
@@ -65,6 +54,47 @@ spring:
     url: jdbc:mysql://localhost:3306/simba_db
     username: root
     password: root
+```
+
+### Optional-1: JdbcMutexContendService
+
+![JdbcMutexContendService](docs/JdbcMutexContendService.png)
+
+> Kotlin DSL
+
+``` kotlin
+    val simbaVersion = "0.1.8";
+    implementation("me.ahoo.simba:simba-jdbc:${simbaVersion}")
+```
+
+```sql
+create table simba_mutex
+(
+    mutex             varchar(66)     not null primary key comment 'mutex name',
+    acquired_at       bigint unsigned not null,
+    ttl_at         bigint unsigned not null,
+    transition_at bigint unsigned not null,
+    owner_id          char(32)        not null,
+    version           int unsigned    not null
+);
+```
+
+### Optional-2: RedisMutexContendService
+
+> Kotlin DSL
+
+``` kotlin
+    val simbaVersion = "0.1.8";
+    implementation("me.ahoo.simba:simba-redis:${simbaVersion}")
+```
+
+### Optional-3: ZookeeperMutexContendService
+
+> Kotlin DSL
+
+``` kotlin
+    val simbaVersion = "0.1.8";
+    implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
 ```
 
 ## Examples
