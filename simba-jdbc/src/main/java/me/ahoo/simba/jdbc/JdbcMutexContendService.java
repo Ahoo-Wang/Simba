@@ -101,12 +101,8 @@ public class JdbcMutexContendService extends AbstractMutexContendService {
         if (log.isDebugEnabled()) {
             log.debug("contend - mutex:[{}] contenderId:[{}] - succeeded:[{}].", getMutex(), getContenderId(), mutexOwner.isOwner(getContenderId()));
         }
-        notifyOwner(mutexOwner).whenComplete((nil, err) -> {
-            if (log.isErrorEnabled()) {
-                log.error(err.getMessage(), err);
-            }
-            long nextDelay = contendPeriod.ensureNextDelay(mutexOwner);
-            nextSchedule(nextDelay);
-        });
+        notifyOwner(mutexOwner);
+        long nextDelay = contendPeriod.ensureNextDelay(mutexOwner);
+        nextSchedule(nextDelay);
     }
 }

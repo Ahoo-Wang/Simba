@@ -131,13 +131,9 @@ public class RedisMutexContendService extends AbstractMutexContendService {
         try {
             AcquireResult result = AcquireResult.of(resultStr);
             final MutexOwner mutexOwner = newMutexOwner(result);
-            notifyOwner(mutexOwner).whenComplete((nil, err) -> {
-                if (log.isErrorEnabled()) {
-                    log.error(err.getMessage(), err);
-                }
-                long nextDelay = contendPeriod.ensureNextDelay(mutexOwner);
-                nextSchedule(nextDelay);
-            });
+            notifyOwner(mutexOwner);
+            long nextDelay = contendPeriod.ensureNextDelay(mutexOwner);
+            nextSchedule(nextDelay);
             return mutexOwner;
         } catch (Throwable throwable) {
             if (log.isErrorEnabled()) {
