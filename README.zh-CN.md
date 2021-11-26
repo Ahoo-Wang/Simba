@@ -103,19 +103,6 @@ create table simba_mutex
 
 ## 使用入门
 
-### SimbaLocker
-
-```java
-        try (Locker locker = new SimbaLocker("mutex-locker", this.mutexContendServiceFactory)) {
-            locker.acquire(Duration.ofSeconds(1));
-        /**
-         * doSomething
-         */
-        } catch (Exception e) {
-            log.error(e.getMessage(), e);
-        }
-```
-
 ### MutexContender
 
 ```java
@@ -131,4 +118,40 @@ create table simba_mutex
             }
         });
         contendService.start();
+```
+
+### SimbaLocker
+
+```java
+        try (Locker locker = new SimbaLocker("mutex-locker", this.mutexContendServiceFactory)) {
+            locker.acquire(Duration.ofSeconds(1));
+        /**
+         * doSomething
+         */
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+        }
+```
+
+### Scheduler
+
+```java
+public class ExampleScheduler extends AbstractScheduler implements SmartLifecycle {
+
+    public ExampleScheduler(MutexContendServiceFactory contendServiceFactory) {
+        super("example-scheduler", ScheduleConfig.ofDelay(Duration.ofSeconds(0), Duration.ofSeconds(10)), contendServiceFactory);
+    }
+
+    @Override
+    protected String getWorker() {
+        return "ExampleScheduler";
+    }
+
+    @Override
+    protected void work() {
+        if (log.isInfoEnabled()) {
+            log.info("do some work!");
+        }
+    }
+}
 ```
