@@ -13,6 +13,7 @@
 
 package me.ahoo.simba.schedule;
 
+import lombok.extern.slf4j.Slf4j;
 import me.ahoo.simba.core.AbstractMutexContender;
 import me.ahoo.simba.core.MutexContendService;
 import me.ahoo.simba.core.MutexContendServiceFactory;
@@ -26,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * @author ahoo wang
  */
+@Slf4j
 public abstract class AbstractScheduler {
 
     private final String mutex;
@@ -58,6 +60,7 @@ public abstract class AbstractScheduler {
         return this.contendService.isRunning();
     }
 
+
     public class WorkContender extends AbstractMutexContender {
         private final ScheduledThreadPoolExecutor scheduledThreadPoolExecutor;
         private volatile ScheduledFuture<?> workFuture;
@@ -74,9 +77,9 @@ public abstract class AbstractScheduler {
                 long initialDelay = config.getInitialDelay().toMillis();
                 long period = config.getPeriod().toMillis();
                 if (ScheduleConfig.Strategy.FIXED_RATE.equals(config.getStrategy())) {
-                    this.workFuture = scheduledThreadPoolExecutor.scheduleAtFixedRate(AbstractScheduler.this::work, initialDelay, period, TimeUnit.MILLISECONDS);
+                    this.workFuture = scheduledThreadPoolExecutor.scheduleAtFixedRate(this::safeWork, initialDelay, period, TimeUnit.MILLISECONDS);
                 } else {
-                    this.workFuture = scheduledThreadPoolExecutor.scheduleWithFixedDelay(AbstractScheduler.this::work, initialDelay, period, TimeUnit.MILLISECONDS);
+                    this.workFuture = scheduledThreadPoolExecutor.scheduleWithFixedDelay(this::safeWork, initialDelay, period, TimeUnit.MILLISECONDS);
                 }
             }
         }
@@ -86,6 +89,16 @@ public abstract class AbstractScheduler {
             super.onReleased(mutexState);
             if (this.workFuture != null) {
                 this.workFuture.cancel(true);
+            }
+        }
+
+        private void safeWork() {
+            try {
+                work();
+            } catch (Throwable throwable) {
+                if (log.isErrorEnabled()) {
+                    log.error(throwable.getMessage(), throwable);
+                }
             }
         }
     }

@@ -13,6 +13,7 @@
 
 package me.ahoo.simba.example;
 
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import me.ahoo.simba.core.MutexContendServiceFactory;
 import me.ahoo.simba.schedule.AbstractScheduler;
@@ -21,6 +22,8 @@ import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+
 
 /**
  * @author ahoo wang
@@ -38,10 +41,15 @@ public class ExampleScheduler extends AbstractScheduler implements SmartLifecycl
         return "ExampleScheduler";
     }
 
+    @SneakyThrows
     @Override
     protected void work() {
         if (log.isInfoEnabled()) {
-            log.info("do some work!");
+            log.info("do some work start!");
+        }
+        TimeUnit.SECONDS.sleep(5);
+        if (log.isInfoEnabled()) {
+            log.info("do some work end!");
         }
     }
 }

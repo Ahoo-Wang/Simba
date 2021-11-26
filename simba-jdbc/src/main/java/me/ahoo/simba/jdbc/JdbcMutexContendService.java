@@ -84,7 +84,10 @@ public class JdbcMutexContendService extends AbstractMutexContendService {
 
     private void safeHandleContend() {
         try {
-            this.contend();
+            final MutexOwner mutexOwner = this.contend();
+            notifyOwner(mutexOwner);
+            long nextDelay = contendPeriod.ensureNextDelay(mutexOwner);
+            nextSchedule(nextDelay);
         } catch (Throwable throwable) {
             if (log.isErrorEnabled()) {
                 log.error(throwable.getMessage(), throwable);
@@ -96,13 +99,11 @@ public class JdbcMutexContendService extends AbstractMutexContendService {
     /**
      * 服务实例竞争领导权
      */
-    private void contend() {
+    private MutexOwner contend() {
         final MutexOwnerEntity mutexOwner = mutexOwnerRepository.acquireAndGetOwner(getMutex(), getContenderId(), ttl.toMillis(), transition.toMillis());
         if (log.isDebugEnabled()) {
             log.debug("contend - mutex:[{}] contenderId:[{}] - succeeded:[{}].", getMutex(), getContenderId(), mutexOwner.isOwner(getContenderId()));
         }
-        notifyOwner(mutexOwner);
-        long nextDelay = contendPeriod.ensureNextDelay(mutexOwner);
-        nextSchedule(nextDelay);
+        return mutexOwner;
     }
 }

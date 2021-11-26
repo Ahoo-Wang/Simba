@@ -13,11 +13,11 @@
 
 create table simba_mutex
 (
-    mutex             varchar(66)     not null primary key comment 'mutex name',
-    acquired_at       bigint unsigned not null,
-    ttl_at         bigint unsigned not null,
+    mutex         varchar(66) not null primary key comment 'mutex name',
+    acquired_at   bigint unsigned not null,
+    ttl_at        bigint unsigned not null,
     transition_at bigint unsigned not null,
-    owner_id          char(32)        not null,
-    version           int unsigned    not null
+    owner_id      char(32)    not null,
+    version       int unsigned not null
 );
 
