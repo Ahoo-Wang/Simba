@@ -155,3 +155,7 @@ public class ExampleScheduler extends AbstractScheduler implements SmartLifecycl
     }
 }
 ```
+
+#### Use Cases
+
+[Govern-EventBus](https://github.com/Ahoo-Wang/govern-eventbus/tree/master/eventbus-core/src/main/java/me/ahoo/eventbus/core/compensate)
