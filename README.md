@@ -11,7 +11,7 @@ Simba aims to provide easy-to-use and flexible distributed lock services and sup
 > Kotlin DSL
 
 ``` kotlin
-    val simbaVersion = "0.2.2";
+    val simbaVersion = "0.2.3";
     implementation("me.ahoo.simba:simba-spring-boot-starter:${simbaVersion}")
 ```
 
@@ -27,7 +27,7 @@ Simba aims to provide easy-to-use and flexible distributed lock services and sup
     <modelVersion>4.0.0</modelVersion>
     <artifactId>demo</artifactId>
     <properties>
-        <simba.version>0.2.2</simba.version>
+        <simba.version>0.2.3</simba.version>
     </properties>
 
     <dependencies>
@@ -63,7 +63,7 @@ spring:
 > Kotlin DSL
 
 ``` kotlin
-    val simbaVersion = "0.2.2";
+    val simbaVersion = "0.2.3";
     implementation("me.ahoo.simba:simba-jdbc:${simbaVersion}")
 ```
 
@@ -84,7 +84,7 @@ create table simba_mutex
 > Kotlin DSL
 
 ``` kotlin
-    val simbaVersion = "0.2.2";
+    val simbaVersion = "0.2.3";
     implementation("me.ahoo.simba:simba-redis:${simbaVersion}")
 ```
 
@@ -93,7 +93,7 @@ create table simba_mutex
 > Kotlin DSL
 
 ``` kotlin
-    val simbaVersion = "0.2.2";
+    val simbaVersion = "0.2.3";
     implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
 ```
 
