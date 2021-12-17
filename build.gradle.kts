@@ -18,9 +18,11 @@
  * For more details take a look at the 'Building Java & JVM projects' chapter in the Gradle
  * User Manual available at https://docs.gradle.org/7.0/userguide/building_java_projects.html
  */
+
 plugins {
-    id("io.codearte.nexus-staging")
+    id("io.github.gradle-nexus.publish-plugin") version ("1.1.0")
 }
+
 
 val bomProjects = listOf(
     project(":simba-bom"),
@@ -103,15 +105,11 @@ configure(publishProjects) {
                 url = uri(layout.buildDirectory.dir("repos"))
             }
             maven {
-                name = "sonatypeRepo"
-                url = if (version.toString().endsWith("SNAPSHOT"))
-                    uri("https://oss.sonatype.org/content/repositories/snapshots")
-                else
-                    uri("https://oss.sonatype.org/service/local/staging/deploy/maven2/")
-
+                name = "GitHubPackages"
+                url = uri("https://maven.pkg.github.com/Ahoo-Wang/Simba")
                 credentials {
-                    username = getPropertyOf("ossrhUsername")
-                    password = getPropertyOf("ossrhPassword")
+                    username = project.findProperty("gitHubPackagesUserName") as String
+                    password = project.findProperty("gitHubPackagesToken") as String
                 }
             }
         }
@@ -161,10 +159,10 @@ configure(publishProjects) {
     }
 }
 
-nexusStaging {
-    username = getPropertyOf("ossrhUsername")
-    password = getPropertyOf("ossrhPassword")
-    packageGroup = "me.ahoo"
+nexusPublishing {
+    repositories {
+        sonatype()
+    }
 }
 
 fun getPropertyOf(name: String) = project.properties[name]?.toString()

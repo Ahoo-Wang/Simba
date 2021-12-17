@@ -14,11 +14,14 @@
 package me.ahoo.simba.redis;
 
 import com.google.common.base.Strings;
+import me.ahoo.simba.core.MutexOwner;
 
 /**
  * @author ahoo wang
  */
 public class AcquireResult {
+
+    public static final AcquireResult NONE = new AcquireResult(MutexOwner.NONE_OWNER_ID, 0L);
 
     private final String ownerId;
     private final long transitionAt;
@@ -41,6 +44,9 @@ public class AcquireResult {
      * @return
      */
     public static AcquireResult of(String resultStr) {
+        if (Message.DELIMITER.equals(resultStr)) {
+            return NONE;
+        }
         String[] msgs = resultStr.split(Message.DELIMITER);
         if (msgs.length != 2) {
             throw new IllegalStateException(Strings.lenientFormat("Incorrect resultStr format:[%s]", resultStr));

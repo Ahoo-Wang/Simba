@@ -1,13 +1,5 @@
 rootProject.name = "Simba"
 
-buildscript {
-    repositories {
-        mavenCentral()
-    }
-    dependencies {
-        classpath("io.codearte.gradle.nexus:gradle-nexus-staging-plugin:0.30.0")
-    }
-}
 include(":simba-bom")
 include(":simba-dependencies")
 include(":simba-core")

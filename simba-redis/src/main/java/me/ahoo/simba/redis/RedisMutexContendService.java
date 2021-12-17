@@ -50,8 +50,10 @@ public class RedisMutexContendService extends AbstractMutexContendService {
     private final String mutexChannel;
     /**
      * 竞争者的通道（关联竞争者编号）
-     * 1. 当尝试竞争锁失败时，将自己加入等待队列
-     * 2. 当持有者释放锁时，将选取等待队列中当竞争者发送释放消息
+     * <pre>
+     *  1. 当尝试竞争锁失败时，将自己加入等待队列
+     *  2. 当持有者释放锁时，将选取等待队列中当竞争者发送释放消息
+     * </pre>
      */
     private final String contenderChannel;
     private final Duration ttl;
@@ -92,11 +94,13 @@ public class RedisMutexContendService extends AbstractMutexContendService {
     }
 
     /**
+     * <pre>
      * 1. 开始订阅
      * 1.1 本地订阅
      * 1.2 远程订阅
      * 2. 尝试竞争
      * 3. 开始守护
+     * </pre>
      */
     @Override
     protected void startContend() {
