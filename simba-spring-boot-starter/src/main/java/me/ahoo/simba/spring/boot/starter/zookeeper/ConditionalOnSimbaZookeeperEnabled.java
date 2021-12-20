@@ -31,8 +31,7 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 @Target({ElementType.TYPE, ElementType.METHOD})
 @ConditionalOnSimbaEnabled
-@ConditionalOnProperty(value = ConditionalOnSimbaZookeeperEnabled.ENABLED_KEY, matchIfMissing = false, havingValue = "true")
-@ConditionalOnClass(ZookeeperMutexContendServiceFactory.class)
+@ConditionalOnProperty(value = ConditionalOnSimbaZookeeperEnabled.ENABLED_KEY, matchIfMissing = true, havingValue = "true")
 public @interface ConditionalOnSimbaZookeeperEnabled {
     String ENABLED_KEY = ZookeeperProperties.PREFIX + EnabledSuffix.KEY;
 }

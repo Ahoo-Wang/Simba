@@ -18,6 +18,7 @@ import me.ahoo.simba.core.MutexContendServiceFactory;
 import me.ahoo.simba.jdbc.JdbcMutexContendServiceFactory;
 import me.ahoo.simba.jdbc.JdbcMutexOwnerRepository;
 import me.ahoo.simba.jdbc.MutexOwnerRepository;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -30,6 +31,7 @@ import javax.sql.DataSource;
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnSimbaJdbcEnabled
+@ConditionalOnClass(JdbcMutexContendServiceFactory.class)
 @EnableConfigurationProperties(JdbcProperties.class)
 public class SimbaJdbcAutoConfiguration {
     private final JdbcProperties jdbcProperties;

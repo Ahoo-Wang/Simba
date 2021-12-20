@@ -17,6 +17,7 @@ package me.ahoo.simba.spring.boot.starter.zookeeper;
 import me.ahoo.simba.zookeeper.ZookeeperMutexContendServiceFactory;
 import org.apache.curator.framework.CuratorFramework;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -27,6 +28,7 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnSimbaZookeeperEnabled
+@ConditionalOnClass(ZookeeperMutexContendServiceFactory.class)
 @EnableConfigurationProperties(ZookeeperProperties.class)
 public class SimbaZookeeperAutoConfiguration {
     private final ZookeeperProperties zookeeperProperties;

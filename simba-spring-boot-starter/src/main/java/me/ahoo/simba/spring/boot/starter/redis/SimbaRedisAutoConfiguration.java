@@ -21,6 +21,7 @@ import me.ahoo.cosky.core.redis.RedisConnectionFactory;
 import me.ahoo.simba.core.MutexContendServiceFactory;
 import me.ahoo.simba.redis.RedisMutexContendServiceFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -31,6 +32,7 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnSimbaRedisEnabled
+@ConditionalOnClass(RedisMutexContendServiceFactory.class)
 @EnableConfigurationProperties(RedisProperties.class)
 public class SimbaRedisAutoConfiguration {
     private final RedisProperties redisProperties;

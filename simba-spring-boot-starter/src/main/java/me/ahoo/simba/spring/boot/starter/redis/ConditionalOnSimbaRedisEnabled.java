@@ -31,8 +31,7 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 @Target({ElementType.TYPE, ElementType.METHOD})
 @ConditionalOnSimbaEnabled
-@ConditionalOnProperty(value = ConditionalOnSimbaRedisEnabled.ENABLED_KEY, matchIfMissing = false, havingValue = "true")
-@ConditionalOnClass(RedisMutexContendServiceFactory.class)
+@ConditionalOnProperty(value = ConditionalOnSimbaRedisEnabled.ENABLED_KEY, matchIfMissing = true, havingValue = "true")
 public @interface ConditionalOnSimbaRedisEnabled {
     String ENABLED_KEY = RedisProperties.PREFIX + EnabledSuffix.KEY;
 }

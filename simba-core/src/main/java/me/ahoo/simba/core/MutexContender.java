@@ -23,7 +23,7 @@ public interface MutexContender extends MutexRetriever {
     /**
      * 竞争者编号
      *
-     * @return
+     * @return contender id
      */
     String getContenderId();
 

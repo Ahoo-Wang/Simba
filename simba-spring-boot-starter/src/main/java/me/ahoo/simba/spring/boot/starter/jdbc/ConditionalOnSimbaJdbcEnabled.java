@@ -14,10 +14,8 @@
 package me.ahoo.simba.spring.boot.starter.jdbc;
 
 
-import me.ahoo.simba.jdbc.JdbcMutexContendServiceFactory;
 import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled;
 import me.ahoo.simba.spring.boot.starter.EnabledSuffix;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import java.lang.annotation.ElementType;
@@ -31,8 +29,7 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 @Target({ElementType.TYPE, ElementType.METHOD})
 @ConditionalOnSimbaEnabled
-@ConditionalOnProperty(value = ConditionalOnSimbaJdbcEnabled.ENABLED_KEY, matchIfMissing = false, havingValue = "true")
-@ConditionalOnClass(JdbcMutexContendServiceFactory.class)
+@ConditionalOnProperty(value = ConditionalOnSimbaJdbcEnabled.ENABLED_KEY, matchIfMissing = true, havingValue = "true")
 public @interface ConditionalOnSimbaJdbcEnabled {
     String ENABLED_KEY = JdbcProperties.PREFIX + EnabledSuffix.KEY;
 }
