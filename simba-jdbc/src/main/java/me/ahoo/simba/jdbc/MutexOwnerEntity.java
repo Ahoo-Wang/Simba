@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -16,7 +16,7 @@ package me.ahoo.simba.jdbc;
 import me.ahoo.simba.core.MutexOwner;
 
 /**
- * 互斥体实体
+ * 互斥体实体.
  *
  * @author ahoo wang
  */
@@ -25,12 +25,12 @@ public class MutexOwnerEntity extends MutexOwner {
     private final String mutex;
 
     /**
-     * 版本号，用于领导者并发争抢控制
+     * 版本号，用于领导者并发争抢控制.
      */
     private int version;
 
     /**
-     * 当前Db时间戳 (统一使用Db时间作为统一时间，防止全局时间不一致)
+     * 当前Db时间戳 (统一使用Db时间作为统一时间，防止全局时间不一致).
      * {@link java.util.concurrent.TimeUnit#MILLISECONDS}
      */
     private long currentDbAt;

@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,30 +14,32 @@
 package me.ahoo.simba.core;
 
 /**
+ * Mutex Contend Service.
+ *
  * @author ahoo wang
  */
 public interface MutexContendService extends MutexRetrievalService {
-
+    
     /**
-     * 当前竞争服务绑定的竞争者
+     * 当前竞争服务绑定的竞争者.
      *
-     * @return
+     * @return MutexContender
      */
     MutexContender getContender();
-
+    
     default String getContenderId() {
         return getContender().getContenderId();
     }
-
+    
     /**
-     * 当前竞争者是否是持有者
+     * 当前竞争者是否是持有者.
      *
-     * @return
+     * @return boolean
      */
     default boolean isOwner() {
         return getAfterOwner().isOwner(getContenderId());
     }
-
+    
     default boolean isInTtl() {
         return getAfterOwner().isInTtl(getContenderId());
     }

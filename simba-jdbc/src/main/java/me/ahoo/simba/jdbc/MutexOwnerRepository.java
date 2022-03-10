@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -17,26 +17,30 @@ import java.sql.SQLException;
 import java.sql.SQLIntegrityConstraintViolationException;
 
 /**
+ * Mutex Owner Repository.
+ *
  * @author ahoo wang
  */
 public interface MutexOwnerRepository {
-
+    
     boolean initMutex(String mutex) throws SQLException, SQLIntegrityConstraintViolationException;
-
+    
     boolean tryInitMutex(String mutex);
-
+    
     /**
-     * @param mutex
+     * get Owner.
+     *
+     * @param mutex mutex
      * @return when result is null throw {@link NotFoundMutexOwnerException}
      * @throws NotFoundMutexOwnerException not found mutex
      */
     MutexOwnerEntity getOwner(String mutex) throws NotFoundMutexOwnerException;
-
+    
     boolean acquire(String mutex, String contenderId, long ttl, long transition);
-
+    
     MutexOwnerEntity acquireAndGetOwner(String mutex, String contenderId, long ttl, long transition);
-
+    
     boolean release(String mutex, String contenderId);
-
+    
     MutexOwnerEntity ensureOwner(String mutex);
 }

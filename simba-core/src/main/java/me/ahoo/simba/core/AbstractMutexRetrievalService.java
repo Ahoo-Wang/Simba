@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -19,40 +19,42 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 
 /**
+ * Abstract Mutex Retrieval Service.
+ *
  * @author ahoo wang
  */
 @Slf4j
 public abstract class AbstractMutexRetrievalService implements MutexRetrievalService {
-
+    
     protected volatile boolean running;
     protected volatile MutexState mutexState = MutexState.NONE;
     protected final MutexRetriever mutexRetriever;
     protected final Executor handleExecutor;
-
+    
     protected AbstractMutexRetrievalService(MutexRetriever mutexRetriever, Executor handleExecutor) {
         this.mutexRetriever = mutexRetriever;
         this.handleExecutor = handleExecutor;
     }
-
+    
     @Override
     public MutexRetriever getRetriever() {
         return mutexRetriever;
     }
-
+    
     @Override
     public MutexState getMutexState() {
         return mutexState;
     }
-
+    
     protected void resetOwner() {
         this.mutexState = MutexState.NONE;
     }
-
+    
     @Override
     public boolean isRunning() {
         return running;
     }
-
+    
     @Override
     public synchronized void start() {
         if (log.isInfoEnabled()) {
@@ -64,17 +66,17 @@ public abstract class AbstractMutexRetrievalService implements MutexRetrievalSer
         this.running = true;
         startRetrieval();
     }
-
+    
     protected abstract void startRetrieval();
-
+    
     protected abstract void stopRetrieval();
-
+    
     protected CompletableFuture<Void> notifyOwner(MutexOwner newOwner) {
         final MutexState newState = new MutexState(getAfterOwner(), newOwner);
         this.mutexState = newState;
         return CompletableFuture.runAsync(this::safeNotifyOwner, handleExecutor);
     }
-
+    
     protected void safeNotifyOwner() {
         try {
             getRetriever().notifyOwner(mutexState);
@@ -84,7 +86,7 @@ public abstract class AbstractMutexRetrievalService implements MutexRetrievalSer
             }
         }
     }
-
+    
     @Override
     public synchronized void stop() {
         if (log.isInfoEnabled()) {
@@ -96,7 +98,7 @@ public abstract class AbstractMutexRetrievalService implements MutexRetrievalSer
         this.running = false;
         stopRetrieval();
     }
-
+    
     @Override
     public void close() throws Exception {
         stop();

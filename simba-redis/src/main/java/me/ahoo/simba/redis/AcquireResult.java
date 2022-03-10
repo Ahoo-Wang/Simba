@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -13,36 +13,44 @@
 
 package me.ahoo.simba.redis;
 
-import com.google.common.base.Strings;
 import me.ahoo.simba.core.MutexOwner;
 
+import com.google.common.base.Strings;
+
+import javax.annotation.Nonnull;
+
 /**
+ * Acquire Result.
+ *
  * @author ahoo wang
  */
 public class AcquireResult {
-
+    
     public static final AcquireResult NONE = new AcquireResult(MutexOwner.NONE_OWNER_ID, 0L);
-
+    
     private final String ownerId;
     private final long transitionAt;
-
+    
     public AcquireResult(String ownerId, long transitionAt) {
         this.ownerId = ownerId;
         this.transitionAt = transitionAt;
     }
-
+    
     public String getOwnerId() {
         return ownerId;
     }
-
+    
     public long getTransitionAt() {
         return transitionAt;
     }
-
+    
     /**
-     * @param resultStr {ownerId}:{transitionAt}
-     * @return
+     * build {@link AcquireResult} from resultStr.
+     *
+     * @param resultStr {ownerId}:{transitionAt}.
+     * @return AcquireResult
      */
+    @Nonnull
     public static AcquireResult of(String resultStr) {
         if (Message.DELIMITER.equals(resultStr)) {
             return NONE;

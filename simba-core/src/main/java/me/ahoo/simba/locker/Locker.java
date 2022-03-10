@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -25,11 +25,11 @@ import java.util.concurrent.TimeoutException;
  * <p>
  * Canonical usage:
  * <code>
- *     try ( Locker locker = new SimbaLocker(mutex, contendServiceFactory) )
- *     {
- *          locker.acquire(); //locker.acquire(timeout);
- *         // do work
- *     }
+ * try ( Locker locker = new SimbaLocker(mutex, contendServiceFactory) )
+ * {
+ * locker.acquire(); //locker.acquire(timeout);
+ * // do work
+ * }
  * </code>
  * </p>
  *
@@ -37,5 +37,6 @@ import java.util.concurrent.TimeoutException;
  */
 public interface Locker extends AutoCloseable {
     void acquire();
+    
     void acquire(Duration timeout) throws TimeoutException;
 }

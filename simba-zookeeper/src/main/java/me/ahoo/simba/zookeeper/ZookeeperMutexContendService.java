@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -13,36 +13,39 @@
 
 package me.ahoo.simba.zookeeper;
 
+import static org.apache.curator.framework.recipes.leader.LeaderLatch.CloseMode.NOTIFY_LEADER;
+
 import me.ahoo.simba.SimbaException;
 import me.ahoo.simba.core.AbstractMutexContendService;
 import me.ahoo.simba.core.MutexContender;
 import me.ahoo.simba.core.MutexOwner;
+
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.recipes.leader.LeaderLatch;
 import org.apache.curator.framework.recipes.leader.LeaderLatchListener;
+
 import java.io.IOException;
 import java.util.concurrent.Executor;
 
-import static org.apache.curator.framework.recipes.leader.LeaderLatch.CloseMode.NOTIFY_LEADER;
-
-
 /**
+ * Zookeeper Mutex Contend Service.
+ *
  * @author ahoo wang
  */
 public class ZookeeperMutexContendService extends AbstractMutexContendService implements LeaderLatchListener {
-
+    
     public static final String RESOURCE_PREFIX = "/simba/";
-
+    
     private final CuratorFramework curatorFramework;
     private volatile LeaderLatch leaderLatch;
     private final String mutexPath;
-
+    
     public ZookeeperMutexContendService(MutexContender contender, Executor handleExecutor, CuratorFramework curatorFramework) {
         super(contender, handleExecutor);
         this.mutexPath = RESOURCE_PREFIX + contender.getMutex();
         this.curatorFramework = curatorFramework;
     }
-
+    
     @Override
     protected void startContend() {
         try {
@@ -53,7 +56,7 @@ public class ZookeeperMutexContendService extends AbstractMutexContendService im
             throw new SimbaException(e);
         }
     }
-
+    
     @Override
     protected void stopContend() {
         try {
@@ -63,24 +66,12 @@ public class ZookeeperMutexContendService extends AbstractMutexContendService im
             throw new SimbaException(e);
         }
     }
-
-    /**
-     * This is called when the LeaderLatch's state goes from hasLeadership = false to hasLeadership = true.
-     * <p>
-     * Note that it is possible that by the time this method call happens, hasLeadership has fallen back to false.  If
-     * this occurs, you can expect {@link #notLeader()} to also be called.
-     */
+    
     @Override
     public void isLeader() {
         notifyOwner(new MutexOwner(getContenderId()));
     }
-
-    /**
-     * This is called when the LeaderLatch's state goes from hasLeadership = true to hasLeadership = false.
-     * <p>
-     * Note that it is possible that by the time this method call happens, hasLeadership has become true.  If
-     * this occurs, you can expect {@link #isLeader()} to also be called.
-     */
+    
     @Override
     public void notLeader() {
         notifyOwner(MutexOwner.NONE);

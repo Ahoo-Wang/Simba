@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,19 +14,19 @@
 package me.ahoo.simba.core;
 
 /**
- * 互斥锁竞争者
+ * 互斥锁竞争者.
  *
  * @author ahoo wang
  */
 public interface MutexContender extends MutexRetriever {
-
+    
     /**
-     * 竞争者编号
+     * 竞争者编号.
      *
      * @return contender id
      */
     String getContenderId();
-
+    
     @Override
     default void notifyOwner(MutexState mutexState) {
         if (!mutexState.isChanged()) {
@@ -39,18 +39,18 @@ public interface MutexContender extends MutexRetriever {
             onReleased(mutexState);
         }
     }
-
+    
     /**
-     * 获取到互斥锁时回调
+     * 获取到互斥锁时回调.
      *
-     * @param mutexState
+     * @param mutexState mutexState
      */
     void onAcquired(MutexState mutexState);
-
+    
     /**
-     * 释放互斥锁时回调
+     * 释放互斥锁时回调.
      *
-     * @param mutexState
+     * @param mutexState mutexState
      */
     void onReleased(MutexState mutexState);
 }

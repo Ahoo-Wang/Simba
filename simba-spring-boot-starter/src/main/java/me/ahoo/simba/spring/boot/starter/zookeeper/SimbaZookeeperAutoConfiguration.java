@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -13,8 +13,8 @@
 
 package me.ahoo.simba.spring.boot.starter.zookeeper;
 
-
 import me.ahoo.simba.zookeeper.ZookeeperMutexContendServiceFactory;
+
 import org.apache.curator.framework.CuratorFramework;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -24,6 +24,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
+ * Simba Zookeeper Auto Configuration.
+ *
  * @author ahoo wang
  */
 @Configuration(proxyBeanMethods = false)
@@ -32,17 +34,17 @@ import org.springframework.context.annotation.Configuration;
 @EnableConfigurationProperties(ZookeeperProperties.class)
 public class SimbaZookeeperAutoConfiguration {
     private final ZookeeperProperties zookeeperProperties;
-
+    
     public SimbaZookeeperAutoConfiguration(ZookeeperProperties zookeeperProperties) {
         this.zookeeperProperties = zookeeperProperties;
     }
-
-
+    
+    
     @Bean
     @ConditionalOnBean(CuratorFramework.class)
     @ConditionalOnMissingBean
     public ZookeeperMutexContendServiceFactory zookeeperMutexContendServiceFactory(CuratorFramework curatorFramework) {
         return new ZookeeperMutexContendServiceFactory(curatorFramework);
     }
-
+    
 }

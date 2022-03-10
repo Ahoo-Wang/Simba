@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -22,6 +22,8 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 
 /**
+ * Jdbc Mutex Contend Service Factory.
+ *
  * @author ahoo wang
  */
 public class JdbcMutexContendServiceFactory implements MutexContendServiceFactory {
@@ -30,25 +32,30 @@ public class JdbcMutexContendServiceFactory implements MutexContendServiceFactor
     private final Duration initialDelay;
     private final Duration ttl;
     private final Duration transition;
-
-    public JdbcMutexContendServiceFactory(MutexOwnerRepository mutexOwnerRepository
-            , Duration initialDelay, Duration ttl, Duration transition) {
+    
+    public JdbcMutexContendServiceFactory(MutexOwnerRepository mutexOwnerRepository,
+                                          Duration initialDelay,
+                                          Duration ttl,
+                                          Duration transition) {
         this(mutexOwnerRepository, ForkJoinPool.commonPool(), initialDelay, ttl, transition);
     }
-
-    public JdbcMutexContendServiceFactory(MutexOwnerRepository mutexOwnerRepository
-            , Executor handleExecutor, Duration initialDelay, Duration ttl, Duration transition) {
+    
+    public JdbcMutexContendServiceFactory(MutexOwnerRepository mutexOwnerRepository,
+                                          Executor handleExecutor,
+                                          Duration initialDelay,
+                                          Duration ttl,
+                                          Duration transition) {
         this.mutexOwnerRepository = mutexOwnerRepository;
         this.handleExecutor = handleExecutor;
         this.initialDelay = initialDelay;
         this.ttl = ttl;
         this.transition = transition;
     }
-
+    
     @Override
     public MutexContendService createMutexContendService(MutexContender mutexContender) {
         return new JdbcMutexContendService(mutexContender, handleExecutor, mutexOwnerRepository, initialDelay, ttl, transition);
     }
-
-
+    
+    
 }

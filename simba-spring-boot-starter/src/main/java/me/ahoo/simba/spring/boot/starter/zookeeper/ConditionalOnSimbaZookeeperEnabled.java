@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -16,8 +16,7 @@ package me.ahoo.simba.spring.boot.starter.zookeeper;
 
 import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled;
 import me.ahoo.simba.spring.boot.starter.EnabledSuffix;
-import me.ahoo.simba.zookeeper.ZookeeperMutexContendServiceFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import java.lang.annotation.ElementType;
@@ -26,6 +25,8 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
+ * Conditional On Simba Zookeeper Enabled.
+ *
  * @author ahoo wang
  */
 @Retention(RetentionPolicy.RUNTIME)

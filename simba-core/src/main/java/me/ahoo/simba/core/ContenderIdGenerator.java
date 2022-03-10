@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -13,9 +13,10 @@
 
 package me.ahoo.simba.core;
 
-import com.google.common.base.Strings;
 import me.ahoo.simba.SimbaException;
 import me.ahoo.simba.util.Systems;
+
+import com.google.common.base.Strings;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -54,6 +55,6 @@ public interface ContenderIdGenerator {
         };
         
         @Override
-        abstract public String generate();
+        public abstract String generate();
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,16 +14,19 @@
 package me.ahoo.simba.spring.boot.starter.redis;
 
 import me.ahoo.simba.Simba;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
 
 /**
+ * Redis Properties.
+ *
  * @author ahoo wang
  */
 @ConfigurationProperties(prefix = RedisProperties.PREFIX)
 public class RedisProperties {
-    public final static String PREFIX = Simba.SIMBA_PREFIX + "redis";
+    public static final String PREFIX = Simba.SIMBA_PREFIX + "redis";
     private boolean enabled = true;
     private Duration ttl = Duration.ofSeconds(10);
     private Duration transition = Duration.ofSeconds(6);

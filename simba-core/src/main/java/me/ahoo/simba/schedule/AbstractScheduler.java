@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -13,63 +13,66 @@
 
 package me.ahoo.simba.schedule;
 
-import lombok.extern.slf4j.Slf4j;
 import me.ahoo.simba.core.AbstractMutexContender;
 import me.ahoo.simba.core.MutexContendService;
 import me.ahoo.simba.core.MutexContendServiceFactory;
 import me.ahoo.simba.core.MutexState;
 import me.ahoo.simba.util.Threads;
 
+import lombok.extern.slf4j.Slf4j;
+
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
+ * Abstract Scheduler.
+ *
  * @author ahoo wang
  */
 @Slf4j
 public abstract class AbstractScheduler {
-
+    
     private final String mutex;
     private final ScheduleConfig config;
     private final MutexContendService contendService;
-
+    
     public AbstractScheduler(String mutex, ScheduleConfig config, MutexContendServiceFactory contendServiceFactory) {
         this.mutex = mutex;
         this.config = config;
         this.contendService = contendServiceFactory.createMutexContendService(new WorkContender(mutex));
     }
-
+    
     public String getMutex() {
         return mutex;
     }
-
+    
     protected abstract String getWorker();
-
+    
     protected abstract void work();
-
+    
     public void start() {
         this.contendService.start();
     }
-
+    
     public void stop() {
         this.contendService.stop();
     }
-
+    
     public boolean isRunning() {
         return this.contendService.isRunning();
     }
-
-
+    
+    
     public class WorkContender extends AbstractMutexContender {
         private final ScheduledThreadPoolExecutor scheduledThreadPoolExecutor;
         private volatile ScheduledFuture<?> workFuture;
-
+        
         public WorkContender(String mutex) {
             super(mutex);
             this.scheduledThreadPoolExecutor = new ScheduledThreadPoolExecutor(1, Threads.defaultFactory(getWorker()));
         }
-
+        
         @Override
         public void onAcquired(MutexState mutexState) {
             super.onAcquired(mutexState);
@@ -83,7 +86,7 @@ public abstract class AbstractScheduler {
                 }
             }
         }
-
+        
         @Override
         public void onReleased(MutexState mutexState) {
             super.onReleased(mutexState);
@@ -91,7 +94,7 @@ public abstract class AbstractScheduler {
                 this.workFuture.cancel(true);
             }
         }
-
+        
         private void safeWork() {
             try {
                 work();
@@ -102,5 +105,5 @@ public abstract class AbstractScheduler {
             }
         }
     }
-
+    
 }

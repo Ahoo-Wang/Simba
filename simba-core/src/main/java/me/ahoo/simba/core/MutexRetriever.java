@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,18 +14,20 @@
 package me.ahoo.simba.core;
 
 /**
+ * Mutex Retriever.
+ *
  * @author ahoo wang
  */
 public interface MutexRetriever {
     /**
-     * 互斥锁资源名称
+     * 互斥锁资源名称.
      *
-     * @return
+     * @return mutex
      */
     String getMutex();
-
+    
     /**
-     * 当互斥锁持有者发生变化时，回调该方法
+     * 当互斥锁持有者发生变化时，回调该方法.
      *
      * @param mutexState 持有者状态
      */

@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -64,6 +64,14 @@ configure(bomProjects) {
 }
 
 configure(libraryProjects) {
+    apply<CheckstylePlugin>()
+    configure<CheckstyleExtension> {
+        toolVersion = "9.2.1"
+    }
+    apply<com.github.spotbugs.snom.SpotBugsPlugin>()
+    configure<com.github.spotbugs.snom.SpotBugsExtension> {
+        excludeFilter.set(file("${rootDir}/config/spotbugs/exclude.xml"))
+    }
     apply<JavaLibraryPlugin>()
     configure<JavaPluginExtension> {
         toolchain {

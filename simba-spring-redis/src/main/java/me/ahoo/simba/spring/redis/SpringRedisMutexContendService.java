@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -13,14 +13,15 @@
 
 package me.ahoo.simba.spring.redis;
 
-import com.google.common.base.Strings;
-import com.google.common.collect.Lists;
-import lombok.extern.slf4j.Slf4j;
 import me.ahoo.simba.Simba;
 import me.ahoo.simba.core.AbstractMutexContendService;
 import me.ahoo.simba.core.ContendPeriod;
 import me.ahoo.simba.core.MutexContender;
 import me.ahoo.simba.core.MutexOwner;
+
+import com.google.common.base.Strings;
+import com.google.common.collect.Lists;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.data.redis.connection.MessageListener;
@@ -39,6 +40,8 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
+ * Spring Redis Mutex Contend Service.
+ *
  * @author ahoo wang
  */
 @Slf4j
@@ -53,12 +56,12 @@ public class SpringRedisMutexContendService extends AbstractMutexContendService 
     
     private final List<String> keys;
     /**
-     * 锁获取成功通道（关联锁）
+     * 锁获取成功通道（关联锁）.
      * 1. 当有竞争者成功获取到锁时往该通道发送消息
      */
     private final String mutexChannel;
     /**
-     * 竞争者的通道（关联竞争者编号）
+     * 竞争者的通道（关联竞争者编号）.
      * <pre>
      *  1. 当尝试竞争锁失败时，将自己加入等待队列
      *  2. 当持有者释放锁时，将选取等待队列中当竞争者发送释放消息
@@ -112,7 +115,7 @@ public class SpringRedisMutexContendService extends AbstractMutexContendService 
     }
     
     /**
-     * 开始订阅
+     * 开始订阅.
      */
     private void startSubscribe() {
         listenerContainer.addMessageListener(mutexMessageListener, listenTopics);
@@ -184,7 +187,7 @@ public class SpringRedisMutexContendService extends AbstractMutexContendService 
     }
     
     /**
-     * 停止订阅
+     * 停止订阅.
      */
     private void stopSubscribe() {
         listenerContainer.removeMessageListener(mutexMessageListener, listenTopics);
@@ -198,7 +201,7 @@ public class SpringRedisMutexContendService extends AbstractMutexContendService 
     }
     
     private void release() {
-        Boolean succeed = redisTemplate.execute(SCRIPT_RELEASE, keys, getContenderId());
+        redisTemplate.execute(SCRIPT_RELEASE, keys, getContenderId());
         try {
             notifyOwner(MutexOwner.NONE);
         } catch (Throwable throwable) {

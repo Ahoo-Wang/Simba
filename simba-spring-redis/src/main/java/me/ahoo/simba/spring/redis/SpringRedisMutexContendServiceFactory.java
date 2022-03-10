@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2022] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -16,6 +16,7 @@ package me.ahoo.simba.spring.redis;
 import me.ahoo.simba.core.MutexContendService;
 import me.ahoo.simba.core.MutexContendServiceFactory;
 import me.ahoo.simba.core.MutexContender;
+
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
@@ -39,20 +40,20 @@ public class SpringRedisMutexContendServiceFactory implements MutexContendServic
     private final ScheduledExecutorService scheduledExecutorService;
     
     public SpringRedisMutexContendServiceFactory(
-            Duration ttl,
-            Duration transition,
-            StringRedisTemplate redisTemplate,
-            RedisMessageListenerContainer listenerContainer) {
+        Duration ttl,
+        Duration transition,
+        StringRedisTemplate redisTemplate,
+        RedisMessageListenerContainer listenerContainer) {
         this(ttl, transition, redisTemplate, listenerContainer, ForkJoinPool.commonPool(), Executors.newScheduledThreadPool(1));
     }
     
     public SpringRedisMutexContendServiceFactory(
-            Duration ttl,
-            Duration transition,
-            StringRedisTemplate redisTemplate,
-            RedisMessageListenerContainer listenerContainer,
-            Executor handleExecutor,
-            ScheduledExecutorService scheduledExecutorService) {
+        Duration ttl,
+        Duration transition,
+        StringRedisTemplate redisTemplate,
+        RedisMessageListenerContainer listenerContainer,
+        Executor handleExecutor,
+        ScheduledExecutorService scheduledExecutorService) {
         this.ttl = ttl;
         this.transition = transition;
         this.redisTemplate = redisTemplate;

@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -13,13 +13,13 @@
 
 package me.ahoo.simba.spring.boot.starter.redis;
 
+import me.ahoo.cosky.core.redis.RedisConnectionFactory;
+import me.ahoo.simba.core.MutexContendServiceFactory;
+import me.ahoo.simba.redis.RedisMutexContendServiceFactory;
 
 import io.lettuce.core.AbstractRedisClient;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.cluster.RedisClusterClient;
-import me.ahoo.cosky.core.redis.RedisConnectionFactory;
-import me.ahoo.simba.core.MutexContendServiceFactory;
-import me.ahoo.simba.redis.RedisMutexContendServiceFactory;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -29,6 +29,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
+ * Simba Redis Auto Configuration.
+ *
  * @author ahoo wang
  */
 @Configuration(proxyBeanMethods = false)
@@ -38,18 +40,18 @@ import org.springframework.context.annotation.Configuration;
 @AutoConfigureAfter(SimbaSpringRedisAutoConfiguration.class)
 public class SimbaRedisAutoConfiguration {
     private final RedisProperties redisProperties;
-
+    
     public SimbaRedisAutoConfiguration(RedisProperties redisProperties) {
         this.redisProperties = redisProperties;
     }
-
+    
     @Bean
     @ConditionalOnMissingBean(AbstractRedisClient.class)
     @ConditionalOnBean(RedisConnectionFactory.class)
     public AbstractRedisClient abstractRedisClient(RedisConnectionFactory redisConnectionFactory) {
         return redisConnectionFactory.getClient();
     }
-
+    
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnBean(AbstractRedisClient.class)
@@ -61,5 +63,5 @@ public class SimbaRedisAutoConfiguration {
         RedisClusterClient redisClient = (RedisClusterClient) abstractRedisClient;
         return new RedisMutexContendServiceFactory(redisProperties.getTtl(), redisProperties.getTransition(), redisClient.connect().reactive(), redisClient.connectPubSub().reactive());
     }
-
+    
 }

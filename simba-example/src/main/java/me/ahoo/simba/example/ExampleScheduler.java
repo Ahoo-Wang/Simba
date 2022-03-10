@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -13,11 +13,12 @@
 
 package me.ahoo.simba.example;
 
-import lombok.SneakyThrows;
-import lombok.extern.slf4j.Slf4j;
 import me.ahoo.simba.core.MutexContendServiceFactory;
 import me.ahoo.simba.schedule.AbstractScheduler;
 import me.ahoo.simba.schedule.ScheduleConfig;
+
+import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Service;
 
@@ -26,21 +27,23 @@ import java.util.concurrent.TimeUnit;
 
 
 /**
+ * Example Scheduler.
+ *
  * @author ahoo wang
  */
 @Service
 @Slf4j
 public class ExampleScheduler extends AbstractScheduler implements SmartLifecycle {
-
+    
     public ExampleScheduler(MutexContendServiceFactory contendServiceFactory) {
         super("example-scheduler", ScheduleConfig.ofDelay(Duration.ofSeconds(0), Duration.ofSeconds(10)), contendServiceFactory);
     }
-
+    
     @Override
     protected String getWorker() {
         return "ExampleScheduler";
     }
-
+    
     @SneakyThrows
     @Override
     protected void work() {

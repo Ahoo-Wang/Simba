@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -13,44 +13,52 @@
 
 package me.ahoo.simba.jdbc;
 
+import me.ahoo.simba.SimbaException;
+
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import lombok.extern.slf4j.Slf4j;
-import me.ahoo.simba.SimbaException;
 
+import javax.annotation.Nonnull;
 import javax.sql.DataSource;
-import java.sql.*;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.SQLIntegrityConstraintViolationException;
 
 /**
+ * Jdbc Mutex Owner Repository.
+ *
  * @author ahoo wang
  */
 @Slf4j
 public class JdbcMutexOwnerRepository implements MutexOwnerRepository {
-
+    
     private final DataSource dataSource;
-
+    
     public JdbcMutexOwnerRepository(DataSource dataSource) {
         Preconditions.checkNotNull(dataSource, "dataSource can not be null!");
         this.dataSource = dataSource;
     }
-
-    private static final String SQL_INIT_MUTEX = "insert into simba_mutex " +
-            "(mutex, acquired_at, ttl_at, transition_at, owner_id, version) " +
-            "values (?, 0, 0, 0, '', 0);";
-
+    
+    private static final String SQL_INIT_MUTEX = "insert into simba_mutex "
+        + "(mutex, acquired_at, ttl_at, transition_at, owner_id, version) "
+        + "values (?, 0, 0, 0, '', 0);";
+    
     @Override
     public boolean initMutex(String mutex) throws SQLException, SQLIntegrityConstraintViolationException {
         Preconditions.checkArgument(!Strings.isNullOrEmpty(mutex), "mutex can not be empty!");
-
+        
         if (log.isInfoEnabled()) {
             log.info("initMutex - mutex:[{}].", mutex);
         }
-
+        
         try (Connection connection = dataSource.getConnection()) {
             return initMutex(connection, mutex);
         }
     }
-
+    
     private boolean initMutex(Connection connection, String mutex) throws SQLException {
         try (PreparedStatement initStatement = connection.prepareStatement(SQL_INIT_MUTEX)) {
             initStatement.setString(1, mutex);
@@ -58,7 +66,7 @@ public class JdbcMutexOwnerRepository implements MutexOwnerRepository {
             return affected > 0;
         }
     }
-
+    
     @Override
     public boolean tryInitMutex(String mutex) {
         try {
@@ -71,13 +79,13 @@ public class JdbcMutexOwnerRepository implements MutexOwnerRepository {
             return false;
         }
     }
-
-    private final static String SQL_GET
-            =
-            "select acquired_at, ttl_at, transition_at, owner_id, version, cast(unix_timestamp(current_timestamp(3)) * 1000 as unsigned) as current_at " +
-                    "from simba_mutex " +
-                    "where mutex = ?;";
-
+    
+    private static final String SQL_GET
+        =
+        "select acquired_at, ttl_at, transition_at, owner_id, version, cast(unix_timestamp(current_timestamp(3)) * 1000 as unsigned) as current_at "
+            + "from simba_mutex "
+            + "where mutex = ?;";
+    
     @Override
     public MutexOwnerEntity getOwner(String mutex) {
         try (Connection connection = dataSource.getConnection()) {
@@ -86,7 +94,8 @@ public class JdbcMutexOwnerRepository implements MutexOwnerRepository {
             throw new SimbaException(sqlException.getMessage(), sqlException);
         }
     }
-
+    
+    @Nonnull
     private MutexOwnerEntity getOwner(Connection connection, String mutex) throws SQLException {
         try (PreparedStatement getStatement = connection.prepareStatement(SQL_GET)) {
             getStatement.setString(1, mutex);
@@ -107,7 +116,7 @@ public class JdbcMutexOwnerRepository implements MutexOwnerRepository {
             }
         }
     }
-
+    
     @Override
     public MutexOwnerEntity ensureOwner(String mutex) {
         try (Connection connection = dataSource.getConnection()) {
@@ -116,7 +125,7 @@ public class JdbcMutexOwnerRepository implements MutexOwnerRepository {
             throw new SimbaException(sqlException.getMessage(), sqlException);
         }
     }
-
+    
     private MutexOwnerEntity ensureOwner(Connection connection, String mutex) throws SQLException {
         try {
             return getOwner(connection, mutex);
@@ -134,43 +143,45 @@ public class JdbcMutexOwnerRepository implements MutexOwnerRepository {
             return getOwner(connection, mutex);
         }
     }
-
+    
     private static final String SQL_ACQUIRE =
-            "update simba_mutex " +
-                    "set acquired_at=cast(unix_timestamp(current_timestamp(3)) * 1000 as unsigned)," +
-                    /**
-                     * 1:ttl
-                     */
-                    "    ttl_at=(cast(unix_timestamp(current_timestamp(3)) * 1000 as unsigned) + ?)," +
-                    /**
-                     * 2:ttl+transition
-                     */
-                    "    transition_at=(cast(unix_timestamp(current_timestamp(3)) * 1000 as unsigned) + ?)," +
-                    /**
-                     * 3:contenderId
-                     */
-                    "    owner_id= ?," +
-                    "    version=version + 1 " +
-                    /**
-                     * 4:mutex
-                     */
-                    "where mutex = ? " +
-                    "  and (" +
-                    "      (transition_at < (unix_timestamp(current_timestamp(3)) * 1000)) " +
-                    "    or" +
-                    /**
-                     * 5.contenderId
-                     */
-                    "       (owner_id = ? and transition_at > (unix_timestamp(current_timestamp(3)) * 1000))" +
-                    "    );";
-
-
+        "update simba_mutex "
+            + "set acquired_at=cast(unix_timestamp(current_timestamp(3)) * 1000 as unsigned),"
+            /**
+             * 1:ttl
+             */
+            + "    ttl_at=(cast(unix_timestamp(current_timestamp(3)) * 1000 as unsigned) + ?),"
+            /**
+             * 2:ttl+transition
+             */
+            + "    transition_at=(cast(unix_timestamp(current_timestamp(3)) * 1000 as unsigned) + ?),"
+            /**
+             * 3:contenderId
+             */
+            + "    owner_id= ?,"
+            + "    version=version + 1 "
+            /**
+             * 4:mutex
+             */
+            + "where mutex = ? "
+            + "  and ("
+            + "      (transition_at < (unix_timestamp(current_timestamp(3)) * 1000)) "
+            + "    or"
+            /**
+             * 5.contenderId
+             */
+            + "       (owner_id = ? and transition_at > (unix_timestamp(current_timestamp(3)) * 1000))"
+            + "    );";
+    
+    
     /**
-     * @param mutex
-     * @param contenderId
-     * @param ttl         {@link java.util.concurrent.TimeUnit#MILLISECONDS}
-     * @param transition
-     * @return
+     * acquire mutex.
+     *
+     * @param mutex mutex
+     * @param contenderId contenderId
+     * @param ttl {@link java.util.concurrent.TimeUnit#MILLISECONDS}
+     * @param transition transition
+     * @return if return true,acquired.
      */
     @Override
     public boolean acquire(String mutex, String contenderId, long ttl, long transition) {
@@ -180,16 +191,28 @@ public class JdbcMutexOwnerRepository implements MutexOwnerRepository {
             throw new SimbaException(sqlException.getMessage(), sqlException);
         }
     }
-
+    
+    private boolean acquire(Connection connection, String mutex, String contenderId, long ttl, long transition) throws SQLException {
+        try (PreparedStatement acquireStatement = connection.prepareStatement(SQL_ACQUIRE)) {
+            acquireStatement.setLong(1, ttl);
+            acquireStatement.setLong(2, ttl + transition);
+            acquireStatement.setString(3, contenderId);
+            acquireStatement.setString(4, mutex);
+            acquireStatement.setString(5, contenderId);
+            int affected = acquireStatement.executeUpdate();
+            return affected > 0;
+        }
+    }
+    
     @Override
     public MutexOwnerEntity acquireAndGetOwner(String mutex, String contenderId, long ttl, long transition) {
-
+        
         try (Connection connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
             try {
                 boolean acquired = acquire(connection, mutex, contenderId, ttl, transition);
                 MutexOwnerEntity mutexOwner = ensureOwner(connection, mutex);
-
+                
                 if (!acquired && !mutexOwner.hasOwner()) {
                     /**
                      * 没有竞争到领导权 && 当前不存在领导者 ==> 初始化时
@@ -216,30 +239,18 @@ public class JdbcMutexOwnerRepository implements MutexOwnerRepository {
             throw new SimbaException(sqlException.getMessage(), sqlException);
         }
     }
-
-    private boolean acquire(Connection connection, String mutex, String contenderId, long ttl, long transition) throws SQLException {
-        try (PreparedStatement acquireStatement = connection.prepareStatement(SQL_ACQUIRE)) {
-            acquireStatement.setLong(1, ttl);
-            acquireStatement.setLong(2, ttl + transition);
-            acquireStatement.setString(3, contenderId);
-            acquireStatement.setString(4, mutex);
-            acquireStatement.setString(5, contenderId);
-            int affected = acquireStatement.executeUpdate();
-            return affected > 0;
-        }
-    }
-
-    private static final String SQL_RELEASE = "update simba_mutex set " +
-            "acquired_at=0," +
-            "ttl_at=0," +
-            "transition_at=0," +
-            "owner_id=''," +
-            "version=version + 1 " +
-            /**
-             * 1:mutex,2:contenderId,
-             */
-            "where mutex = ? and owner_id = ?;";
-
+    
+    private static final String SQL_RELEASE = "update simba_mutex set "
+        + "acquired_at=0,"
+        + "ttl_at=0,"
+        + "transition_at=0,"
+        + "owner_id='',"
+        + "version=version + 1 "
+        /**
+         * 1:mutex,2:contenderId,
+         */
+        + "where mutex = ? and owner_id = ?;";
+    
     @Override
     public boolean release(String mutex, String contenderId) {
         try (Connection connection = dataSource.getConnection();

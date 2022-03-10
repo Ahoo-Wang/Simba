@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -18,36 +18,38 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.concurrent.Executor;
 
 /**
+ * Abstract Mutex Contend Service.
+ *
  * @author ahoo wang
  */
 @Slf4j
 public abstract class AbstractMutexContendService extends AbstractMutexRetrievalService implements MutexContendService {
-
+    
     private final MutexContender contender;
-
+    
     protected AbstractMutexContendService(MutexContender contender, Executor handleExecutor) {
         super(contender, handleExecutor);
         this.contender = contender;
     }
-
+    
     @Override
     public MutexContender getContender() {
         return contender;
     }
-
+    
     @Override
     protected void startRetrieval() {
         resetOwner();
         startContend();
     }
-
-
+    
+    
     @Override
     protected void stopRetrieval() {
         stopContend();
     }
-
+    
     protected abstract void startContend();
-
+    
     protected abstract void stopContend();
 }

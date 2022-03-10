@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -13,10 +13,11 @@
 
 package me.ahoo.simba.example;
 
-import lombok.extern.slf4j.Slf4j;
 import me.ahoo.simba.core.MutexContendService;
 import me.ahoo.simba.core.MutexContendServiceFactory;
 import me.ahoo.simba.locker.SimbaLocker;
+
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
@@ -28,20 +29,22 @@ import java.time.Duration;
 import java.util.concurrent.locks.LockSupport;
 
 /**
+ * Example App.
+ *
  * @author ahoo wang
  */
 @SpringBootApplication
 @EnableScheduling
 @Slf4j
 public class ExampleApp implements CommandLineRunner {
-
+    
     public static void main(String[] args) {
         SpringApplication.run(ExampleApp.class);
     }
-
+    
     @Autowired
     private MutexContendServiceFactory mutexContendServiceFactory;
-
+    
     /**
      * Callback used to run the bean.
      *
@@ -53,7 +56,7 @@ public class ExampleApp implements CommandLineRunner {
         MutexContendService contendService = mutexContendServiceFactory.createMutexContendService(new ExampleContender());
         contendService.start();
     }
-
+    
     @Scheduled(initialDelay = 1000, fixedDelay = 1000)
     public void scheduleFixedDelay() {
         try (SimbaLocker locker = new SimbaLocker("example-locker-schedule-fixedDelay", this.mutexContendServiceFactory)) {
@@ -64,7 +67,7 @@ public class ExampleApp implements CommandLineRunner {
             log.error(e.getMessage(), e);
         }
     }
-
+    
     @Scheduled(initialDelay = 1000, fixedRate = 1000)
     public void scheduleFixedRate() {
         try (SimbaLocker locker = new SimbaLocker("example-locker-schedule-fixedRate", this.mutexContendServiceFactory)) {

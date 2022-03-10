@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -13,14 +13,14 @@
 
 package me.ahoo.simba.jdbc;
 
-
-import com.google.common.base.Strings;
-import lombok.extern.slf4j.Slf4j;
 import me.ahoo.simba.core.AbstractMutexContendService;
 import me.ahoo.simba.core.ContendPeriod;
 import me.ahoo.simba.core.MutexContender;
 import me.ahoo.simba.core.MutexOwner;
 import me.ahoo.simba.util.Threads;
+
+import com.google.common.base.Strings;
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
 import java.util.concurrent.Executor;
@@ -29,20 +29,22 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
+ * Jdbc Mutex Contend Service.
+ *
  * @author ahoo wang
  */
 @Slf4j
 public class JdbcMutexContendService extends AbstractMutexContendService {
-
+    
     private final MutexOwnerRepository mutexOwnerRepository;
-
+    
     private final Duration initialDelay;
     private final Duration ttl;
     private final Duration transition;
     private ScheduledThreadPoolExecutor executorService;
     private final ContendPeriod contendPeriod;
     private volatile ScheduledFuture<?> contendScheduledFuture;
-
+    
     public JdbcMutexContendService(MutexContender mutexContender,
                                    Executor handleExecutor,
                                    MutexOwnerRepository mutexOwnerRepository,
@@ -56,20 +58,20 @@ public class JdbcMutexContendService extends AbstractMutexContendService {
         this.ttl = ttl;
         this.transition = transition;
     }
-
+    
     @Override
     protected void startContend() {
         executorService = new ScheduledThreadPoolExecutor(1, Threads.defaultFactory(Strings.lenientFormat("JdbcSimba_%s_%s", getMutex(), getContenderId())));
         nextSchedule(initialDelay.toMillis());
     }
-
+    
     private void nextSchedule(long nextDelay) {
         if (log.isDebugEnabled()) {
             log.debug("nextSchedule - mutex:[{}] contenderId:[{}] - nextDelay:[{}].", getMutex(), getContenderId(), nextDelay);
         }
         contendScheduledFuture = this.executorService.schedule(this::safeHandleContend, nextDelay, TimeUnit.MILLISECONDS);
     }
-
+    
     @Override
     protected void stopContend() {
         if (contendScheduledFuture != null) {
@@ -81,7 +83,7 @@ public class JdbcMutexContendService extends AbstractMutexContendService {
         notifyOwner(MutexOwner.NONE);
         mutexOwnerRepository.release(getMutex(), getContenderId());
     }
-
+    
     private void safeHandleContend() {
         try {
             final MutexOwner mutexOwner = this.contend();
@@ -95,9 +97,9 @@ public class JdbcMutexContendService extends AbstractMutexContendService {
             nextSchedule(ttl.toMillis());
         }
     }
-
+    
     /**
-     * 服务实例竞争领导权
+     * 服务实例竞争领导权.
      */
     private MutexOwner contend() {
         final MutexOwnerEntity mutexOwner = mutexOwnerRepository.acquireAndGetOwner(getMutex(), getContenderId(), ttl.toMillis(), transition.toMillis());

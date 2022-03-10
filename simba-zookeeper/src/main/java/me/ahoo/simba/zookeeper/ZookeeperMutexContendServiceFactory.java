@@ -1,5 +1,5 @@
 /*
- * Copyright [2021-2021] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -17,6 +17,7 @@ package me.ahoo.simba.zookeeper;
 import me.ahoo.simba.core.MutexContendService;
 import me.ahoo.simba.core.MutexContendServiceFactory;
 import me.ahoo.simba.core.MutexContender;
+
 import org.apache.curator.framework.CuratorFramework;
 
 import java.util.concurrent.Executor;
@@ -24,22 +25,24 @@ import java.util.concurrent.ForkJoinPool;
 
 
 /**
+ * Zookeeper Mutex Contend Service Factory.
+ *
  * @author ahoo wang
  */
 public class ZookeeperMutexContendServiceFactory implements MutexContendServiceFactory {
-
+    
     private final Executor handleExecutor;
     private final CuratorFramework curatorFramework;
-
+    
     public ZookeeperMutexContendServiceFactory(CuratorFramework curatorFramework) {
         this(ForkJoinPool.commonPool(), curatorFramework);
     }
-
+    
     public ZookeeperMutexContendServiceFactory(Executor handleExecutor, CuratorFramework curatorFramework) {
         this.handleExecutor = handleExecutor;
         this.curatorFramework = curatorFramework;
     }
-
+    
     @Override
     public MutexContendService createMutexContendService(MutexContender mutexContender) {
         return new ZookeeperMutexContendService(mutexContender, handleExecutor, curatorFramework);
