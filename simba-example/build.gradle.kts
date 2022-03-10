@@ -25,18 +25,18 @@ application {
 }
 
 dependencies {
-//    implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.slf4j:slf4j-api")
     implementation(platform(project(":simba-dependencies")))
-    implementation("mysql:mysql-connector-java")
-    implementation(project(":simba-jdbc"))
-    implementation("org.springframework.boot:spring-boot-starter-jdbc")
+//    implementation("mysql:mysql-connector-java")
+//    implementation(project(":simba-jdbc"))
+//    implementation("org.springframework.boot:spring-boot-starter-jdbc")
 
-    implementation(project(":simba-redis"))
+    implementation(project(":simba-spring-redis"))
+    implementation("org.springframework.boot:spring-boot-starter-data-redis")
     val depLombok = "org.projectlombok:lombok:${rootProject.ext.get("lombokVersion")}"
     compileOnly(depLombok)
     annotationProcessor(depLombok)
-    implementation(project(":simba-zookeeper"))
+//    implementation(project(":simba-zookeeper"))
     implementation(project(":simba-spring-boot-starter"))
     testImplementation("org.junit.jupiter:junit-jupiter-api:5.6.0")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine")

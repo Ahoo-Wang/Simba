@@ -14,49 +14,46 @@
 package me.ahoo.simba.core;
 
 import com.google.common.base.Strings;
-import lombok.extern.slf4j.Slf4j;
 import me.ahoo.simba.SimbaException;
 import me.ahoo.simba.util.Systems;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
+ * Contender Id Generator.
+ *
  * @author ahoo wang
  */
 public interface ContenderIdGenerator {
-
+    
     String generate();
-
-    @Slf4j
-    class Uuid implements ContenderIdGenerator {
-        public static final ContenderIdGenerator INSTANCE = new Uuid();
-
-        @Override
-        public String generate() {
-            return UUID.randomUUID().toString().replace("-", "");
-        }
-    }
-
-    @Slf4j
-    class Host implements ContenderIdGenerator {
-
-        public static final ContenderIdGenerator INSTANCE = new Host();
-
-        private final AtomicLong counter = new AtomicLong();
-
-        @Override
-        public String generate() {
-            try {
-                InetAddress localHost = InetAddress.getLocalHost();
-                long processId = Systems.getCurrentProcessId();
-                long seq = counter.getAndIncrement();
-                return Strings.lenientFormat("%s:%s@%s", seq, processId, localHost.getHostAddress());
-            } catch (UnknownHostException unknownHostException) {
-                throw new SimbaException(unknownHostException.getMessage(), unknownHostException);
+    
+    enum Simple implements ContenderIdGenerator {
+        UUID {
+            @Override
+            public String generate() {
+                return java.util.UUID.randomUUID().toString().replace("-", "");
             }
-        }
+        },
+        HOST {
+            private final AtomicLong counter = new AtomicLong();
+            
+            @Override
+            public String generate() {
+                try {
+                    InetAddress localHost = InetAddress.getLocalHost();
+                    long processId = Systems.getCurrentProcessId();
+                    long seq = counter.getAndIncrement();
+                    return Strings.lenientFormat("%s:%s@%s", seq, processId, localHost.getHostAddress());
+                } catch (UnknownHostException unknownHostException) {
+                    throw new SimbaException(unknownHostException.getMessage(), unknownHostException);
+                }
+            }
+        };
+        
+        @Override
+        abstract public String generate();
     }
 }

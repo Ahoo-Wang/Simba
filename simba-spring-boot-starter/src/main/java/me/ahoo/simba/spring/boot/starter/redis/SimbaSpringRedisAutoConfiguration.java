@@ -13,53 +13,50 @@
 
 package me.ahoo.simba.spring.boot.starter.redis;
 
-
-import io.lettuce.core.AbstractRedisClient;
-import io.lettuce.core.RedisClient;
-import io.lettuce.core.cluster.RedisClusterClient;
-import me.ahoo.cosky.core.redis.RedisConnectionFactory;
 import me.ahoo.simba.core.MutexContendServiceFactory;
-import me.ahoo.simba.redis.RedisMutexContendServiceFactory;
+import me.ahoo.simba.spring.redis.SpringRedisMutexContendServiceFactory;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnSingleCandidate;
+import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
 /**
  * @author ahoo wang
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnSimbaRedisEnabled
-@ConditionalOnClass(RedisMutexContendServiceFactory.class)
+@ConditionalOnClass(StringRedisTemplate.class)
+@AutoConfigureAfter(RedisAutoConfiguration.class)
 @EnableConfigurationProperties(RedisProperties.class)
-@AutoConfigureAfter(SimbaSpringRedisAutoConfiguration.class)
-public class SimbaRedisAutoConfiguration {
+public class SimbaSpringRedisAutoConfiguration {
     private final RedisProperties redisProperties;
-
-    public SimbaRedisAutoConfiguration(RedisProperties redisProperties) {
+    
+    public SimbaSpringRedisAutoConfiguration(RedisProperties redisProperties) {
         this.redisProperties = redisProperties;
     }
-
-    @Bean
-    @ConditionalOnMissingBean(AbstractRedisClient.class)
-    @ConditionalOnBean(RedisConnectionFactory.class)
-    public AbstractRedisClient abstractRedisClient(RedisConnectionFactory redisConnectionFactory) {
-        return redisConnectionFactory.getClient();
-    }
-
+    
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnBean(AbstractRedisClient.class)
-    public MutexContendServiceFactory redisMutexContendServiceFactory(AbstractRedisClient abstractRedisClient) {
-        if (abstractRedisClient instanceof RedisClient) {
-            RedisClient redisClient = (RedisClient) abstractRedisClient;
-            return new RedisMutexContendServiceFactory(redisProperties.getTtl(), redisProperties.getTransition(), redisClient.connect().reactive(), redisClient.connectPubSub().reactive());
-        }
-        RedisClusterClient redisClient = (RedisClusterClient) abstractRedisClient;
-        return new RedisMutexContendServiceFactory(redisProperties.getTtl(), redisProperties.getTransition(), redisClient.connect().reactive(), redisClient.connectPubSub().reactive());
+    @ConditionalOnSingleCandidate(RedisConnectionFactory.class)
+    public RedisMessageListenerContainer simbaRedisMessageListenerContainer(RedisConnectionFactory connectionFactory) {
+        RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+        container.setConnectionFactory(connectionFactory);
+        return container;
     }
-
+    
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(StringRedisTemplate.class)
+    public MutexContendServiceFactory redisMutexContendServiceFactory(StringRedisTemplate redisTemplate, RedisMessageListenerContainer listenerContainer) {
+        return new SpringRedisMutexContendServiceFactory(redisProperties.getTtl(), redisProperties.getTransition(), redisTemplate, listenerContainer);
+    }
+    
 }

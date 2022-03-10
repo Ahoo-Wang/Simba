@@ -15,7 +15,6 @@ package me.ahoo.simba.example;
 
 import me.ahoo.simba.core.AbstractMutexContender;
 import me.ahoo.simba.core.MutexState;
-import me.ahoo.simba.jdbc.JdbcMutexContendService;
 import org.slf4j.Logger;
 
 /**
@@ -24,7 +23,7 @@ import org.slf4j.Logger;
 
 public class ExampleContender extends AbstractMutexContender {
 
-    private static final Logger log = org.slf4j.LoggerFactory.getLogger(JdbcMutexContendService.class);
+    private static final Logger log = org.slf4j.LoggerFactory.getLogger(ExampleContender.class);
     public ExampleContender() {
         super("example-mutex");
     }

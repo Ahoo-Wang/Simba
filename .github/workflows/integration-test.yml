@@ -1,0 +1,113 @@
+#
+# Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#      http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+name: Integration Test
+on: [ push ]
+jobs:
+  simba-core-test:
+    name: Simba Core Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@master
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v2
+        with:
+          java-version: '8'
+          distribution: 'adopt'
+          server-id: github
+          settings-path: ${{ github.workspace }}
+
+      - name: Test Simba-Core
+        run: gradle simba-core:clean simba-core:check
+
+  simba-redis-test:
+    name: Simba Redis Test
+    needs: [ simba-core-test ]
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    steps:
+      - name: Checkout
+        uses: actions/checkout@master
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v2
+        with:
+          java-version: '8'
+          distribution: 'adopt'
+          server-id: github
+          settings-path: ${{ github.workspace }}
+
+      - name: Test Simba-Redis
+        run: gradle simba-redis:clean simba-redis:check simba-spring-redis:clean simba-spring-redis:check
+
+  simba-zookeeper-test:
+    name: Simba Zookeeper Test
+    needs: [ simba-core-test ]
+    runs-on: ubuntu-latest
+    services:
+      zookeeper:
+        image: zookeeper
+        ports:
+          - 2181:2181
+    steps:
+      - name: Checkout
+        uses: actions/checkout@master
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v2
+        with:
+          java-version: '8'
+          distribution: 'adopt'
+          server-id: github
+          settings-path: ${{ github.workspace }}
+
+      - name: Test Simba-Zookeeper
+        run: gradle simba-zookeeper:clean simba-zookeeper:check
+
+  # https://github.com/actions/virtual-environments/issues/375
+  # https://github.blog/changelog/2020-02-21-github-actions-breaking-change-ubuntu-virtual-environments-will-no-longer-start-the-mysql-service-automatically/
+  simba-jdbc-test:
+    name: Simba Jdbc Test
+    needs: [ simba-core-test ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start Mysql
+        run: sudo /etc/init.d/mysql start
+
+      - name: Checkout
+        uses: actions/checkout@master
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v2
+        with:
+          java-version: '8'
+          distribution: 'adopt'
+          server-id: github
+          settings-path: ${{ github.workspace }}
+
+      - name: Init Simba-Db
+        run: mysql -vvv -h localhost -uroot -proot < simba-jdbc/src/main/init-script/init-simba-mysql.sql
+
+      - name: Test Simba-Jdbc
+        run: gradle simba-jdbc:clean simba-jdbc:check

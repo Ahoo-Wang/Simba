@@ -13,7 +13,6 @@
 
 package me.ahoo.simba.example;
 
-import io.lettuce.core.RedisClient;
 import lombok.extern.slf4j.Slf4j;
 import me.ahoo.simba.core.MutexContendService;
 import me.ahoo.simba.core.MutexContendServiceFactory;
@@ -22,7 +21,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.context.annotation.Bean;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -41,14 +39,8 @@ public class ExampleApp implements CommandLineRunner {
         SpringApplication.run(ExampleApp.class);
     }
 
-    @Bean
-    public RedisClient redisClient() {
-        return RedisClient.create("redis://localhost:6379");
-    }
-
     @Autowired
     private MutexContendServiceFactory mutexContendServiceFactory;
-
 
     /**
      * Callback used to run the bean.

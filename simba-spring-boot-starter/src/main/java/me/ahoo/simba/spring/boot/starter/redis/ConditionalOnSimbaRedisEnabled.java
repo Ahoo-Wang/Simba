@@ -13,11 +13,8 @@
 
 package me.ahoo.simba.spring.boot.starter.redis;
 
-
-import me.ahoo.simba.redis.RedisMutexContendServiceFactory;
 import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled;
 import me.ahoo.simba.spring.boot.starter.EnabledSuffix;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import java.lang.annotation.ElementType;

@@ -16,6 +16,10 @@ java {
         usingSourceSet(sourceSets[SourceSet.MAIN_SOURCE_SET_NAME])
         capability(group.toString(), "redis-support", version.toString())
     }
+    registerFeature("springRedisSupport") {
+        usingSourceSet(sourceSets[SourceSet.MAIN_SOURCE_SET_NAME])
+        capability(group.toString(), "spring-redis-support", version.toString())
+    }
     registerFeature("jdbcSupport") {
         usingSourceSet(sourceSets[SourceSet.MAIN_SOURCE_SET_NAME])
         capability(group.toString(), "jdbc-support", version.toString())
@@ -30,14 +34,15 @@ dependencies {
     api(project(":simba-core"))
 
     "redisSupportImplementation"(project(":simba-redis"))
+    "redisSupportImplementation"("me.ahoo.cosky:cosky-core")
+
+    "springRedisSupportImplementation"(project(":simba-spring-redis"))
 
     "jdbcSupportImplementation"(project(":simba-jdbc"))
 
     "zookeeperSupportImplementation"(project(":simba-zookeeper"))
 
-    implementation("me.ahoo.cosky:cosky-core")
     api("org.springframework.boot:spring-boot-starter")
-
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor:${rootProject.ext.get("springBootVersion")}")
     annotationProcessor("org.springframework.boot:spring-boot-autoconfigure-processor:${rootProject.ext.get("springBootVersion")}")
 }

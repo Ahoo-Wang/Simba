@@ -11,7 +11,10 @@
  * limitations under the License.
  */
 
-create table simba_mutex
+create database if not exists simba_db;
+use simba_db;
+
+create table if not exists simba_mutex
 (
     mutex         varchar(66) not null primary key comment 'mutex name',
     acquired_at   bigint unsigned not null,

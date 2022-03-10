@@ -45,7 +45,6 @@ ext {
     set("commonsIOVersion", "2.10.0")
     set("springfoxVersion", "3.0.0")
     set("metricsVersion", "4.2.0")
-    set("jjwtVersion", "0.11.2")
     set("coskyVersion", "1.3.10")
     set("libraryProjects", libraryProjects)
 }

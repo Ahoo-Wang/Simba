@@ -27,24 +27,28 @@ public class RedisProperties {
     private boolean enabled = true;
     private Duration ttl = Duration.ofSeconds(10);
     private Duration transition = Duration.ofSeconds(6);
-
+    
     public boolean isEnabled() {
         return enabled;
     }
-
+    
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
     }
-
+    
     public Duration getTtl() {
         return ttl;
     }
-
+    
     public void setTtl(Duration ttl) {
         this.ttl = ttl;
     }
-
+    
     public Duration getTransition() {
         return transition;
+    }
+    
+    public void setTransition(Duration transition) {
+        this.transition = transition;
     }
 }

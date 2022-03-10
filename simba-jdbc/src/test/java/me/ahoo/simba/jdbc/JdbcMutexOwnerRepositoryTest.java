@@ -26,7 +26,7 @@ import org.junit.jupiter.api.TestInstance;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class JdbcMutexOwnerRepositoryTest {
     private JdbcMutexOwnerRepository jdbcMutexOwnerRepository;
-
+    
     @BeforeAll
     void setup() {
         HikariDataSource hikariDataSource = new HikariDataSource();
@@ -35,20 +35,20 @@ class JdbcMutexOwnerRepositoryTest {
         hikariDataSource.setPassword("root");
         jdbcMutexOwnerRepository = new JdbcMutexOwnerRepository(hikariDataSource);
     }
-
+    
     @Test
     void getOwner() {
         jdbcMutexOwnerRepository.tryInitMutex("getOwner");
         MutexOwnerEntity entity = jdbcMutexOwnerRepository.getOwner("getOwner");
         Assertions.assertNotNull(entity);
     }
-
-
+    
+    
     @Test
     void acquire() {
         long ttl = 100;
         long transition = 100;
-        String ownerId = ContenderIdGenerator.Host.INSTANCE.generate();
+        String ownerId = ContenderIdGenerator.Simple.HOST.generate();
         String mutex = "acquire_" + ownerId;
         jdbcMutexOwnerRepository.tryInitMutex(mutex);
         boolean succeeded = jdbcMutexOwnerRepository.acquire(mutex, ownerId, ttl, transition);
@@ -59,5 +59,5 @@ class JdbcMutexOwnerRepositoryTest {
         succeeded = jdbcMutexOwnerRepository.acquire(mutex, ownerId, ttl, transition);
         Assertions.assertTrue(succeeded);
     }
-
+    
 }

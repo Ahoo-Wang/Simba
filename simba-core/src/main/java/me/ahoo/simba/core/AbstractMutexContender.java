@@ -24,40 +24,40 @@ import lombok.extern.slf4j.Slf4j;
 public abstract class AbstractMutexContender implements MutexContender {
     private final String mutex;
     private final String contenderId;
-
+    
     public AbstractMutexContender(String mutex) {
-        this(mutex, ContenderIdGenerator.Host.INSTANCE.generate());
+        this(mutex, ContenderIdGenerator.Simple.HOST.generate());
     }
-
+    
     public AbstractMutexContender(String mutex, String contenderId) {
         Preconditions.checkArgument(!Strings.isNullOrEmpty(mutex), "mutex can not be null or empty!");
         Preconditions.checkArgument(!Strings.isNullOrEmpty(contenderId), "contenderId can not be null or empty!");
         this.mutex = mutex;
         this.contenderId = contenderId;
     }
-
+    
     @Override
     public String getMutex() {
         return mutex;
     }
-
+    
     @Override
     public String getContenderId() {
         return contenderId;
     }
-
+    
     @Override
     public void onAcquired(MutexState mutexState) {
         if (log.isInfoEnabled()) {
             log.info("onAcquired - mutex:[{}] - contenderId:[{}].", mutex, contenderId);
         }
     }
-
+    
     @Override
     public void onReleased(MutexState mutexState) {
         if (log.isInfoEnabled()) {
             log.info("onReleased - mutex:[{}] - contenderId:[{}].", mutex, contenderId);
         }
     }
-
+    
 }
