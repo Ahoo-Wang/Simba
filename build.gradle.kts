@@ -20,7 +20,7 @@
  */
 
 plugins {
-    id("io.github.gradle-nexus.publish-plugin") version ("1.1.0")
+    id("io.github.gradle-nexus.publish-plugin")
 }
 
 
@@ -107,8 +107,8 @@ configure(publishProjects) {
                 name = "GitHubPackages"
                 url = uri("https://maven.pkg.github.com/Ahoo-Wang/Simba")
                 credentials {
-                    username = project.findProperty("gitHubPackagesUserName") as String
-                    password = project.findProperty("gitHubPackagesToken") as String
+                    username = project.findProperty("gitHubPackagesUserName") as? String
+                    password = project.findProperty("gitHubPackagesToken") as? String?
                 }
             }
         }
