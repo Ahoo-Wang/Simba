@@ -107,7 +107,7 @@ jobs:
           settings-path: ${{ github.workspace }}
 
       - name: Init Simba-Db
-        run: mysql -vvv -h localhost -uroot -proot < simba-jdbc/src/main/init-script/init-simba-mysql.sql
+        run: mysql -vvv -h localhost -uroot -proot < simba-jdbc/src/init-script/init-simba-mysql.sql
 
       - name: Test Simba-Jdbc
         run: gradle simba-jdbc:clean simba-jdbc:check
