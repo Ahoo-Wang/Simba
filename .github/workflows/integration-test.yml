@@ -59,7 +59,36 @@ jobs:
           settings-path: ${{ github.workspace }}
 
       - name: Test Simba-Redis
-        run: gradle simba-redis:clean simba-redis:check simba-spring-redis:clean simba-spring-redis:check
+        run: gradle simba-redis:clean simba-redis:check
+
+  simba-spring-redis-test:
+    name: Simba Spring Redis Test
+    needs: [ simba-core-test ]
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    steps:
+      - name: Checkout
+        uses: actions/checkout@master
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v2
+        with:
+          java-version: '8'
+          distribution: 'adopt'
+          server-id: github
+          settings-path: ${{ github.workspace }}
+
+      - name: Test Simba-Spring-Redis
+        run: gradle simba-spring-redis:clean simba-spring-redis:check
 
   simba-zookeeper-test:
     name: Simba Zookeeper Test
