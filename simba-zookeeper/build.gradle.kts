@@ -15,4 +15,5 @@
 dependencies {
     api(project(":simba-core"))
     api("org.apache.curator:curator-recipes")
+    testImplementation("org.apache.curator:curator-test")
 }

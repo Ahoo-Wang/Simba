@@ -74,7 +74,7 @@ class SpringRedisMutexContendServiceTest {
         CompletableFuture<MutexState> acquiredFuture = new CompletableFuture();
         CompletableFuture<MutexState> releasedFuture = new CompletableFuture();
         
-        SpringRedisMutexContendService contendService = (SpringRedisMutexContendService) contendServiceFactory.createMutexContendService(new AbstractMutexContender("start") {
+        SpringRedisMutexContendService contendService = (SpringRedisMutexContendService) contendServiceFactory.createMutexContendService(new AbstractMutexContender("spring-redis-start") {
             @Override
             public void onAcquired(MutexState mutexState) {
                 log.info("onAcquired");
@@ -104,7 +104,7 @@ class SpringRedisMutexContendServiceTest {
         
         CompletableFuture<MutexState> acquiredFuture2 = new CompletableFuture();
         CompletableFuture<MutexState> releasedFuture2 = new CompletableFuture();
-        SpringRedisMutexContendService contendService = (SpringRedisMutexContendService) contendServiceFactory.createMutexContendService(new AbstractMutexContender("restart") {
+        SpringRedisMutexContendService contendService = (SpringRedisMutexContendService) contendServiceFactory.createMutexContendService(new AbstractMutexContender("spring-redis-restart") {
             @Override
             public void onAcquired(MutexState mutexState) {
                 log.info("onAcquired");
@@ -147,7 +147,7 @@ class SpringRedisMutexContendServiceTest {
         CompletableFuture<MutexState> acquiredFuture = new CompletableFuture();
         CompletableFuture<MutexState> releasedFuture = new CompletableFuture();
         
-        SpringRedisMutexContendService contendService = (SpringRedisMutexContendService) contendServiceFactory.createMutexContendService(new AbstractMutexContender("guard") {
+        SpringRedisMutexContendService contendService = (SpringRedisMutexContendService) contendServiceFactory.createMutexContendService(new AbstractMutexContender("spring-redis-guard") {
             @Override
             public void onAcquired(MutexState mutexState) {
                 log.info("onAcquired");
@@ -183,7 +183,7 @@ class SpringRedisMutexContendServiceTest {
         List<SpringRedisMutexContendService> contendServiceList = new ArrayList<>(10);
         AtomicReference<String> currentOwnerIdRef = new AtomicReference<>();
         for (int i = 0; i < 10; i++) {
-            SpringRedisMutexContendService contendService = (SpringRedisMutexContendService) contendServiceFactory.createMutexContendService(new AbstractMutexContender("multiContend") {
+            SpringRedisMutexContendService contendService = (SpringRedisMutexContendService) contendServiceFactory.createMutexContendService(new AbstractMutexContender("spring-redis-multiContend") {
                 @Override
                 public void onAcquired(MutexState mutexState) {
                     currentOwnerIdRef.set(mutexState.getAfter().getOwnerId());
