@@ -28,7 +28,6 @@ import java.time.Duration;
 public class JdbcProperties {
     public static final String PREFIX = Simba.SIMBA_PREFIX + "jdbc";
     private boolean enabled = true;
-    
     private Duration initialDelay = Duration.ofSeconds(0);
     private Duration ttl = Duration.ofSeconds(10);
     private Duration transition = Duration.ofSeconds(6);

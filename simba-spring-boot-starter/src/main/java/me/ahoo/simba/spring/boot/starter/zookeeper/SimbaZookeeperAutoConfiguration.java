@@ -39,7 +39,6 @@ public class SimbaZookeeperAutoConfiguration {
         this.zookeeperProperties = zookeeperProperties;
     }
     
-    
     @Bean
     @ConditionalOnBean(CuratorFramework.class)
     @ConditionalOnMissingBean
