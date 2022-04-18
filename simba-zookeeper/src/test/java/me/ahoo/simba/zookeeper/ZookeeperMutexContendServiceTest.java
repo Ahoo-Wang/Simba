@@ -58,7 +58,7 @@ class ZookeeperMutexContendServiceTest {
     
     @SneakyThrows
     @AfterAll
-    void after() {
+    void destroy() {
         if (Objects.nonNull(curatorFramework)) {
             curatorFramework.close();
         }

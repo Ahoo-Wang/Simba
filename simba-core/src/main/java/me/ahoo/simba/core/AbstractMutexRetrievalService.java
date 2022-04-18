@@ -72,14 +72,18 @@ public abstract class AbstractMutexRetrievalService implements MutexRetrievalSer
     protected abstract void stopRetrieval();
     
     protected CompletableFuture<Void> notifyOwner(MutexOwner newOwner) {
-        final MutexState newState = new MutexState(getAfterOwner(), newOwner);
-        this.mutexState = newState;
-        return CompletableFuture.runAsync(this::safeNotifyOwner, handleExecutor);
+        return CompletableFuture.runAsync(() -> safeNotifyOwner(newOwner), handleExecutor);
     }
     
-    protected void safeNotifyOwner() {
+    protected void safeNotifyOwner(MutexOwner newOwner) {
         try {
-            getRetriever().notifyOwner(mutexState);
+            /*
+             * Concurrency issues.
+             * Order of assignment is very important.
+             */
+            final MutexState newState = new MutexState(getAfterOwner(), newOwner);
+            this.mutexState = newState;
+            getRetriever().notifyOwner(newState);
         } catch (Throwable throwable) {
             if (log.isErrorEnabled()) {
                 log.error(throwable.getMessage(), throwable);

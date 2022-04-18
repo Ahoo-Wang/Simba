@@ -13,11 +13,14 @@
 
 package me.ahoo.simba.core;
 
+import com.google.errorprone.annotations.Immutable;
+
 /**
  * Mutex Owner.
  *
  * @author ahoo wang
  */
+@Immutable
 public class MutexOwner {
     public static final String NONE_OWNER_ID = "";
     public static final MutexOwner NONE = new MutexOwner(NONE_OWNER_ID, 0, 0, 0);

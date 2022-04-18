@@ -17,13 +17,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import lombok.SneakyThrows;
-import lombok.extern.slf4j.Slf4j;
 import me.ahoo.simba.core.AbstractMutexContender;
 import me.ahoo.simba.core.MutexState;
+
+import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -32,6 +35,7 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ForkJoinPool;
@@ -45,26 +49,39 @@ import java.util.concurrent.atomic.AtomicReference;
  * @author ahoo wang
  */
 @Slf4j
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class SpringRedisMutexContendServiceTest {
+    LettuceConnectionFactory lettuceConnectionFactory;
     private SpringRedisMutexContendServiceFactory contendServiceFactory;
     RedisMessageListenerContainer listenerContainer;
     
-    @BeforeEach
+    @BeforeAll
     void setup() {
         RedisStandaloneConfiguration redisStandaloneConfiguration = new RedisStandaloneConfiguration();
-        LettuceConnectionFactory lettuceConnectionFactory = new LettuceConnectionFactory(redisStandaloneConfiguration);
+        lettuceConnectionFactory = new LettuceConnectionFactory(redisStandaloneConfiguration);
         lettuceConnectionFactory.afterPropertiesSet();
         StringRedisTemplate stringRedisTemplate = new StringRedisTemplate(lettuceConnectionFactory);
         listenerContainer = new RedisMessageListenerContainer();
         listenerContainer.setConnectionFactory(lettuceConnectionFactory);
         listenerContainer.afterPropertiesSet();
         contendServiceFactory = new SpringRedisMutexContendServiceFactory(Duration.ofSeconds(2),
-                Duration.ofSeconds(1),
-                stringRedisTemplate,
-                listenerContainer,
-                ForkJoinPool.commonPool(),
-                Executors.newScheduledThreadPool(1)
+            Duration.ofSeconds(1),
+            stringRedisTemplate,
+            listenerContainer,
+            ForkJoinPool.commonPool(),
+            Executors.newScheduledThreadPool(1)
         );
+    }
+    
+    @SneakyThrows
+    @AfterAll
+    void destroy() {
+        if (Objects.nonNull(lettuceConnectionFactory)) {
+            lettuceConnectionFactory.destroy();
+        }
+        if (Objects.nonNull(listenerContainer)) {
+            listenerContainer.stop();
+        }
     }
     
     
@@ -178,7 +195,6 @@ class SpringRedisMutexContendServiceTest {
     
     @Test
     void multiContend() throws InterruptedException {
-        
         AtomicInteger count = new AtomicInteger(0);
         List<SpringRedisMutexContendService> contendServiceList = new ArrayList<>(10);
         AtomicReference<String> currentOwnerIdRef = new AtomicReference<>();
@@ -186,6 +202,7 @@ class SpringRedisMutexContendServiceTest {
             SpringRedisMutexContendService contendService = (SpringRedisMutexContendService) contendServiceFactory.createMutexContendService(new AbstractMutexContender("spring-redis-multiContend") {
                 @Override
                 public void onAcquired(MutexState mutexState) {
+                    log.info("onAcquired");
                     currentOwnerIdRef.set(mutexState.getAfter().getOwnerId());
                     super.onAcquired(mutexState);
                     assertEquals(1, count.incrementAndGet());
@@ -193,6 +210,7 @@ class SpringRedisMutexContendServiceTest {
                 
                 @Override
                 public void onReleased(MutexState mutexState) {
+                    log.info("onReleased");
                     super.onReleased(mutexState);
                     assertEquals(0, count.decrementAndGet());
                 }

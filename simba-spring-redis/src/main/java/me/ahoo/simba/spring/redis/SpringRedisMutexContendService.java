@@ -152,11 +152,17 @@ public class SpringRedisMutexContendService extends AbstractMutexContendService 
     
     private MutexOwner guard() {
         String message = redisTemplate.execute(SCRIPT_GUARD, keys, getContenderId(), String.valueOf(ttl.toMillis()));
+        if (log.isDebugEnabled()) {
+            log.debug("guard - mutex:[{}] contenderId:[{}] - message:[{}].", getMutex(), getContenderId(), message);
+        }
         return notifyOwnerAndScheduleNext(message);
     }
     
     private MutexOwner acquire() {
         String message = redisTemplate.execute(SCRIPT_ACQUIRE, keys, getContenderId(), String.valueOf(ttl.toMillis() + transition.toMillis()));
+        if (log.isDebugEnabled()) {
+            log.debug("acquire - mutex:[{}] contenderId:[{}] - message:[{}].", getMutex(), getContenderId(), message);
+        }
         return notifyOwnerAndScheduleNext(message);
     }
     
@@ -201,12 +207,15 @@ public class SpringRedisMutexContendService extends AbstractMutexContendService 
     }
     
     private void release() {
-        redisTemplate.execute(SCRIPT_RELEASE, keys, getContenderId());
+        Boolean succeed = redisTemplate.execute(SCRIPT_RELEASE, keys, getContenderId());
+        if (log.isDebugEnabled()) {
+            log.debug("release - mutex:[{}] - contenderId:[{}] - succeed:[{}]", getMutex(), getContenderId(), succeed);
+        }
         try {
             notifyOwner(MutexOwner.NONE);
         } catch (Throwable throwable) {
             if (log.isWarnEnabled()) {
-                log.warn("stopContend - mutex:[{}] - contenderId:[{}] - message:[{}]", getMutex(), getContenderId(), throwable.getMessage());
+                log.warn("release - mutex:[{}] - contenderId:[{}] - message:[{}]", getMutex(), getContenderId(), throwable.getMessage());
             }
         }
     }
@@ -218,7 +227,7 @@ public class SpringRedisMutexContendService extends AbstractMutexContendService 
             String channel = new String(message.getChannel(), StandardCharsets.UTF_8);
             String body = new String(message.getBody(), StandardCharsets.UTF_8);
             if (log.isDebugEnabled()) {
-                log.debug("onMessage - mutex:[{}] - ownerId:[{}] - channel:[{}] - message:[{}].", getMutex(), getContenderId(), channel, body);
+                log.debug("onMessage - mutex:[{}] - contenderId:[{}] - channel:[{}] - message:[{}].", getMutex(), getContenderId(), channel, body);
             }
             OwnerEvent ownerEvent = OwnerEvent.of(body);
             switch (ownerEvent.getEvent()) {
