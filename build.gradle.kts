@@ -108,8 +108,8 @@ configure(publishProjects) {
                 name = "GitHubPackages"
                 url = uri("https://maven.pkg.github.com/Ahoo-Wang/Simba")
                 credentials {
-                    username = project.findProperty("gitHubPackagesUserName") as? String
-                    password = project.findProperty("gitHubPackagesToken") as? String?
+                    username = System.getenv("GITHUB_ACTOR")
+                    password = System.getenv("GITHUB_TOKEN")
                 }
             }
         }
@@ -151,6 +151,13 @@ configure(publishProjects) {
         }
     }
     configure<SigningExtension> {
+        val isInCI = null != System.getenv("CI");
+        if (isInCI) {
+            val signingKeyId = System.getenv("SIGNING_KEYID")
+            val signingKey = System.getenv("SIGNING_SECRETKEY")
+            val signingPassword = System.getenv("SIGNING_PASSWORD")
+            useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+        }
         if (isBom) {
             sign(extensions.getByType(PublishingExtension::class).publications.get("mavenBom"))
         } else {
@@ -161,7 +168,10 @@ configure(publishProjects) {
 
 nexusPublishing {
     repositories {
-        sonatype()
+        sonatype {
+            username.set(System.getenv("MAVEN_USERNAME"))
+            password.set(System.getenv("MAVEN_PASSWORD"))
+        }
     }
 }
 

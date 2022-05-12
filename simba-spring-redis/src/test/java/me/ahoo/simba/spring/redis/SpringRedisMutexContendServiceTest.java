@@ -222,7 +222,7 @@ class SpringRedisMutexContendServiceTest {
             listenerContainer.start();
             contendServiceList.add(contendService);
         }
-        TimeUnit.SECONDS.sleep(30);
+        TimeUnit.SECONDS.sleep(10);
         assertEquals(1, count.get());
         String currentOwnerId = currentOwnerIdRef.get();
         for (SpringRedisMutexContendService contendService : contendServiceList) {
