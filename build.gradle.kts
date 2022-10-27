@@ -13,7 +13,7 @@
 
 plugins {
     id("io.github.gradle-nexus.publish-plugin")
-    java
+    `java-library`
     jacoco
 }
 
@@ -29,15 +29,6 @@ val publishProjects = subprojects - exampleProjects
 val libraryProjects = publishProjects - bomProjects
 
 ext {
-    set("lombokVersion", "1.18.20")
-    set("springBootVersion", "2.4.13")
-    set("springCloudVersion", "2020.0.5")
-    set("jmhVersion", "1.34")
-    set("guavaVersion", "30.0-jre")
-    set("commonsIOVersion", "2.10.0")
-    set("springfoxVersion", "3.0.0")
-    set("metricsVersion", "4.2.0")
-    set("coskyVersion", "1.3.20")
     set("libraryProjects", libraryProjects)
 }
 
@@ -79,18 +70,21 @@ configure(libraryProjects) {
     }
 
     dependencies {
-        val depLombok = "org.projectlombok:lombok:${rootProject.ext.get("lombokVersion")}"
-        this.add("api", platform(project(":simba-dependencies")))
-        this.add("compileOnly", depLombok)
-        this.add("annotationProcessor", depLombok)
-        this.add("testCompileOnly", depLombok)
-        this.add("testAnnotationProcessor", depLombok)
-        this.add("implementation", "com.google.guava:guava")
-        this.add("implementation", "org.slf4j:slf4j-api")
-        this.add("testImplementation", "ch.qos.logback:logback-classic")
-        this.add("testImplementation", "org.junit.jupiter:junit-jupiter-api")
-        this.add("testRuntimeOnly", "org.junit.jupiter:junit-jupiter-engine")
-        this.add("testImplementation", "io.projectreactor:reactor-test")
+        api(platform(project(":simba-dependencies")))
+        annotationProcessor(platform(project(":simba-dependencies")))
+        testAnnotationProcessor(platform(project(":simba-dependencies")))
+        compileOnly("org.projectlombok:lombok")
+        annotationProcessor("org.projectlombok:lombok")
+        testCompileOnly("org.projectlombok:lombok")
+        testAnnotationProcessor("org.projectlombok:lombok")
+        implementation("com.google.guava:guava")
+        implementation("org.slf4j:slf4j-api")
+        testImplementation("ch.qos.logback:logback-classic")
+        testImplementation("org.junit.jupiter:junit-jupiter-api")
+        testImplementation("org.junit.jupiter:junit-jupiter-params")
+        testImplementation("org.junit-pioneer:junit-pioneer")
+        testImplementation("org.hamcrest:hamcrest")
+        testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine")
     }
 }
 

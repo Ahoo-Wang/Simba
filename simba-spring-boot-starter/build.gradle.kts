@@ -43,8 +43,8 @@ dependencies {
     "zookeeperSupportImplementation"(project(":simba-zookeeper"))
 
     api("org.springframework.boot:spring-boot-starter")
-    annotationProcessor("org.springframework.boot:spring-boot-configuration-processor:${rootProject.ext.get("springBootVersion")}")
-    annotationProcessor("org.springframework.boot:spring-boot-autoconfigure-processor:${rootProject.ext.get("springBootVersion")}")
+    annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
+    annotationProcessor("org.springframework.boot:spring-boot-autoconfigure-processor")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("mysql:mysql-connector-java")

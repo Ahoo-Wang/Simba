@@ -12,14 +12,15 @@
  */
 
 dependencies {
-    api(platform("org.springframework.boot:spring-boot-dependencies:${rootProject.ext.get("springBootVersion")}"))
-    api(platform("org.springframework.cloud:spring-cloud-dependencies:${rootProject.ext.get("springCloudVersion")}"))
-    api(platform("me.ahoo.cosky:cosky-bom:${rootProject.ext.get("coskyVersion")}"))
+    api(platform("org.springframework.boot:spring-boot-dependencies:2.6.9"))
+    api(platform("org.springframework.cloud:spring-cloud-dependencies:2021.0.4"))
+    api(platform("me.ahoo.cosky:cosky-bom:1.3.20"))
+    api(platform("org.testcontainers:testcontainers-bom:1.17.5"))
     constraints {
-        api("org.projectlombok:lombok:${rootProject.ext.get("lombokVersion")}")
-        api("com.google.guava:guava:${rootProject.ext.get("guavaVersion")}")
-        api("commons-io:commons-io:${rootProject.ext.get("commonsIOVersion")}")
-        api("io.springfox:springfox-boot-starter:${rootProject.ext.get("springfoxVersion")}")
-        api("io.dropwizard.metrics:metrics-core:${rootProject.ext.get("metricsVersion")}")
+        api("org.projectlombok:lombok:1.18.22")
+        api("com.google.guava:guava:30.0-jre")
+        api("commons-io:commons-io:2.10.0")
+        api("org.junit-pioneer:junit-pioneer:1.4.2")
+        api("org.hamcrest:hamcrest:2.2")
     }
 }
