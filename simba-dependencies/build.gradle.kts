@@ -19,7 +19,7 @@ dependencies {
     constraints {
         api("org.projectlombok:lombok:1.18.22")
         api("com.google.guava:guava:30.1.1-jre")
-        api("commons-io:commons-io:2.10.0")
+        api("commons-io:commons-io:2.11.0")
         api("org.junit-pioneer:junit-pioneer:1.4.2")
         api("org.hamcrest:hamcrest:2.2")
     }
