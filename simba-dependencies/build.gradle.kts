@@ -12,7 +12,7 @@
  */
 
 dependencies {
-    api(platform("org.springframework.boot:spring-boot-dependencies:2.6.9"))
+    api(platform("org.springframework.boot:spring-boot-dependencies:2.7.5"))
     api(platform("org.springframework.cloud:spring-cloud-dependencies:2021.0.4"))
     api(platform("me.ahoo.cosky:cosky-bom:1.3.20"))
     api(platform("org.testcontainers:testcontainers-bom:1.17.5"))
