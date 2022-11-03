@@ -10,40 +10,34 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.spring.boot.starter.zookeeper
 
-package me.ahoo.simba.spring.boot.starter.zookeeper;
-
-import me.ahoo.simba.zookeeper.ZookeeperMutexContendServiceFactory;
-
-import org.apache.curator.framework.CuratorFramework;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
+import me.ahoo.simba.zookeeper.ZookeeperMutexContendServiceFactory
+import org.apache.curator.framework.CuratorFramework
+import org.springframework.boot.autoconfigure.AutoConfiguration
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
+import org.springframework.boot.context.properties.EnableConfigurationProperties
+import org.springframework.context.annotation.Bean
+import java.util.concurrent.ForkJoinPool
 
 /**
  * Simba Zookeeper Auto Configuration.
  *
  * @author ahoo wang
  */
-@Configuration(proxyBeanMethods = false)
+@AutoConfiguration
 @ConditionalOnSimbaZookeeperEnabled
-@ConditionalOnClass(ZookeeperMutexContendServiceFactory.class)
-@EnableConfigurationProperties(ZookeeperProperties.class)
-public class SimbaZookeeperAutoConfiguration {
-    private final ZookeeperProperties zookeeperProperties;
-    
-    public SimbaZookeeperAutoConfiguration(ZookeeperProperties zookeeperProperties) {
-        this.zookeeperProperties = zookeeperProperties;
-    }
-    
+@ConditionalOnClass(
+    ZookeeperMutexContendServiceFactory::class
+)
+@EnableConfigurationProperties(ZookeeperProperties::class)
+class SimbaZookeeperAutoConfiguration(private val zookeeperProperties: ZookeeperProperties) {
     @Bean
-    @ConditionalOnBean(CuratorFramework.class)
+    @ConditionalOnBean(CuratorFramework::class)
     @ConditionalOnMissingBean
-    public ZookeeperMutexContendServiceFactory zookeeperMutexContendServiceFactory(CuratorFramework curatorFramework) {
-        return new ZookeeperMutexContendServiceFactory(curatorFramework);
+    fun zookeeperMutexContendServiceFactory(curatorFramework: CuratorFramework): ZookeeperMutexContendServiceFactory {
+        return ZookeeperMutexContendServiceFactory(ForkJoinPool.commonPool(), curatorFramework)
     }
-    
 }

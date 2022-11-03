@@ -14,7 +14,6 @@ package me.ahoo.simba.spring.redis
 
 import com.google.common.base.Strings
 import com.google.common.collect.Lists
-import lombok.extern.slf4j.Slf4j
 import me.ahoo.simba.Simba
 import me.ahoo.simba.core.AbstractMutexContendService
 import me.ahoo.simba.core.ContendPeriod
@@ -31,7 +30,6 @@ import org.springframework.data.redis.listener.ChannelTopic
 import org.springframework.data.redis.listener.RedisMessageListenerContainer
 import java.nio.charset.StandardCharsets
 import java.time.Duration
-import java.util.*
 import java.util.concurrent.Executor
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
@@ -42,7 +40,6 @@ import java.util.concurrent.TimeUnit
  *
  * @author ahoo wang
  */
-@Slf4j
 class SpringRedisMutexContendService(
     contender: MutexContender,
     handleExecutor: Executor,
@@ -75,7 +72,7 @@ class SpringRedisMutexContendService(
      * <pre>
      * 1. 当尝试竞争锁失败时，将自己加入等待队列
      * 2. 当持有者释放锁时，将选取等待队列中当竞争者发送释放消息
-    </pre> *
+     </pre> *
      */
     private val contenderChannel: String
     private val listenTopics: List<ChannelTopic>
@@ -109,7 +106,7 @@ class SpringRedisMutexContendService(
      * 1.2 远程订阅
      * 2. 尝试竞争
      * 3. 开始守护
-    </pre> *
+     </pre> *
      */
     override fun startContend() {
         startSubscribe()

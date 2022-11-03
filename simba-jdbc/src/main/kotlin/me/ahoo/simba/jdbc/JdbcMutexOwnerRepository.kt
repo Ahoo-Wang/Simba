@@ -12,7 +12,6 @@
  */
 package me.ahoo.simba.jdbc
 
-import lombok.extern.slf4j.Slf4j
 import me.ahoo.simba.SimbaException
 import org.slf4j.LoggerFactory
 import java.sql.Connection
@@ -25,7 +24,6 @@ import javax.sql.DataSource
  *
  * @author ahoo wang
  */
-@Slf4j
 class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerRepository {
     companion object {
         private val log = LoggerFactory.getLogger(JdbcMutexOwnerRepository::class.java)
@@ -100,11 +98,7 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
     }
 
     override fun getOwner(mutex: String): MutexOwnerEntity {
-        try {
-            dataSource.connection.use { connection -> return getOwner(connection, mutex) }
-        } catch (sqlException: SQLException) {
-            throw SimbaException(sqlException.message!!, sqlException)
-        }
+        dataSource.connection.use { connection -> return getOwner(connection, mutex) }
     }
 
     @Throws(SQLException::class)
@@ -132,11 +126,7 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
     }
 
     override fun ensureOwner(mutex: String): MutexOwnerEntity {
-        try {
-            dataSource.connection.use { connection -> return ensureOwner(connection, mutex) }
-        } catch (sqlException: SQLException) {
-            throw SimbaException(sqlException.message!!, sqlException)
-        }
+        dataSource.connection.use { connection -> return ensureOwner(connection, mutex) }
     }
 
     @Throws(SQLException::class)
@@ -171,11 +161,7 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
      * @return if return true,acquired.
      */
     override fun acquire(mutex: String, contenderId: String, ttl: Long, transition: Long): Boolean {
-        try {
-            dataSource.connection.use { return acquire(it, mutex, contenderId, ttl, transition) }
-        } catch (sqlException: SQLException) {
-            throw SimbaException(sqlException.message!!, sqlException)
-        }
+        dataSource.connection.use { return acquire(it, mutex, contenderId, ttl, transition) }
     }
 
     @Throws(SQLException::class)
@@ -233,17 +219,13 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
     }
 
     override fun release(mutex: String, contenderId: String): Boolean {
-        try {
-            dataSource.connection.use { connection ->
-                connection.prepareStatement(SQL_RELEASE).use { initStatement ->
-                    initStatement.setString(1, mutex)
-                    initStatement.setString(2, contenderId)
-                    val affected = initStatement.executeUpdate()
-                    return affected > 0
-                }
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(SQL_RELEASE).use { initStatement ->
+                initStatement.setString(1, mutex)
+                initStatement.setString(2, contenderId)
+                val affected = initStatement.executeUpdate()
+                return affected > 0
             }
-        } catch (sqlException: SQLException) {
-            throw SimbaException(sqlException.message!!, sqlException)
         }
     }
 }

@@ -16,7 +16,6 @@ dependencies {
     api(platform("org.springframework.cloud:spring-cloud-dependencies:2021.0.4"))
     api(platform("org.testcontainers:testcontainers-bom:1.17.5"))
     constraints {
-        api("org.projectlombok:lombok:1.18.22")
         api("com.google.guava:guava:30.0-jre")
         api("commons-io:commons-io:2.10.0")
         api("org.junit-pioneer:junit-pioneer:1.4.2")

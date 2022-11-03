@@ -10,28 +10,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.spring.boot.starter.redis
 
-package me.ahoo.simba.spring.boot.starter.redis;
-
-import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled;
-import me.ahoo.simba.spring.boot.starter.EnabledSuffix;
-
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
+import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled
+import me.ahoo.simba.spring.boot.starter.EnabledSuffix
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 
 /**
  * Conditional On Simba Redis Enabled.
  *
  * @author ahoo wang
  */
-@Retention(RetentionPolicy.RUNTIME)
-@Target({ElementType.TYPE, ElementType.METHOD})
 @ConditionalOnSimbaEnabled
-@ConditionalOnProperty(value = ConditionalOnSimbaRedisEnabled.ENABLED_KEY, matchIfMissing = true, havingValue = "true")
-public @interface ConditionalOnSimbaRedisEnabled {
-    String ENABLED_KEY = RedisProperties.PREFIX + EnabledSuffix.KEY;
+@ConditionalOnProperty(
+    value = [ConditionalOnSimbaRedisEnabled.ENABLED_KEY],
+    matchIfMissing = true,
+    havingValue = "true"
+)
+annotation class ConditionalOnSimbaRedisEnabled {
+    companion object {
+        const val ENABLED_KEY: String = RedisProperties.PREFIX + EnabledSuffix.KEY
+    }
 }

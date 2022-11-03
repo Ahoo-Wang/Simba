@@ -50,5 +50,4 @@ data class MutexState(
     fun isInTtl(contenderId: String): Boolean {
         return isOwner(contenderId) && after.isInTtl(contenderId)
     }
-
 }

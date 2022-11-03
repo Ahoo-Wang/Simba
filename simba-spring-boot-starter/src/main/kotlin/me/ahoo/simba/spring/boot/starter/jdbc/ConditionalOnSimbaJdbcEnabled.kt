@@ -10,29 +10,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.spring.boot.starter.jdbc
 
-package me.ahoo.simba.spring.boot.starter.jdbc;
-
-
-import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled;
-import me.ahoo.simba.spring.boot.starter.EnabledSuffix;
-
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
+import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled
+import me.ahoo.simba.spring.boot.starter.EnabledSuffix
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 
 /**
  * Conditional On Simba Jdbc Enabled.
  *
  * @author ahoo wang
  */
-@Retention(RetentionPolicy.RUNTIME)
-@Target({ElementType.TYPE, ElementType.METHOD})
 @ConditionalOnSimbaEnabled
-@ConditionalOnProperty(value = ConditionalOnSimbaJdbcEnabled.ENABLED_KEY, matchIfMissing = true, havingValue = "true")
-public @interface ConditionalOnSimbaJdbcEnabled {
-    String ENABLED_KEY = JdbcProperties.PREFIX + EnabledSuffix.KEY;
+@ConditionalOnProperty(value = [ConditionalOnSimbaJdbcEnabled.ENABLED_KEY], matchIfMissing = true, havingValue = "true")
+annotation class ConditionalOnSimbaJdbcEnabled {
+    companion object {
+        const val ENABLED_KEY: String = JdbcProperties.PREFIX + EnabledSuffix.KEY
+    }
 }

@@ -28,10 +28,13 @@ class ContendPeriod(private val contenderId: String) {
     fun nextDelay(mutexOwner: MutexOwner): Long {
         return if (mutexOwner.isOwner(contenderId)) {
             nextOwnerDelay(mutexOwner)
-        } else nextContenderDelay(mutexOwner)
+        } else {
+            nextContenderDelay(mutexOwner)
+        }
     }
 
     companion object {
+        @JvmStatic
         fun nextOwnerDelay(mutexOwner: MutexOwner): Long {
             return mutexOwner.ttlAt - System.currentTimeMillis()
         }

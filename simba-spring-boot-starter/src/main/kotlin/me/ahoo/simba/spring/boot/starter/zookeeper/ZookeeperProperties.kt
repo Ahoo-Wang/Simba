@@ -10,30 +10,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.spring.boot.starter.zookeeper
 
-package me.ahoo.simba.spring.boot.starter.zookeeper;
-
-import me.ahoo.simba.Simba;
-
-import org.springframework.boot.context.properties.ConfigurationProperties;
-
+import me.ahoo.simba.Simba
+import org.springframework.boot.context.properties.ConfigurationProperties
+import org.springframework.boot.context.properties.ConstructorBinding
 
 /**
  * Zookeeper Properties.
  *
  * @author ahoo wang
  */
+@ConstructorBinding
 @ConfigurationProperties(prefix = ZookeeperProperties.PREFIX)
-public class ZookeeperProperties {
-    public static final String PREFIX = Simba.SIMBA_PREFIX + "zookeeper";
-    private boolean enabled = true;
-    
-    public boolean isEnabled() {
-        return enabled;
+data class ZookeeperProperties(val enabled: Boolean = true) {
+
+    companion object {
+        const val PREFIX = Simba.SIMBA_PREFIX + "zookeeper"
     }
-    
-    public void setEnabled(boolean enabled) {
-        this.enabled = enabled;
-    }
-    
 }

@@ -12,11 +12,8 @@
  */
 package me.ahoo.simba.core
 
-import com.google.common.base.Strings
-import me.ahoo.simba.SimbaException
 import me.ahoo.simba.util.ProcessId.currentProcessId
 import java.net.InetAddress
-import java.net.UnknownHostException
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -28,11 +25,12 @@ interface ContenderIdGenerator {
     fun generate(): String
 
     companion object {
+        @JvmField
         val UUID = UUIDContenderIdGenerator
+        @JvmField
         val HOST = HostContenderIdGenerator
     }
 }
-
 
 object UUIDContenderIdGenerator : ContenderIdGenerator {
     override fun generate(): String {
@@ -42,14 +40,11 @@ object UUIDContenderIdGenerator : ContenderIdGenerator {
 
 object HostContenderIdGenerator : ContenderIdGenerator {
     private val counter = AtomicLong()
+    private val host: String by lazy {
+        InetAddress.getLocalHost().hostAddress
+    }
+
     override fun generate(): String {
-        return try {
-            val localHost = InetAddress.getLocalHost()
-            val processId = currentProcessId
-            val seq = counter.getAndIncrement()
-            Strings.lenientFormat("%s:%s@%s", seq, processId, localHost.hostAddress)
-        } catch (unknownHostException: UnknownHostException) {
-            throw SimbaException(unknownHostException.message!!, unknownHostException)
-        }
+        return "${counter.getAndIncrement()}:$currentProcessId@$host"
     }
 }

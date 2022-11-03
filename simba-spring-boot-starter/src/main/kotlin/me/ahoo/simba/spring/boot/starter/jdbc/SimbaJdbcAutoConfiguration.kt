@@ -10,49 +10,47 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.spring.boot.starter.jdbc
 
-package me.ahoo.simba.spring.boot.starter.jdbc;
-
-
-import me.ahoo.simba.core.MutexContendServiceFactory;
-import me.ahoo.simba.jdbc.JdbcMutexContendServiceFactory;
-import me.ahoo.simba.jdbc.JdbcMutexOwnerRepository;
-import me.ahoo.simba.jdbc.MutexOwnerRepository;
-
-import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-
-import javax.sql.DataSource;
+import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.jdbc.JdbcMutexContendServiceFactory
+import me.ahoo.simba.jdbc.JdbcMutexOwnerRepository
+import me.ahoo.simba.jdbc.MutexOwnerRepository
+import org.springframework.boot.autoconfigure.AutoConfiguration
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
+import org.springframework.boot.context.properties.EnableConfigurationProperties
+import org.springframework.context.annotation.Bean
+import java.util.concurrent.ForkJoinPool
+import javax.sql.DataSource
 
 /**
  * Simba Jdbc Auto Configuration.
  *
  * @author ahoo wang
  */
-@Configuration(proxyBeanMethods = false)
+@AutoConfiguration
 @ConditionalOnSimbaJdbcEnabled
-@ConditionalOnClass(JdbcMutexContendServiceFactory.class)
-@EnableConfigurationProperties(JdbcProperties.class)
-public class SimbaJdbcAutoConfiguration {
-    private final JdbcProperties jdbcProperties;
-    
-    public SimbaJdbcAutoConfiguration(JdbcProperties jdbcProperties) {
-        this.jdbcProperties = jdbcProperties;
-    }
-    
+@ConditionalOnClass(
+    JdbcMutexContendServiceFactory::class
+)
+@EnableConfigurationProperties(JdbcProperties::class)
+class SimbaJdbcAutoConfiguration(private val jdbcProperties: JdbcProperties) {
     @Bean
     @ConditionalOnMissingBean
-    public MutexOwnerRepository mutexOwnerRepository(DataSource dataSource) {
-        return new JdbcMutexOwnerRepository(dataSource);
+    fun mutexOwnerRepository(dataSource: DataSource): MutexOwnerRepository {
+        return JdbcMutexOwnerRepository(dataSource)
     }
-    
+
     @Bean
     @ConditionalOnMissingBean
-    public MutexContendServiceFactory jdbcMutexContendServiceFactory(MutexOwnerRepository mutexOwnerRepository) {
-        return new JdbcMutexContendServiceFactory(mutexOwnerRepository, jdbcProperties.getInitialDelay(), jdbcProperties.getTtl(), jdbcProperties.getTransition());
+    fun jdbcMutexContendServiceFactory(mutexOwnerRepository: MutexOwnerRepository): MutexContendServiceFactory {
+        return JdbcMutexContendServiceFactory(
+            mutexOwnerRepository = mutexOwnerRepository,
+            handleExecutor = ForkJoinPool.commonPool(),
+            initialDelay = jdbcProperties.initialDelay,
+            ttl = jdbcProperties.ttl,
+            transition = jdbcProperties.transition
+        )
     }
-    
 }

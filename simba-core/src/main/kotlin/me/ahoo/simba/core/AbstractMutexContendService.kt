@@ -12,7 +12,6 @@
  */
 package me.ahoo.simba.core
 
-import lombok.extern.slf4j.Slf4j
 import java.util.concurrent.Executor
 
 /**
@@ -20,13 +19,14 @@ import java.util.concurrent.Executor
  *
  * @author ahoo wang
  */
-@Slf4j
 abstract class AbstractMutexContendService(
     override val contender: MutexContender,
     handleExecutor: Executor
 ) : AbstractMutexRetrievalService(
-    contender, handleExecutor
-), MutexContendService {
+    contender,
+    handleExecutor
+),
+    MutexContendService {
 
     override fun startRetrieval() {
         resetOwner()

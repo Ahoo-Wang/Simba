@@ -21,7 +21,10 @@ import me.ahoo.simba.core.MutexOwner
  */
 class MutexOwnerEntity(val mutex: String, ownerId: String, acquiredAt: Long, ttlAt: Long, transitionAt: Long) :
     MutexOwner(
-        ownerId, acquiredAt, ttlAt, transitionAt
+        ownerId,
+        acquiredAt,
+        ttlAt,
+        transitionAt
     ) {
 
     /**
@@ -34,5 +37,4 @@ class MutexOwnerEntity(val mutex: String, ownerId: String, acquiredAt: Long, ttl
      * [java.util.concurrent.TimeUnit.MILLISECONDS]
      */
     var currentDbAt: Long = 0
-
 }

@@ -18,5 +18,5 @@ package me.ahoo.simba.core
  * @author ahoo wang
  */
 interface MutexRetrievalServiceFactory {
-    fun createMutexRetrievalService(retrievalListener: MutexRetriever?): MutexRetrievalService?
+    fun createMutexRetrievalService(retrievalListener: MutexRetriever): MutexRetrievalService
 }

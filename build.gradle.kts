@@ -36,6 +36,7 @@ val exampleProjects = setOf(
     project(":simba-example")
 )
 
+val testProject = project(":simba-test")
 val publishProjects = subprojects - exampleProjects
 val libraryProjects = publishProjects - bomProjects
 
@@ -90,12 +91,7 @@ configure(libraryProjects) {
 
     dependencies {
         api(platform(project(":simba-dependencies")))
-        annotationProcessor(platform(project(":simba-dependencies")))
-        testAnnotationProcessor(platform(project(":simba-dependencies")))
-        compileOnly("org.projectlombok:lombok")
-        annotationProcessor("org.projectlombok:lombok")
-        testCompileOnly("org.projectlombok:lombok")
-        testAnnotationProcessor("org.projectlombok:lombok")
+        detektPlugins(platform(project(":simba-dependencies")))
         implementation("com.google.guava:guava")
         implementation("org.slf4j:slf4j-api")
         testImplementation("ch.qos.logback:logback-classic")
@@ -166,7 +162,7 @@ configure(publishProjects) {
         }
     }
     configure<SigningExtension> {
-        val isInCI = null != System.getenv("CI");
+        val isInCI = null != System.getenv("CI")
         if (isInCI) {
             val signingKeyId = System.getenv("SIGNING_KEYID")
             val signingKey = System.getenv("SIGNING_SECRETKEY")
@@ -195,11 +191,14 @@ fun getPropertyOf(name: String) = project.properties[name]?.toString()
 tasks.register<JacocoReport>("codeCoverageReport") {
     executionData(fileTree(project.rootDir.absolutePath).include("**/build/jacoco/*.exec"))
     libraryProjects.forEach {
-        sourceSets(it.sourceSets.main.get())
+        dependsOn(it.tasks.test)
+        if (testProject != it) {
+            sourceSets(it.sourceSets.main.get())
+        }
     }
     reports {
         xml.required.set(true)
-        html.outputLocation.set(file("${buildDir}/reports/jacoco/report.xml"))
+        html.outputLocation.set(file("$buildDir/reports/jacoco/report.xml"))
         csv.required.set(false)
         html.required.set(true)
         html.outputLocation.set(layout.buildDirectory.dir("reports/jacoco/"))

@@ -17,7 +17,6 @@ import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexContender
 import org.apache.curator.framework.CuratorFramework
 import java.util.concurrent.Executor
-import java.util.concurrent.ForkJoinPool
 
 /**
  * Zookeeper Mutex Contend Service Factory.

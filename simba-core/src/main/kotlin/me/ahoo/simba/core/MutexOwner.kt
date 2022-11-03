@@ -43,7 +43,7 @@ open class MutexOwner(
     val transitionAt: Long = Long.MAX_VALUE
 ) {
 
-    fun isOwner(contenderId: String?): Boolean {
+    fun isOwner(contenderId: String): Boolean {
         return ownerId == contenderId
     }
 
@@ -52,7 +52,7 @@ open class MutexOwner(
     val isInTtl: Boolean
         get() = ttlAt > currentAt
 
-    fun isInTtl(contenderId: String?): Boolean {
+    fun isInTtl(contenderId: String): Boolean {
         return isOwner(contenderId) && isInTtl
     }
 
@@ -64,13 +64,13 @@ open class MutexOwner(
     val isInTransition: Boolean
         get() = transitionAt >= currentAt
 
-    fun isInTransitionOf(contenderId: String?): Boolean {
-        return (isOwner(contenderId)
-                && isInTransition)
+    fun isInTransitionOf(contenderId: String): Boolean {
+        return isOwner(contenderId) &&
+            isInTransition
     }
 
     /**
-     * 判断 是否当前存在领导者 ([.transitionAt] &gt;= [.getCurrentAt]).
+     * 判断 是否当前存在领导者 ([transitionAt] >= [currentAt]).
      *
      * @return boolean
      */

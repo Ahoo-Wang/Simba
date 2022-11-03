@@ -43,13 +43,16 @@ import java.util.concurrent.locks.LockSupport
  *
  * @author ahoo wang
  */
-class SimbaLocker(mutex: String, contendServiceFactory: MutexContendServiceFactory) : AbstractMutexContender(
-    mutex
-), Locker {
+class SimbaLocker(
+    mutex: String,
+    contendServiceFactory: MutexContendServiceFactory
+) : AbstractMutexContender(mutex), Locker {
 
     companion object {
         val OWNER: AtomicReferenceFieldUpdater<SimbaLocker, Thread> = AtomicReferenceFieldUpdater.newUpdater(
-            SimbaLocker::class.java, Thread::class.java, "owner"
+            SimbaLocker::class.java,
+            Thread::class.java,
+            "owner"
         )
     }
 
@@ -101,5 +104,4 @@ class SimbaLocker(mutex: String, contendServiceFactory: MutexContendServiceFacto
         super.onAcquired(mutexState)
         LockSupport.unpark(OWNER[this])
     }
-
 }

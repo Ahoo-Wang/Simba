@@ -12,7 +12,6 @@
  */
 package me.ahoo.simba.zookeeper
 
-import me.ahoo.simba.SimbaException
 import me.ahoo.simba.core.AbstractMutexContendService
 import me.ahoo.simba.core.MutexContender
 import me.ahoo.simba.core.MutexOwner
@@ -20,7 +19,6 @@ import org.apache.curator.framework.CuratorFramework
 import org.apache.curator.framework.recipes.leader.LeaderLatch
 import org.apache.curator.framework.recipes.leader.LeaderLatch.CloseMode
 import org.apache.curator.framework.recipes.leader.LeaderLatchListener
-import java.io.IOException
 import java.util.concurrent.Executor
 
 /**
@@ -45,22 +43,14 @@ class ZookeeperMutexContendService(
     }
 
     override fun startContend() {
-        try {
-            leaderLatch = LeaderLatch(curatorFramework, mutexPath, contenderId)
-            leaderLatch!!.addListener(this)
-            leaderLatch!!.start()
-        } catch (e: Exception) {
-            throw SimbaException(e)
-        }
+        leaderLatch = LeaderLatch(curatorFramework, mutexPath, contenderId)
+        leaderLatch!!.addListener(this)
+        leaderLatch!!.start()
     }
 
     override fun stopContend() {
-        try {
-            leaderLatch!!.close(CloseMode.NOTIFY_LEADER)
-            leaderLatch = null
-        } catch (e: IOException) {
-            throw SimbaException(e)
-        }
+        leaderLatch!!.close(CloseMode.NOTIFY_LEADER)
+        leaderLatch = null
     }
 
     override fun isLeader() {

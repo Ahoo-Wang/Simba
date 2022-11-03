@@ -11,8 +11,9 @@
  * limitations under the License.
  */
 
-dependencies{
+dependencies {
     api(project(":simba-core"))
     api("org.springframework.data:spring-data-redis")
+    testImplementation(project(":simba-test"))
     testImplementation("io.lettuce:lettuce-core")
 }

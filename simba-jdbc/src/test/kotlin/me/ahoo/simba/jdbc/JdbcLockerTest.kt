@@ -53,13 +53,9 @@ class JdbcLockerTest {
     fun test() {
         val mutex = "locker-test"
         jdbcMutexOwnerRepository.tryInitMutex(mutex)
-        try {
-            SimbaLocker(mutex, contendServiceFactory).use { locker ->
-                locker.acquire()
-                log.info("acquired")
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        SimbaLocker(mutex, contendServiceFactory).use { locker ->
+            locker.acquire()
+            log.info("acquired")
         }
     }
 
@@ -67,13 +63,9 @@ class JdbcLockerTest {
     fun testTimeout() {
         val mutex = "locker-test"
         jdbcMutexOwnerRepository.tryInitMutex(mutex)
-        try {
-            SimbaLocker(mutex, contendServiceFactory).use { locker ->
-                Assertions.assertThrows(TimeoutException::class.java) { locker.acquire(Duration.ofSeconds(0)) }
-                log.info("acquired")
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        SimbaLocker(mutex, contendServiceFactory).use { locker ->
+            Assertions.assertThrows(TimeoutException::class.java) { locker.acquire(Duration.ofSeconds(0)) }
+            log.info("acquired")
         }
     }
 }

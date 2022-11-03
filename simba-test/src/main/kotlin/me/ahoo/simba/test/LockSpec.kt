@@ -13,5 +13,4 @@
 
 package me.ahoo.simba.test
 
-abstract class LockSpec {
-}
+abstract class LockSpec

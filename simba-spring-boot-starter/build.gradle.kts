@@ -10,7 +10,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+plugins {
+    kotlin("plugin.spring") version "1.7.20"
+    kotlin("kapt")
+}
 java {
     registerFeature("springRedisSupport") {
         usingSourceSet(sourceSets[SourceSet.MAIN_SOURCE_SET_NAME])
@@ -27,6 +30,7 @@ java {
 }
 
 dependencies {
+    kapt(platform(project(":simba-dependencies")))
     api(project(":simba-core"))
 
     "springRedisSupportImplementation"(project(":simba-spring-redis"))
@@ -36,11 +40,12 @@ dependencies {
     "zookeeperSupportImplementation"(project(":simba-zookeeper"))
 
     api("org.springframework.boot:spring-boot-starter")
-    annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
-    annotationProcessor("org.springframework.boot:spring-boot-autoconfigure-processor")
+    kapt("org.springframework.boot:spring-boot-configuration-processor")
+    kapt("org.springframework.boot:spring-boot-autoconfigure-processor")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("mysql:mysql-connector-java")
     testImplementation("org.springframework.boot:spring-boot-starter-jdbc")
     testImplementation("org.apache.curator:curator-test")
+    testImplementation("io.lettuce:lettuce-core")
 }

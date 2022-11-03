@@ -10,29 +10,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.spring.boot.starter.zookeeper
 
-package me.ahoo.simba.spring.boot.starter.zookeeper;
-
-
-import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled;
-import me.ahoo.simba.spring.boot.starter.EnabledSuffix;
-
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
+import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled
+import me.ahoo.simba.spring.boot.starter.EnabledSuffix
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 
 /**
  * Conditional On Simba Zookeeper Enabled.
  *
  * @author ahoo wang
  */
-@Retention(RetentionPolicy.RUNTIME)
-@Target({ElementType.TYPE, ElementType.METHOD})
 @ConditionalOnSimbaEnabled
-@ConditionalOnProperty(value = ConditionalOnSimbaZookeeperEnabled.ENABLED_KEY, matchIfMissing = true, havingValue = "true")
-public @interface ConditionalOnSimbaZookeeperEnabled {
-    String ENABLED_KEY = ZookeeperProperties.PREFIX + EnabledSuffix.KEY;
+@ConditionalOnProperty(
+    value = [ConditionalOnSimbaZookeeperEnabled.ENABLED_KEY],
+    matchIfMissing = true,
+    havingValue = "true"
+)
+annotation class ConditionalOnSimbaZookeeperEnabled {
+    companion object {
+        const val ENABLED_KEY: String = ZookeeperProperties.PREFIX + EnabledSuffix.KEY
+    }
 }

@@ -12,8 +12,6 @@
  */
 package me.ahoo.simba.jdbc
 
-import com.google.common.base.Strings
-import lombok.extern.slf4j.Slf4j
 import me.ahoo.simba.core.AbstractMutexContendService
 import me.ahoo.simba.core.ContendPeriod
 import me.ahoo.simba.core.MutexContender
@@ -31,7 +29,6 @@ import java.util.concurrent.TimeUnit
  *
  * @author ahoo wang
  */
-@Slf4j
 class JdbcMutexContendService(
     mutexContender: MutexContender,
     handleExecutor: Executor,
@@ -50,10 +47,9 @@ class JdbcMutexContendService(
     @Volatile
     private var contendScheduledFuture: ScheduledFuture<*>? = null
 
-
     override fun startContend() {
         executorService =
-            ScheduledThreadPoolExecutor(1, defaultFactory(Strings.lenientFormat("JdbcSimba_%s_%s", mutex, contenderId)))
+            ScheduledThreadPoolExecutor(1, defaultFactory("JdbcSimba_${mutex}_$contenderId"))
         nextSchedule(initialDelay.toMillis())
     }
 

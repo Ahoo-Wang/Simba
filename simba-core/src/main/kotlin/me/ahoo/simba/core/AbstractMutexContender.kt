@@ -12,7 +12,6 @@
  */
 package me.ahoo.simba.core
 
-import lombok.extern.slf4j.Slf4j
 import org.slf4j.LoggerFactory
 
 /**
@@ -20,7 +19,6 @@ import org.slf4j.LoggerFactory
  *
  * @author ahoo wang
  */
-@Slf4j
 abstract class AbstractMutexContender(
     final override val mutex: String,
     final override val contenderId: String = ContenderIdGenerator.HOST.generate()

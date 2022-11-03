@@ -13,5 +13,4 @@
 
 package me.ahoo.simba.test
 
-class MutexContendServiceFactorySpec {
-}
+class MutexContendServiceFactorySpec

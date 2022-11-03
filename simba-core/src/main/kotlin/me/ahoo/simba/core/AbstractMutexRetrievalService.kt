@@ -12,7 +12,6 @@
  */
 package me.ahoo.simba.core
 
-import lombok.extern.slf4j.Slf4j
 import org.slf4j.LoggerFactory
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
@@ -22,7 +21,6 @@ import java.util.concurrent.Executor
  *
  * @author ahoo wang
  */
-@Slf4j
 abstract class AbstractMutexRetrievalService protected constructor(
     override val retriever: MutexRetriever,
     protected val handleExecutor: Executor

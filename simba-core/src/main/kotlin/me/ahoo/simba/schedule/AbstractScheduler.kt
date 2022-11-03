@@ -12,7 +12,6 @@
  */
 package me.ahoo.simba.schedule
 
-import lombok.extern.slf4j.Slf4j
 import me.ahoo.simba.core.AbstractMutexContender
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
@@ -28,7 +27,6 @@ import java.util.concurrent.TimeUnit
  *
  * @author ahoo wang
  */
-@Slf4j
 abstract class AbstractScheduler(
     val mutex: String,
     private val config: ScheduleConfig,
@@ -59,7 +57,8 @@ abstract class AbstractScheduler(
 
     inner class WorkContender(mutex: String) : AbstractMutexContender(mutex) {
         private val scheduledThreadPoolExecutor: ScheduledThreadPoolExecutor = ScheduledThreadPoolExecutor(
-            1, defaultFactory(
+            1,
+            defaultFactory(
                 worker
             )
         )

@@ -10,26 +10,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.spring.boot.starter
 
-package me.ahoo.simba.spring.boot.starter;
-
-import me.ahoo.simba.Simba;
-
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
+import me.ahoo.simba.Simba
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 
 /**
  * Conditional On Simba Enabled.
  *
  * @author ahoo wang
  */
-@Retention(RetentionPolicy.RUNTIME)
-@Target({ElementType.TYPE, ElementType.METHOD})
-@ConditionalOnProperty(value = ConditionalOnSimbaEnabled.ENABLED_KEY, matchIfMissing = true, havingValue = "true")
-public @interface ConditionalOnSimbaEnabled {
-    String ENABLED_KEY = Simba.SIMBA + EnabledSuffix.KEY;
+@ConditionalOnProperty(value = [ConditionalOnSimbaEnabled.ENABLED_KEY], matchIfMissing = true, havingValue = "true")
+annotation class ConditionalOnSimbaEnabled {
+    companion object {
+        const val ENABLED_KEY = Simba.SIMBA + EnabledSuffix.KEY
+    }
 }

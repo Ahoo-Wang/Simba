@@ -10,48 +10,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.spring.boot.starter.redis
 
-package me.ahoo.simba.spring.boot.starter.redis;
-
-import me.ahoo.simba.Simba;
-
-import org.springframework.boot.context.properties.ConfigurationProperties;
-
-import java.time.Duration;
+import me.ahoo.simba.Simba
+import org.springframework.boot.context.properties.ConfigurationProperties
+import org.springframework.boot.context.properties.ConstructorBinding
+import java.time.Duration
 
 /**
  * Redis Properties.
  *
  * @author ahoo wang
  */
+@ConstructorBinding
 @ConfigurationProperties(prefix = RedisProperties.PREFIX)
-public class RedisProperties {
-    public static final String PREFIX = Simba.SIMBA_PREFIX + "redis";
-    private boolean enabled = true;
-    private Duration ttl = Duration.ofSeconds(10);
-    private Duration transition = Duration.ofSeconds(6);
-    
-    public boolean isEnabled() {
-        return enabled;
-    }
-    
-    public void setEnabled(boolean enabled) {
-        this.enabled = enabled;
-    }
-    
-    public Duration getTtl() {
-        return ttl;
-    }
-    
-    public void setTtl(Duration ttl) {
-        this.ttl = ttl;
-    }
-    
-    public Duration getTransition() {
-        return transition;
-    }
-    
-    public void setTransition(Duration transition) {
-        this.transition = transition;
+data class RedisProperties(
+    val enabled: Boolean = true,
+    val ttl: Duration = Duration.ofSeconds(10),
+    val transition: Duration = Duration.ofSeconds(6)
+) {
+    companion object {
+        const val PREFIX = Simba.SIMBA_PREFIX + "redis"
     }
 }

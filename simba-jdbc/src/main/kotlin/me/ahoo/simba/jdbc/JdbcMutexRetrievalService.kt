@@ -12,7 +12,6 @@
  */
 package me.ahoo.simba.jdbc
 
-import lombok.extern.slf4j.Slf4j
 import me.ahoo.simba.core.AbstractMutexRetrievalService
 import me.ahoo.simba.core.ContendPeriod.Companion.nextContenderDelay
 import me.ahoo.simba.core.MutexRetriever
@@ -29,7 +28,6 @@ import java.util.concurrent.TimeUnit
  *
  * @author ahoo wang
  */
-@Slf4j
 class JdbcMutexRetrievalService(
     mutexRetriever: MutexRetriever,
     handleExecutor: Executor,
