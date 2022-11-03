@@ -12,7 +12,6 @@
  */
 package me.ahoo.simba.locker
 
-import com.google.common.base.Strings
 import me.ahoo.simba.core.AbstractMutexContender
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
