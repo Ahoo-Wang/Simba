@@ -12,8 +12,6 @@
  */
 package me.ahoo.simba.spring.redis
 
-import com.google.common.base.Strings
-import com.google.common.collect.Lists
 import me.ahoo.simba.Simba
 import me.ahoo.simba.core.AbstractMutexContendService
 import me.ahoo.simba.core.ContendPeriod
@@ -43,11 +41,11 @@ import java.util.concurrent.TimeUnit
 class SpringRedisMutexContendService(
     contender: MutexContender,
     handleExecutor: Executor,
-    ttl: Duration,
-    transition: Duration,
-    redisTemplate: StringRedisTemplate,
-    listenerContainer: RedisMessageListenerContainer,
-    scheduledExecutorService: ScheduledExecutorService
+    private val ttl: Duration,
+    private val transition: Duration,
+    private val redisTemplate: StringRedisTemplate,
+    private val listenerContainer: RedisMessageListenerContainer,
+    private val scheduledExecutorService: ScheduledExecutorService
 ) : AbstractMutexContendService(contender, handleExecutor) {
     companion object {
         private val log = LoggerFactory.getLogger(SpringRedisMutexContendService::class.java)
@@ -76,37 +74,28 @@ class SpringRedisMutexContendService(
      */
     private val contenderChannel: String
     private val listenTopics: List<ChannelTopic>
-    private val ttl: Duration
-    private val transition: Duration
     private val contendPeriod: ContendPeriod
-    private val redisTemplate: StringRedisTemplate
-    private val listenerContainer: RedisMessageListenerContainer
     private val mutexMessageListener: MutexMessageListener
-    private val scheduledExecutorService: ScheduledExecutorService
+
     private var scheduleFuture: ScheduledFuture<MutexOwner>? = null
 
     init {
-        keys = Lists.newArrayList("{" + contender.mutex + "}")
-        mutexChannel = Strings.lenientFormat("%s:{%s}", Simba.SIMBA, contender.mutex)
-        contenderChannel = Strings.lenientFormat("%s:%s", mutexChannel, contender.contenderId)
-        this.scheduledExecutorService = scheduledExecutorService
+        keys = listOf("{${contender.mutex}}")
+        mutexChannel = "${Simba.SIMBA}:${contender.mutex}"
+        contenderChannel = "$mutexChannel:${contender.contenderId}"
         listenTopics = listOf(ChannelTopic(mutexChannel), ChannelTopic(contenderChannel))
-        this.ttl = ttl
-        this.transition = transition
-        this.redisTemplate = redisTemplate
-        this.listenerContainer = listenerContainer
         contendPeriod = ContendPeriod(contenderId)
         mutexMessageListener = MutexMessageListener()
     }
 
     /**
-     * <pre>
+     *
      * 1. 开始订阅
-     * 1.1 本地订阅
-     * 1.2 远程订阅
+     *    1. 本地订阅
+     *    2. 远程订阅
      * 2. 尝试竞争
      * 3. 开始守护
-     </pre> *
+     *
      */
     override fun startContend() {
         startSubscribe()
