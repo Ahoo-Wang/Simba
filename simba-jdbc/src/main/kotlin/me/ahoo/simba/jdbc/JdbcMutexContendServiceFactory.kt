@@ -10,26 +10,36 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package me.ahoo.simba.zookeeper
+package me.ahoo.simba.jdbc
 
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexContender
-import org.apache.curator.framework.CuratorFramework
+import java.time.Duration
 import java.util.concurrent.Executor
 import java.util.concurrent.ForkJoinPool
 
 /**
- * Zookeeper Mutex Contend Service Factory.
+ * Jdbc Mutex Contend Service Factory.
  *
  * @author ahoo wang
  */
-class ZookeeperMutexContendServiceFactory(
-    private val handleExecutor: Executor,
-    private val curatorFramework: CuratorFramework
+class JdbcMutexContendServiceFactory(
+    private val mutexOwnerRepository: MutexOwnerRepository,
+    private val handleExecutor: Executor = ForkJoinPool.commonPool(),
+    private val initialDelay: Duration,
+    private val ttl: Duration,
+    private val transition: Duration
 ) : MutexContendServiceFactory {
 
     override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
-        return ZookeeperMutexContendService(mutexContender, handleExecutor, curatorFramework)
+        return JdbcMutexContendService(
+            mutexContender = mutexContender,
+            handleExecutor = handleExecutor,
+            mutexOwnerRepository = mutexOwnerRepository,
+            initialDelay = initialDelay,
+            ttl = ttl,
+            transition = transition
+        )
     }
 }

@@ -10,26 +10,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.util
 
-rootProject.name = "Simba"
+import java.lang.management.ManagementFactory
 
-include(":simba-bom")
-include(":simba-dependencies")
-include(":simba-core")
-include(":simba-jdbc")
-include(":simba-spring-redis")
-include(":simba-zookeeper")
-include(":simba-spring-boot-starter")
-include(":simba-test")
-include(":simba-example")
-
-buildscript{
-    repositories{
-        gradlePluginPortal()
+/**
+ * Systems tool.
+ *
+ * @author ahoo wang
+ */
+object ProcessId {
+    private val currentProcessName: String by lazy {
+        ManagementFactory.getRuntimeMXBean().name
     }
-    dependencies{
-        classpath("me.champeau.jmh:jmh-gradle-plugin:0.6.8")
-        classpath("io.github.gradle-nexus:publish-plugin:1.1.0")
+
+    @JvmStatic
+    val currentProcessId: Long by lazy {
+        val processName = currentProcessName
+        val processIdStr = processName.split("@".toRegex()).dropLastWhile { it.isEmpty() }.toTypedArray()[0]
+        processIdStr.toLong()
     }
 }
-

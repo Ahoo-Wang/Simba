@@ -12,10 +12,6 @@
  */
 
 java {
-    registerFeature("redisSupport") {
-        usingSourceSet(sourceSets[SourceSet.MAIN_SOURCE_SET_NAME])
-        capability(group.toString(), "redis-support", version.toString())
-    }
     registerFeature("springRedisSupport") {
         usingSourceSet(sourceSets[SourceSet.MAIN_SOURCE_SET_NAME])
         capability(group.toString(), "spring-redis-support", version.toString())
@@ -32,9 +28,6 @@ java {
 
 dependencies {
     api(project(":simba-core"))
-
-    "redisSupportImplementation"(project(":simba-redis"))
-    "redisSupportImplementation"("me.ahoo.cosky:cosky-core")
 
     "springRedisSupportImplementation"(project(":simba-spring-redis"))
 

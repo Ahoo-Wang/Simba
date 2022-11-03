@@ -10,26 +10,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.util
 
-rootProject.name = "Simba"
+import com.google.common.util.concurrent.ThreadFactoryBuilder
+import java.util.concurrent.ThreadFactory
 
-include(":simba-bom")
-include(":simba-dependencies")
-include(":simba-core")
-include(":simba-jdbc")
-include(":simba-spring-redis")
-include(":simba-zookeeper")
-include(":simba-spring-boot-starter")
-include(":simba-test")
-include(":simba-example")
-
-buildscript{
-    repositories{
-        gradlePluginPortal()
-    }
-    dependencies{
-        classpath("me.champeau.jmh:jmh-gradle-plugin:0.6.8")
-        classpath("io.github.gradle-nexus:publish-plugin:1.1.0")
+/**
+ * Threads tool.
+ *
+ * @author ahoo wang
+ */
+object Threads {
+    @JvmStatic
+    fun defaultFactory(domain: String): ThreadFactory {
+        val nameFormat = "$domain-%d"
+        return ThreadFactoryBuilder()
+            .setDaemon(false)
+            .setNameFormat(nameFormat)
+            .build()
     }
 }
-

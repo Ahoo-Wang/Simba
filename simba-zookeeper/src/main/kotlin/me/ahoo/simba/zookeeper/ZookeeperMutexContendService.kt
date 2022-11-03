@@ -10,70 +10,68 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.zookeeper
 
-package me.ahoo.simba.zookeeper;
-
-import static org.apache.curator.framework.recipes.leader.LeaderLatch.CloseMode.NOTIFY_LEADER;
-
-import me.ahoo.simba.SimbaException;
-import me.ahoo.simba.core.AbstractMutexContendService;
-import me.ahoo.simba.core.MutexContender;
-import me.ahoo.simba.core.MutexOwner;
-
-import org.apache.curator.framework.CuratorFramework;
-import org.apache.curator.framework.recipes.leader.LeaderLatch;
-import org.apache.curator.framework.recipes.leader.LeaderLatchListener;
-
-import java.io.IOException;
-import java.util.concurrent.Executor;
+import me.ahoo.simba.SimbaException
+import me.ahoo.simba.core.AbstractMutexContendService
+import me.ahoo.simba.core.MutexContender
+import me.ahoo.simba.core.MutexOwner
+import org.apache.curator.framework.CuratorFramework
+import org.apache.curator.framework.recipes.leader.LeaderLatch
+import org.apache.curator.framework.recipes.leader.LeaderLatch.CloseMode
+import org.apache.curator.framework.recipes.leader.LeaderLatchListener
+import java.io.IOException
+import java.util.concurrent.Executor
 
 /**
  * Zookeeper Mutex Contend Service.
  *
  * @author ahoo wang
  */
-public class ZookeeperMutexContendService extends AbstractMutexContendService implements LeaderLatchListener {
-    
-    public static final String RESOURCE_PREFIX = "/simba/";
-    
-    private final CuratorFramework curatorFramework;
-    private volatile LeaderLatch leaderLatch;
-    private final String mutexPath;
-    
-    public ZookeeperMutexContendService(MutexContender contender, Executor handleExecutor, CuratorFramework curatorFramework) {
-        super(contender, handleExecutor);
-        this.mutexPath = RESOURCE_PREFIX + contender.getMutex();
-        this.curatorFramework = curatorFramework;
+class ZookeeperMutexContendService(
+    contender: MutexContender,
+    handleExecutor: Executor,
+    curatorFramework: CuratorFramework
+) : AbstractMutexContendService(contender, handleExecutor), LeaderLatchListener {
+    private val curatorFramework: CuratorFramework
+
+    @Volatile
+    private var leaderLatch: LeaderLatch? = null
+    private val mutexPath: String
+
+    init {
+        mutexPath = RESOURCE_PREFIX + contender.mutex
+        this.curatorFramework = curatorFramework
     }
-    
-    @Override
-    protected void startContend() {
+
+    override fun startContend() {
         try {
-            this.leaderLatch = new LeaderLatch(curatorFramework, mutexPath, getContenderId());
-            this.leaderLatch.addListener(this);
-            this.leaderLatch.start();
-        } catch (Exception e) {
-            throw new SimbaException(e);
+            leaderLatch = LeaderLatch(curatorFramework, mutexPath, contenderId)
+            leaderLatch!!.addListener(this)
+            leaderLatch!!.start()
+        } catch (e: Exception) {
+            throw SimbaException(e)
         }
     }
-    
-    @Override
-    protected void stopContend() {
+
+    override fun stopContend() {
         try {
-            this.leaderLatch.close(NOTIFY_LEADER);
-            this.leaderLatch = null;
-        } catch (IOException e) {
-            throw new SimbaException(e);
+            leaderLatch!!.close(CloseMode.NOTIFY_LEADER)
+            leaderLatch = null
+        } catch (e: IOException) {
+            throw SimbaException(e)
         }
     }
-    
-    @Override
-    public void isLeader() {
-        notifyOwner(new MutexOwner(getContenderId()));
+
+    override fun isLeader() {
+        notifyOwner(MutexOwner(contenderId))
     }
-    
-    @Override
-    public void notLeader() {
-        notifyOwner(MutexOwner.NONE);
+
+    override fun notLeader() {
+        notifyOwner(MutexOwner.NONE)
+    }
+
+    companion object {
+        const val RESOURCE_PREFIX = "/simba/"
     }
 }

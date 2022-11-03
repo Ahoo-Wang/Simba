@@ -10,26 +10,35 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.locker
 
-rootProject.name = "Simba"
+import java.time.Duration
+import java.util.concurrent.TimeoutException
 
-include(":simba-bom")
-include(":simba-dependencies")
-include(":simba-core")
-include(":simba-jdbc")
-include(":simba-spring-redis")
-include(":simba-zookeeper")
-include(":simba-spring-boot-starter")
-include(":simba-test")
-include(":simba-example")
+/**
+ *
+ *
+ * Utility for safely acquiring a lock and releasing it using Java 7's
+ * try-with-resource feature.
+ *
+ *
+ *
+ *
+ * Canonical usage:
+ * `
+ * try ( Locker locker = new SimbaLocker(mutex, contendServiceFactory) )
+ * {
+ * locker.acquire(); //locker.acquire(timeout);
+ * // do work
+ * }
+` *
+ *
+ *
+ * @author ahoo wang
+ */
+interface Locker : AutoCloseable {
+    fun acquire()
 
-buildscript{
-    repositories{
-        gradlePluginPortal()
-    }
-    dependencies{
-        classpath("me.champeau.jmh:jmh-gradle-plugin:0.6.8")
-        classpath("io.github.gradle-nexus:publish-plugin:1.1.0")
-    }
+    @Throws(TimeoutException::class)
+    fun acquire(timeout: Duration)
 }
-

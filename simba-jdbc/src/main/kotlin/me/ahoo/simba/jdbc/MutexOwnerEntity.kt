@@ -10,26 +10,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.jdbc
 
-rootProject.name = "Simba"
+import me.ahoo.simba.core.MutexOwner
 
-include(":simba-bom")
-include(":simba-dependencies")
-include(":simba-core")
-include(":simba-jdbc")
-include(":simba-spring-redis")
-include(":simba-zookeeper")
-include(":simba-spring-boot-starter")
-include(":simba-test")
-include(":simba-example")
+/**
+ * 互斥体实体.
+ *
+ * @author ahoo wang
+ */
+class MutexOwnerEntity(val mutex: String, ownerId: String, acquiredAt: Long, ttlAt: Long, transitionAt: Long) :
+    MutexOwner(
+        ownerId, acquiredAt, ttlAt, transitionAt
+    ) {
 
-buildscript{
-    repositories{
-        gradlePluginPortal()
-    }
-    dependencies{
-        classpath("me.champeau.jmh:jmh-gradle-plugin:0.6.8")
-        classpath("io.github.gradle-nexus:publish-plugin:1.1.0")
-    }
+    /**
+     * 版本号，用于领导者并发争抢控制.
+     */
+    var version = 0
+
+    /**
+     * 当前Db时间戳 (统一使用Db时间作为统一时间，防止全局时间不一致).
+     * [java.util.concurrent.TimeUnit.MILLISECONDS]
+     */
+    var currentDbAt: Long = 0
+
 }
-

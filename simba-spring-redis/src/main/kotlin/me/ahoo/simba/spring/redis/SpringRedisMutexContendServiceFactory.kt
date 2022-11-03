@@ -10,60 +10,41 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.spring.redis
 
-package me.ahoo.simba.spring.redis;
-
-import me.ahoo.simba.core.MutexContendService;
-import me.ahoo.simba.core.MutexContendServiceFactory;
-import me.ahoo.simba.core.MutexContender;
-
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.listener.RedisMessageListenerContainer;
-
-import java.time.Duration;
-import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ScheduledExecutorService;
+import me.ahoo.simba.core.MutexContendService
+import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.core.MutexContender
+import org.springframework.data.redis.core.StringRedisTemplate
+import org.springframework.data.redis.listener.RedisMessageListenerContainer
+import java.time.Duration
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.ForkJoinPool
+import java.util.concurrent.ScheduledExecutorService
 
 /**
  * Spring Redis Mutex Contend Service Factory .
  *
  * @author ahoo wang
  */
-public class SpringRedisMutexContendServiceFactory implements MutexContendServiceFactory {
-    private final Duration ttl;
-    private final Duration transition;
-    private final StringRedisTemplate redisTemplate;
-    private final RedisMessageListenerContainer listenerContainer;
-    private final Executor handleExecutor;
-    private final ScheduledExecutorService scheduledExecutorService;
-    
-    public SpringRedisMutexContendServiceFactory(
-        Duration ttl,
-        Duration transition,
-        StringRedisTemplate redisTemplate,
-        RedisMessageListenerContainer listenerContainer) {
-        this(ttl, transition, redisTemplate, listenerContainer, ForkJoinPool.commonPool(), Executors.newScheduledThreadPool(1));
-    }
-    
-    public SpringRedisMutexContendServiceFactory(
-        Duration ttl,
-        Duration transition,
-        StringRedisTemplate redisTemplate,
-        RedisMessageListenerContainer listenerContainer,
-        Executor handleExecutor,
-        ScheduledExecutorService scheduledExecutorService) {
-        this.ttl = ttl;
-        this.transition = transition;
-        this.redisTemplate = redisTemplate;
-        this.listenerContainer = listenerContainer;
-        this.handleExecutor = handleExecutor;
-        this.scheduledExecutorService = scheduledExecutorService;
-    }
-    
-    @Override
-    public MutexContendService createMutexContendService(MutexContender mutexContender) {
-        return new SpringRedisMutexContendService(mutexContender, handleExecutor, ttl, transition, redisTemplate, listenerContainer, scheduledExecutorService);
+class SpringRedisMutexContendServiceFactory(
+    private val ttl: Duration,
+    private val transition: Duration,
+    private val redisTemplate: StringRedisTemplate,
+    private val listenerContainer: RedisMessageListenerContainer,
+    private val handleExecutor: Executor = ForkJoinPool.commonPool(),
+    private val scheduledExecutorService: ScheduledExecutorService = Executors.newScheduledThreadPool(1)
+) : MutexContendServiceFactory {
+    override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
+        return SpringRedisMutexContendService(
+            mutexContender,
+            handleExecutor,
+            ttl,
+            transition,
+            redisTemplate,
+            listenerContainer,
+            scheduledExecutorService
+        )
     }
 }

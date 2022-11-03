@@ -10,58 +10,38 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.spring.redis
 
-package me.ahoo.simba.spring.redis;
-
-import me.ahoo.simba.core.MutexOwner;
-
-import com.google.common.base.Strings;
-
-import javax.annotation.Nonnull;
+import me.ahoo.simba.core.MutexOwner
 
 /**
  * Acquire Result.
  *
  * @author ahoo wang
  */
-public class AcquireResult {
-    
-    public static final AcquireResult NONE = new AcquireResult(MutexOwner.NONE_OWNER_ID, 0L);
-    
-    private final String ownerId;
-    private final long transitionAt;
-    
-    public AcquireResult(String ownerId, long transitionAt) {
-        this.ownerId = ownerId;
-        this.transitionAt = transitionAt;
-    }
-    
-    public String getOwnerId() {
-        return ownerId;
-    }
-    
-    public long getTransitionAt() {
-        return transitionAt;
-    }
-    
-    /**
-     * build {@link AcquireResult} from resultStr.
-     *
-     * @param resultStr {ownerId}:{transitionAt}.
-     * @return AcquireResult
-     */
-    @Nonnull
-    public static AcquireResult of(String resultStr) {
-        if (OwnerEvent.DELIMITER.equals(resultStr)) {
-            return NONE;
+data class AcquireResult(val ownerId: String, val transitionAt: Long) {
+
+    companion object {
+        val NONE = AcquireResult(MutexOwner.NONE_OWNER_ID, 0L)
+
+        /**
+         * build [AcquireResult] from resultStr.
+         *
+         * @param resultStr {ownerId}:{transitionAt}.
+         * @return AcquireResult
+         */
+        fun of(resultStr: String): AcquireResult {
+            if (OwnerEvent.DELIMITER == resultStr) {
+                return NONE
+            }
+            val msgs: Array<String> =
+                resultStr.split(OwnerEvent.DELIMITER.toRegex()).dropLastWhile { it.isEmpty() }
+                    .toTypedArray()
+            check(msgs.size == 2) { "Incorrect resultStr format:[$resultStr]" }
+            val ownerId = msgs[0]
+            val keyTtl = msgs[1].toLong()
+            val transitionAt = System.currentTimeMillis() + keyTtl
+            return AcquireResult(ownerId, transitionAt)
         }
-        String[] msgs = resultStr.split(OwnerEvent.DELIMITER);
-        if (msgs.length != 2) {
-            throw new IllegalStateException(Strings.lenientFormat("Incorrect resultStr format:[%s]", resultStr));
-        }
-        String ownerId = msgs[0];
-        long keyTtl = Long.parseLong(msgs[1]);
-        long transitionAt = System.currentTimeMillis() + keyTtl;
-        return new AcquireResult(ownerId, transitionAt);
     }
 }

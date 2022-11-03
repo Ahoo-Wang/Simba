@@ -10,26 +10,33 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package me.ahoo.simba.zookeeper
+package me.ahoo.simba.core
 
-import me.ahoo.simba.core.MutexContendService
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.core.MutexContender
-import org.apache.curator.framework.CuratorFramework
+import lombok.extern.slf4j.Slf4j
 import java.util.concurrent.Executor
-import java.util.concurrent.ForkJoinPool
 
 /**
- * Zookeeper Mutex Contend Service Factory.
+ * Abstract Mutex Contend Service.
  *
  * @author ahoo wang
  */
-class ZookeeperMutexContendServiceFactory(
-    private val handleExecutor: Executor,
-    private val curatorFramework: CuratorFramework
-) : MutexContendServiceFactory {
+@Slf4j
+abstract class AbstractMutexContendService(
+    override val contender: MutexContender,
+    handleExecutor: Executor
+) : AbstractMutexRetrievalService(
+    contender, handleExecutor
+), MutexContendService {
 
-    override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
-        return ZookeeperMutexContendService(mutexContender, handleExecutor, curatorFramework)
+    override fun startRetrieval() {
+        resetOwner()
+        startContend()
     }
+
+    override fun stopRetrieval() {
+        stopContend()
+    }
+
+    protected abstract fun startContend()
+    protected abstract fun stopContend()
 }

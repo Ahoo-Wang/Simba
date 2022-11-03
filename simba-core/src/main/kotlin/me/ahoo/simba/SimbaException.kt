@@ -10,26 +10,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba
 
-rootProject.name = "Simba"
-
-include(":simba-bom")
-include(":simba-dependencies")
-include(":simba-core")
-include(":simba-jdbc")
-include(":simba-spring-redis")
-include(":simba-zookeeper")
-include(":simba-spring-boot-starter")
-include(":simba-test")
-include(":simba-example")
-
-buildscript{
-    repositories{
-        gradlePluginPortal()
-    }
-    dependencies{
-        classpath("me.champeau.jmh:jmh-gradle-plugin:0.6.8")
-        classpath("io.github.gradle-nexus:publish-plugin:1.1.0")
-    }
+/**
+ * Simba Root Exception.
+ *
+ * @author ahoo wang
+ */
+open class SimbaException : RuntimeException {
+    constructor()
+    constructor(message: String) : super(message)
+    constructor(message: String, cause: Throwable) : super(message, cause)
+    constructor(cause: Throwable) : super(cause)
+    constructor(message: String, cause: Throwable, enableSuppression: Boolean, writableStackTrace: Boolean) : super(
+        message,
+        cause,
+        enableSuppression,
+        writableStackTrace
+    )
 }
-

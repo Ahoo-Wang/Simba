@@ -10,25 +10,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package me.ahoo.simba.spring.redis
+package me.ahoo.simba.schedule
+
+import java.time.Duration
 
 /**
- * Owner Event.
+ * Schedule Config.
  *
  * @author ahoo wang
  */
-data class OwnerEvent(val event: String, val ownerId: String, val eventAt: Long = System.currentTimeMillis()) {
+data class ScheduleConfig(val strategy: Strategy, val initialDelay: Duration, val period: Duration) {
+
+    enum class Strategy {
+        FIXED_DELAY, FIXED_RATE
+    }
 
     companion object {
-        const val EVENT_RELEASED = "released"
-        const val EVENT_ACQUIRED = "acquired"
-        const val DELIMITER = "@@"
-        fun of(message: String): OwnerEvent {
-            val msgs = message.split(DELIMITER.toRegex()).dropLastWhile { it.isEmpty() }.toTypedArray()
-            check(msgs.size == 2) {
-                "Incorrect message format:[$message]"
-            }
-            return OwnerEvent(msgs[0], msgs[1])
+        @JvmStatic
+        fun rate(initialDelay: Duration, period: Duration): ScheduleConfig {
+            return ScheduleConfig(Strategy.FIXED_RATE, initialDelay, period)
+        }
+
+        @JvmStatic
+        fun delay(initialDelay: Duration, period: Duration): ScheduleConfig {
+            return ScheduleConfig(Strategy.FIXED_DELAY, initialDelay, period)
         }
     }
 }
