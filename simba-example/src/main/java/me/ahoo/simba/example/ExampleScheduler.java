@@ -36,7 +36,7 @@ import java.util.concurrent.TimeUnit;
 public class ExampleScheduler extends AbstractScheduler implements SmartLifecycle {
     
     public ExampleScheduler(MutexContendServiceFactory contendServiceFactory) {
-        super("example-scheduler", ScheduleConfig.ofDelay(Duration.ofSeconds(0), Duration.ofSeconds(10)), contendServiceFactory);
+        super("example-scheduler", ScheduleConfig.delay(Duration.ofSeconds(0), Duration.ofSeconds(10)), contendServiceFactory);
     }
     
     @Override

@@ -13,6 +13,7 @@
 
 dependencies {
     api(project(":simba-core"))
+    testImplementation(project(":simba-test"))
     testImplementation("com.zaxxer:HikariCP")
     testImplementation("mysql:mysql-connector-java")
 }

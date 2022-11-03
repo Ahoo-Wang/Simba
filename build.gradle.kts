@@ -11,9 +11,20 @@
  * limitations under the License.
  */
 
+import io.gitlab.arturbosch.detekt.DetektPlugin
+import io.gitlab.arturbosch.detekt.extensions.DetektExtension
+import io.gitlab.arturbosch.detekt.extensions.DetektExtension.Companion.DEFAULT_SRC_DIR_JAVA
+import io.gitlab.arturbosch.detekt.extensions.DetektExtension.Companion.DEFAULT_SRC_DIR_KOTLIN
+import org.jetbrains.dokka.gradle.DokkaPlugin
+import org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension
+import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformJvmPlugin
+
 plugins {
     id("io.github.gradle-nexus.publish-plugin")
-    `java-library`
+    id("io.gitlab.arturbosch.detekt").version("1.21.0")
+    kotlin("jvm") version "1.7.20"
+    id("org.jetbrains.dokka") version "1.7.20"
+    id("me.champeau.jmh")
     jacoco
 }
 
@@ -25,6 +36,7 @@ val exampleProjects = setOf(
     project(":simba-example")
 )
 
+val testProject = project(":simba-test")
 val publishProjects = subprojects - exampleProjects
 val libraryProjects = publishProjects - bomProjects
 
@@ -47,36 +59,39 @@ configure(bomProjects) {
 }
 
 configure(libraryProjects) {
-    apply<CheckstylePlugin>()
-    configure<CheckstyleExtension> {
-        toolVersion = "9.2.1"
+    apply<DetektPlugin>()
+    configure<DetektExtension> {
+        toolVersion = "1.21.0"
+        source = files(DEFAULT_SRC_DIR_JAVA, DEFAULT_SRC_DIR_KOTLIN)
+        config = files("${rootProject.rootDir}/config/detekt/detekt.yml")
+        buildUponDefaultConfig = true
+        autoCorrect = true
     }
-    apply<com.github.spotbugs.snom.SpotBugsPlugin>()
-    configure<com.github.spotbugs.snom.SpotBugsExtension> {
-        excludeFilter.set(file("${rootDir}/config/spotbugs/exclude.xml"))
-    }
+    apply<DokkaPlugin>()
     apply<JacocoPlugin>()
     apply<JavaLibraryPlugin>()
     configure<JavaPluginExtension> {
-        toolchain {
-            languageVersion.set(JavaLanguageVersion.of(8))
-        }
         withJavadocJar()
         withSourcesJar()
     }
-
+    apply<KotlinPlatformJvmPlugin>()
+    configure<KotlinJvmProjectExtension>() {
+        jvmToolchain {
+            languageVersion.set(JavaLanguageVersion.of(8))
+        }
+    }
+    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
+        kotlinOptions {
+            freeCompilerArgs = listOf("-Xjsr305=strict", "-Xjvm-default=all-compatibility")
+        }
+    }
     tasks.withType<Test> {
         useJUnitPlatform()
     }
 
     dependencies {
         api(platform(project(":simba-dependencies")))
-        annotationProcessor(platform(project(":simba-dependencies")))
-        testAnnotationProcessor(platform(project(":simba-dependencies")))
-        compileOnly("org.projectlombok:lombok")
-        annotationProcessor("org.projectlombok:lombok")
-        testCompileOnly("org.projectlombok:lombok")
-        testAnnotationProcessor("org.projectlombok:lombok")
+        detektPlugins(platform(project(":simba-dependencies")))
         implementation("com.google.guava:guava")
         implementation("org.slf4j:slf4j-api")
         testImplementation("ch.qos.logback:logback-classic")
@@ -84,7 +99,9 @@ configure(libraryProjects) {
         testImplementation("org.junit.jupiter:junit-jupiter-params")
         testImplementation("org.junit-pioneer:junit-pioneer")
         testImplementation("org.hamcrest:hamcrest")
+        testImplementation("io.mockk:mockk")
         testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine")
+        detektPlugins("io.gitlab.arturbosch.detekt:detekt-formatting")
     }
 }
 
@@ -145,7 +162,7 @@ configure(publishProjects) {
         }
     }
     configure<SigningExtension> {
-        val isInCI = null != System.getenv("CI");
+        val isInCI = null != System.getenv("CI")
         if (isInCI) {
             val signingKeyId = System.getenv("SIGNING_KEYID")
             val signingKey = System.getenv("SIGNING_SECRETKEY")
@@ -174,11 +191,14 @@ fun getPropertyOf(name: String) = project.properties[name]?.toString()
 tasks.register<JacocoReport>("codeCoverageReport") {
     executionData(fileTree(project.rootDir.absolutePath).include("**/build/jacoco/*.exec"))
     libraryProjects.forEach {
-        sourceSets(it.sourceSets.main.get())
+        dependsOn(it.tasks.test)
+        if (testProject != it) {
+            sourceSets(it.sourceSets.main.get())
+        }
     }
     reports {
         xml.required.set(true)
-        html.outputLocation.set(file("${buildDir}/reports/jacoco/report.xml"))
+        html.outputLocation.set(file("$buildDir/reports/jacoco/report.xml"))
         csv.required.set(false)
         html.required.set(true)
         html.outputLocation.set(layout.buildDirectory.dir("reports/jacoco/"))

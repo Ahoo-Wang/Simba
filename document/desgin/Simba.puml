@@ -1,0 +1,52 @@
+@startuml
+
+interface AutoCloseable
+
+interface Coordinator {
+    mutex:String
+   -currentState:MutexState
+   -currentOwner:Contender
+   -contenderQueue:Queue<Contender>
+    register(contender:Contender)
+    unregister(contender:Contender)
+    start()
+}
+
+interface MutexState {
+
+}
+
+AutoCloseable <|-- Coordinator
+
+interface Contender {
+    mutex:String
+    contenderId:String
+    onSignal(signal:Signal)
+}
+
+interface Signal{
+    contenderId:String
+    signalType:SignalType
+}
+
+enum SignalType{
+    ACQUIRED
+    RELEASED
+}
+
+Coordinator *-- Contender
+@enduml
+
+@startuml
+
+!theme plain
+top to bottom direction
+skinparam linetype ortho
+
+interface AutoCloseable << interface >>
+interface MutexContendService << interface >>
+interface MutexRetrievalService << interface >>
+
+MutexContendService    -[#008200,plain]-^  MutexRetrievalService
+MutexRetrievalService  -[#008200,plain]-^  AutoCloseable
+@enduml

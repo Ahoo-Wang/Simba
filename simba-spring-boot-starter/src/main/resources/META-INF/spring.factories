@@ -1,7 +1,0 @@
-# Auto Configure
-
-org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
-  me.ahoo.simba.spring.boot.starter.jdbc.SimbaJdbcAutoConfiguration,\
-  me.ahoo.simba.spring.boot.starter.redis.SimbaRedisAutoConfiguration,\
-  me.ahoo.simba.spring.boot.starter.redis.SimbaSpringRedisAutoConfiguration,\
-  me.ahoo.simba.spring.boot.starter.zookeeper.SimbaZookeeperAutoConfiguration
