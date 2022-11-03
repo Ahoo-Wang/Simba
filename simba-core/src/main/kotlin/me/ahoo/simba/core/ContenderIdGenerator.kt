@@ -27,6 +27,7 @@ interface ContenderIdGenerator {
     companion object {
         @JvmField
         val UUID = UUIDContenderIdGenerator
+
         @JvmField
         val HOST = HostContenderIdGenerator
     }

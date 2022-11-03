@@ -92,5 +92,4 @@ class SimbaLocker(
         super.onAcquired(mutexState)
         LockSupport.unpark(OWNER[this])
     }
-
 }

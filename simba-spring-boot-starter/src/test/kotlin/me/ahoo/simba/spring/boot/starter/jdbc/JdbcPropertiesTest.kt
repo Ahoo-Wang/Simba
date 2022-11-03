@@ -47,7 +47,6 @@ internal class JdbcPropertiesTest {
         assertThat(properties.initialDelay, equalTo(initialDelay))
     }
 
-
     @Test
     fun setTtl() {
         val ttl = Duration.ofSeconds(20)

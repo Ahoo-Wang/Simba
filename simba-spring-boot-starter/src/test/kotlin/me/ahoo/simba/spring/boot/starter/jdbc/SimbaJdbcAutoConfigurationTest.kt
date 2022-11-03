@@ -64,7 +64,6 @@ internal class SimbaJdbcAutoConfigurationTest {
             }
     }
 
-
     @Test
     fun contextLoadsWithDisable() {
         contextRunner
