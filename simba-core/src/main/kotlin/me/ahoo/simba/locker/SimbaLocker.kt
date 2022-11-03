@@ -24,23 +24,17 @@ import java.util.concurrent.locks.LockSupport
 
 /**
  *
- *
  * Utility for safely acquiring a lock and releasing it using Java 7's
  * try-with-resource feature.
  *
- *
- *
- *
  * Canonical usage:
- * `
+ * ``` java
  * try ( Locker locker = new SimbaLocker(mutex, contendServiceFactory) )
  * {
  * locker.acquire(); //locker.acquire(timeout);
  * // do work
  * }
-` *
- *
- *
+ *````
  * @author ahoo wang
  */
 class SimbaLocker(
@@ -87,12 +81,7 @@ class SimbaLocker(
             LockSupport.parkNanos(this, timeout.toNanos())
             if (!contendService.isOwner) {
                 throw TimeoutException(
-                    Strings.lenientFormat(
-                        "Could not acquire [%s]@mutex:[%s] within timeout of %sms",
-                        contenderId,
-                        mutex,
-                        timeout.toMillis()
-                    )
+                    "Could not acquire [$contenderId]@mutex:[$mutex] within timeout of %${timeout.toMillis()}ms"
                 )
             }
         } else {
@@ -104,4 +93,5 @@ class SimbaLocker(
         super.onAcquired(mutexState)
         LockSupport.unpark(OWNER[this])
     }
+
 }
