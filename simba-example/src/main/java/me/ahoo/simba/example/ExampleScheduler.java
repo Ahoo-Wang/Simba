@@ -55,4 +55,9 @@ public class ExampleScheduler extends AbstractScheduler implements SmartLifecycl
             log.info("do some work end!");
         }
     }
+    
+    @Override
+    public boolean isRunning() {
+        return getRunning();
+    }
 }
