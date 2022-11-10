@@ -30,10 +30,10 @@ import java.util.concurrent.locks.LockSupport
  * ``` java
  * try ( Locker locker = new SimbaLocker(mutex, contendServiceFactory) )
  * {
- * locker.acquire(); //locker.acquire(timeout);
- * // do work
+ *    locker.acquire(); //locker.acquire(timeout);
+ *    // do work
  * }
- *````
+ *```
  * @author ahoo wang
  */
 class SimbaLocker(

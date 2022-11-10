@@ -17,23 +17,17 @@ import java.util.concurrent.TimeoutException
 
 /**
  *
- *
  * Utility for safely acquiring a lock and releasing it using Java 7's
  * try-with-resource feature.
  *
- *
- *
- *
  * Canonical usage:
- * `
+ * ``` java
  * try ( Locker locker = new SimbaLocker(mutex, contendServiceFactory) )
  * {
- * locker.acquire(); //locker.acquire(timeout);
- * // do work
+ *    locker.acquire(); //locker.acquire(timeout);
+ *    // do work
  * }
-` *
- *
- *
+ *```
  * @author ahoo wang
  */
 interface Locker : AutoCloseable {

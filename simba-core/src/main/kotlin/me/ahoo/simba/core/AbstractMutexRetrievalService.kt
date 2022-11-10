@@ -30,7 +30,7 @@ abstract class AbstractMutexRetrievalService protected constructor(
     }
 
     @Volatile
-    override var isRunning = false
+    override var running = false
         protected set
 
     @Volatile
@@ -44,12 +44,12 @@ abstract class AbstractMutexRetrievalService protected constructor(
     @Synchronized
     override fun start() {
         if (log.isInfoEnabled) {
-            log.info("start - mutex:[{}] - running:[{}]", retriever.mutex, isRunning)
+            log.info("start - mutex:[{}] - running:[{}]", retriever.mutex, running)
         }
-        if (isRunning) {
+        if (running) {
             return
         }
-        isRunning = true
+        running = true
         startRetrieval()
     }
 
@@ -78,12 +78,12 @@ abstract class AbstractMutexRetrievalService protected constructor(
     @Synchronized
     override fun stop() {
         if (log.isInfoEnabled) {
-            log.info("stop - mutex:[{}] - running:[{}]", retriever.mutex, isRunning)
+            log.info("stop - mutex:[{}] - running:[{}]", retriever.mutex, running)
         }
-        if (!isRunning) {
+        if (!running) {
             return
         }
-        isRunning = false
+        running = false
         stopRetrieval()
     }
 

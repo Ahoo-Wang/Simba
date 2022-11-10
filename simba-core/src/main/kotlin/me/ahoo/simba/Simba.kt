@@ -19,5 +19,5 @@ package me.ahoo.simba
  */
 object Simba {
     const val SIMBA = "simba"
-    const val SIMBA_PREFIX = SIMBA + "."
+    const val SIMBA_PREFIX = "$SIMBA."
 }

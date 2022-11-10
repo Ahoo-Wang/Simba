@@ -52,8 +52,8 @@ abstract class AbstractScheduler(
         contendService.stop()
     }
 
-    val isRunning: Boolean
-        get() = contendService.isRunning
+    val running: Boolean
+        get() = contendService.running
 
     inner class WorkContender(mutex: String) : AbstractMutexContender(mutex) {
         private val scheduledThreadPoolExecutor: ScheduledThreadPoolExecutor = ScheduledThreadPoolExecutor(
