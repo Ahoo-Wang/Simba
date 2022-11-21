@@ -195,7 +195,9 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
                          * 没有竞争到领导权 && 当前不存在领导者 ==> 初始化时
                          */
                         if (log.isInfoEnabled) {
-                            log.info("acquireAndGetOwner - There is no competition for leadership && There is currently no leader [When initializing]. Retry!")
+                            log.info(
+                                "acquireAndGetOwner - There is no competition for leadership && There is currently no leader [When initializing]. Retry!"
+                            )
                         }
                         acquired = acquire(connection, mutex, contenderId, ttl, transition)
                         mutexOwner = ensureOwner(connection, mutex)
