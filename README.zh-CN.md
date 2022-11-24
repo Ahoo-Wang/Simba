@@ -17,7 +17,6 @@ Simba 旨在提供易用、灵活的分布式锁服务，支持多种存储后�
 > Kotlin DSL
 
 ``` kotlin
-    val simbaVersion = "0.3.2";
     implementation("me.ahoo.simba:simba-spring-boot-starter:${simbaVersion}")
 ```
 
@@ -33,7 +32,7 @@ Simba 旨在提供易用、灵活的分布式锁服务，支持多种存储后�
     <modelVersion>4.0.0</modelVersion>
     <artifactId>demo</artifactId>
     <properties>
-        <simba.version>0.3.2</simba.version>
+        <simba.version>simbaVersion</simba.version>
     </properties>
 
     <dependencies>
@@ -69,7 +68,6 @@ spring:
 > Kotlin DSL
 
 ``` kotlin
-    val simbaVersion = "0.3.2";
     implementation("me.ahoo.simba:simba-jdbc:${simbaVersion}")
 ```
 
@@ -90,7 +88,6 @@ create table simba_mutex
 > Kotlin DSL
 
 ``` kotlin
-    val simbaVersion = "0.3.2";
     implementation("me.ahoo.simba:simba-redis:${simbaVersion}")
 ```
 
@@ -99,7 +96,6 @@ create table simba_mutex
 > Kotlin DSL
 
 ``` kotlin
-    val simbaVersion = "0.3.2";
     implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
 ```
 
@@ -165,4 +161,4 @@ public class ExampleScheduler extends AbstractScheduler implements SmartLifecycl
 #### Use Cases
 
 - [Govern-EventBus](https://github.com/Ahoo-Wang/govern-eventbus/tree/master/eventbus-core/src/main/java/me/ahoo/eventbus/core/compensate)
-- [CoSky](https://github.com/Ahoo-Wang/CoSky/blob/main/cosky-rest-api/src/main/java/me/ahoo/cosky/rest/job/StatServiceScheduler.java)
+- [CoSky](https://github.com/Ahoo-Wang/CoSky/blob/main/cosky-rest-api/src/main/kotlin/me/ahoo/cosky/rest/stat/StatServiceScheduler.kt)

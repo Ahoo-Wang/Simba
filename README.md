@@ -17,7 +17,6 @@ Simba aims to provide easy-to-use and flexible distributed lock services and sup
 > Kotlin DSL
 
 ``` kotlin
-    val simbaVersion = "0.3.2";
     implementation("me.ahoo.simba:simba-spring-boot-starter:${simbaVersion}")
 ```
 
@@ -33,7 +32,7 @@ Simba aims to provide easy-to-use and flexible distributed lock services and sup
     <modelVersion>4.0.0</modelVersion>
     <artifactId>demo</artifactId>
     <properties>
-        <simba.version>0.3.2</simba.version>
+        <simba.version>simbaVersion</simba.version>
     </properties>
 
     <dependencies>
@@ -69,7 +68,6 @@ spring:
 > Kotlin DSL
 
 ``` kotlin
-    val simbaVersion = "0.3.2";
     implementation("me.ahoo.simba:simba-jdbc:${simbaVersion}")
 ```
 
@@ -90,7 +88,6 @@ create table simba_mutex
 > Kotlin DSL
 
 ``` kotlin
-    val simbaVersion = "0.3.2";
     implementation("me.ahoo.simba:simba-redis:${simbaVersion}")
 ```
 
@@ -99,7 +96,6 @@ create table simba_mutex
 > Kotlin DSL
 
 ``` kotlin
-    val simbaVersion = "0.3.2";
     implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
 ```
 
@@ -141,7 +137,7 @@ create table simba_mutex
 
 ### Scheduler
 
-```java
+```kotlin
 public class ExampleScheduler extends AbstractScheduler implements SmartLifecycle {
 
     public ExampleScheduler(MutexContendServiceFactory contendServiceFactory) {
@@ -165,4 +161,4 @@ public class ExampleScheduler extends AbstractScheduler implements SmartLifecycl
 #### Use Cases
 
 - [Govern-EventBus](https://github.com/Ahoo-Wang/govern-eventbus/tree/master/eventbus-core/src/main/java/me/ahoo/eventbus/core/compensate)
-- [CoSky](https://github.com/Ahoo-Wang/CoSky/blob/main/cosky-rest-api/src/main/java/me/ahoo/cosky/rest/job/StatServiceScheduler.java)
+- [CoSky](https://github.com/Ahoo-Wang/CoSky/blob/main/cosky-rest-api/src/main/kotlin/me/ahoo/cosky/rest/stat/StatServiceScheduler.kt)
