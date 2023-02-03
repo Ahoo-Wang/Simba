@@ -98,7 +98,6 @@ configure(libraryProjects) {
         testImplementation("ch.qos.logback:logback-classic")
         testImplementation("org.junit.jupiter:junit-jupiter-api")
         testImplementation("org.junit.jupiter:junit-jupiter-params")
-        testImplementation("org.junit-pioneer:junit-pioneer")
         testImplementation("org.hamcrest:hamcrest")
         testImplementation("io.mockk:mockk")
         testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine")

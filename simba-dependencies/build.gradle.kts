@@ -18,7 +18,6 @@ dependencies {
     constraints {
         api("com.google.guava:guava:30.0-jre")
         api("commons-io:commons-io:2.10.0")
-        api("org.junit-pioneer:junit-pioneer:1.9.1")
         api("org.hamcrest:hamcrest:2.2")
         api("io.mockk:mockk:1.13.4")
         api("org.openjdk.jmh:jmh-core:1.36")
