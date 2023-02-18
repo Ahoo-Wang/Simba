@@ -10,27 +10,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package me.ahoo.simba.util
 
-import java.lang.management.ManagementFactory
+plugins {
+    base
+    id("jacoco-report-aggregation")
+}
 
-/**
- * ProcessId.
- *
- * @author ahoo wang
- */
-object ProcessId {
-    private val currentProcessName: String by lazy {
-        ManagementFactory.getRuntimeMXBean().name
+@Suppress("UNCHECKED_CAST")
+val libraryProjects = rootProject.ext.get("libraryProjects") as Iterable<Project>
+
+dependencies {
+    libraryProjects.forEach {
+        jacocoAggregation(it)
     }
+}
 
-    @JvmStatic
-    val currentProcessId: Long by lazy {
-        val processName = currentProcessName
-        val processIdStr = processName
-            .split("@".toRegex())
-            .filter { it.isNotBlank() }
-            .toTypedArray()[0]
-        processIdStr.toLong()
+reporting {
+    reports {
+        val codeCoverageReport by creating(JacocoCoverageReport::class) {
+            testType.set(TestSuiteType.UNIT_TEST)
+        }
     }
+}
+
+tasks.check {
+    dependsOn(tasks.named<JacocoReport>("codeCoverageReport"))
 }

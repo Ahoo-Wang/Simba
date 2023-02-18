@@ -23,6 +23,8 @@ include(":simba-spring-boot-starter")
 include(":simba-test")
 include(":simba-example")
 
+include(":code-coverage-report")
+
 pluginManagement {
     plugins {
         id("io.gitlab.arturbosch.detekt") version "1.22.0" apply false
