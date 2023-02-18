@@ -15,7 +15,7 @@ package me.ahoo.simba.util
 import java.lang.management.ManagementFactory
 
 /**
- * Systems tool.
+ * ProcessId.
  *
  * @author ahoo wang
  */
@@ -27,7 +27,10 @@ object ProcessId {
     @JvmStatic
     val currentProcessId: Long by lazy {
         val processName = currentProcessName
-        val processIdStr = processName.split("@".toRegex()).dropLastWhile { it.isEmpty() }.toTypedArray()[0]
+        val processIdStr = processName
+            .split("@".toRegex())
+            .filter { it.isNotBlank() }
+            .toTypedArray()[0]
         processIdStr.toLong()
     }
 }

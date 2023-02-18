@@ -33,11 +33,8 @@ jobs:
       - name: Init Simba-Db
         run: mysql -vvv -h localhost -uroot -proot < simba-jdbc/src/init-script/init-simba-mysql.sql
 
-      - name: Check
-        run: gradle check
-
       - name: Build Code Coverage Report
-        run: gradle codeCoverageReport
+        run: gradle codeCoverageReport --stacktrace
 
       - name: Upload Code Coverage Report to Codecov
         uses: codecov/codecov-action@v3
@@ -48,5 +45,5 @@ jobs:
           fail_ci_if_error: true # optional (default = false)
           verbose: true # optional (default = false)
 #          directory: ./build/reports/jacoco/codeCoverageReport/
-          files: ./build/reports/jacoco/codeCoverageReport/codeCoverageReport.xml
+          files: ./code-coverage-report/build/reports/jacoco/codeCoverageReport/codeCoverageReport.xml
           path_to_write_report: ./coverage/codecov_report.txt
