@@ -70,7 +70,7 @@ class SpringRedisMutexContendService(
      * <pre>
      * 1. 当尝试竞争锁失败时，将自己加入等待队列
      * 2. 当持有者释放锁时，将选取等待队列中当竞争者发送释放消息
-     </pre> *
+    </pre> *
      */
     private val contenderChannel: String
     private val listenTopics: List<ChannelTopic>
@@ -144,34 +144,48 @@ class SpringRedisMutexContendService(
     }
 
     private fun guard(): MutexOwner {
-        val message = redisTemplate.execute(SCRIPT_GUARD, keys, contenderId, ttl.toMillis().toString())
-        if (log.isDebugEnabled) {
-            log.debug(
-                "guard - mutex:[{}] contenderId:[{}] - message:[{}].",
-                mutex,
-                contenderId,
-                message
-            )
+        try {
+            val message = redisTemplate.execute(SCRIPT_GUARD, keys, contenderId, ttl.toMillis().toString())
+            if (log.isDebugEnabled) {
+                log.debug(
+                    "guard - mutex:[{}] contenderId:[{}] - message:[{}].",
+                    mutex,
+                    contenderId,
+                    message
+                )
+            }
+            return notifyOwnerAndScheduleNext(message)
+        } catch (throwable: Throwable) {
+            if (log.isErrorEnabled) {
+                log.error("guard - mutex:[$mutex] contenderId:[$contenderId] Fail.", throwable)
+            }
+            throw throwable
         }
-        return notifyOwnerAndScheduleNext(message)
     }
 
     private fun acquire(): MutexOwner {
-        val message = redisTemplate.execute(
-            SCRIPT_ACQUIRE,
-            keys,
-            contenderId,
-            (ttl.toMillis() + transition.toMillis()).toString()
-        )
-        if (log.isDebugEnabled) {
-            log.debug(
-                "acquire - mutex:[{}] contenderId:[{}] - message:[{}].",
-                mutex,
+        try {
+            val message = redisTemplate.execute(
+                SCRIPT_ACQUIRE,
+                keys,
                 contenderId,
-                message
+                (ttl.toMillis() + transition.toMillis()).toString()
             )
+            if (log.isDebugEnabled) {
+                log.debug(
+                    "acquire - mutex:[{}] contenderId:[{}] - message:[{}].",
+                    mutex,
+                    contenderId,
+                    message
+                )
+            }
+            return notifyOwnerAndScheduleNext(message)
+        } catch (throwable: Throwable) {
+            if (log.isErrorEnabled) {
+                log.error("acquire - mutex:[$mutex] contenderId:[$contenderId] Fail.", throwable)
+            }
+            throw throwable
         }
-        return notifyOwnerAndScheduleNext(message)
     }
 
     private fun newMutexOwner(result: AcquireResult): MutexOwner {
