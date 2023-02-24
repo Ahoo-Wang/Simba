@@ -24,7 +24,6 @@ plugins {
     id("io.gitlab.arturbosch.detekt")
     kotlin("jvm")
     id("org.jetbrains.dokka")
-    id("me.champeau.jmh")
     jacoco
 }
 
