@@ -27,9 +27,10 @@ plugins {
     jacoco
 }
 
+val dependenciesProject = project(":simba-dependencies")
 val bomProjects = setOf(
     project(":simba-bom"),
-    project(":simba-dependencies")
+    dependenciesProject,
 )
 val exampleProjects = setOf(
     project(":simba-example")
@@ -91,8 +92,8 @@ configure(libraryProjects) {
     }
 
     dependencies {
-        api(platform(project(":simba-dependencies")))
-        detektPlugins(platform(project(":simba-dependencies")))
+        api(platform(dependenciesProject))
+        detektPlugins(platform(dependenciesProject))
         implementation("com.google.guava:guava")
         implementation("org.slf4j:slf4j-api")
         testImplementation("ch.qos.logback:logback-classic")
