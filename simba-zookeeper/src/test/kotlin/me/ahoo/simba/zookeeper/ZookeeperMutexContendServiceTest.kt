@@ -12,8 +12,7 @@
  */
 package me.ahoo.simba.zookeeper
 
-import me.ahoo.simba.core.MutexContendService
-import me.ahoo.simba.core.MutexContender
+import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.test.MutexContendServiceSpec
 import org.apache.curator.framework.CuratorFramework
 import org.apache.curator.framework.CuratorFrameworkFactory
@@ -32,7 +31,7 @@ import java.util.concurrent.ForkJoinPool
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 internal class ZookeeperMutexContendServiceTest : MutexContendServiceSpec() {
     lateinit var curatorFramework: CuratorFramework
-    lateinit var contendServiceFactory: ZookeeperMutexContendServiceFactory
+    override lateinit var mutexContendServiceFactory: MutexContendServiceFactory
     lateinit var testingServer: TestingServer
 
     @BeforeAll
@@ -41,7 +40,7 @@ internal class ZookeeperMutexContendServiceTest : MutexContendServiceSpec() {
         testingServer.start()
         curatorFramework = CuratorFrameworkFactory.newClient(testingServer.connectString, RetryNTimes(1, 10))
         curatorFramework.start()
-        contendServiceFactory = ZookeeperMutexContendServiceFactory(ForkJoinPool.commonPool(), curatorFramework)
+        mutexContendServiceFactory = ZookeeperMutexContendServiceFactory(ForkJoinPool.commonPool(), curatorFramework)
     }
 
     @AfterAll
@@ -52,9 +51,5 @@ internal class ZookeeperMutexContendServiceTest : MutexContendServiceSpec() {
         if (this::testingServer.isInitialized) {
             testingServer.stop()
         }
-    }
-
-    override fun createMutexContendService(contender: MutexContender): MutexContendService {
-        return contendServiceFactory.createMutexContendService(contender)
     }
 }

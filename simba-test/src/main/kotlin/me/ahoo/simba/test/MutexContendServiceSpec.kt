@@ -15,14 +15,18 @@ package me.ahoo.simba.test
 
 import me.ahoo.simba.core.AbstractMutexContender
 import me.ahoo.simba.core.MutexContendService
-import me.ahoo.simba.core.MutexContender
+import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexOwner
 import me.ahoo.simba.core.MutexState
+import me.ahoo.simba.schedule.AbstractScheduler
+import me.ahoo.simba.schedule.ScheduleConfig
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.equalTo
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
+import java.time.Duration
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -34,15 +38,18 @@ abstract class MutexContendServiceSpec {
         const val RESTART_MUTEX = "restart"
         const val GUARD_MUTEX = "guard"
         const val MULTI_CONTEND_MUTEX = "multiContend"
+        const val SCHEDULE_MUTEX = "schedule"
     }
 
-    abstract fun createMutexContendService(contender: MutexContender): MutexContendService
+    abstract val mutexContendServiceFactory: MutexContendServiceFactory
 
     @Test
     open fun start() {
         val acquiredFuture = CompletableFuture<MutexOwner>()
         val releasedFuture = CompletableFuture<MutexOwner>()
-        val contendService = createMutexContendService(object : AbstractMutexContender(START_MUTEX) {
+        val contendService = mutexContendServiceFactory.createMutexContendService(object : AbstractMutexContender(
+            START_MUTEX
+        ) {
             override fun onAcquired(mutexState: MutexState) {
                 log.info("onAcquired")
                 acquiredFuture.complete(mutexState.after)
@@ -67,7 +74,9 @@ abstract class MutexContendServiceSpec {
         val releasedFuture = CompletableFuture<MutexOwner>()
         val acquiredFuture2 = CompletableFuture<MutexOwner>()
         val releasedFuture2 = CompletableFuture<MutexOwner>()
-        val contendService = createMutexContendService(object : AbstractMutexContender(RESTART_MUTEX) {
+        val contendService = mutexContendServiceFactory.createMutexContendService(object : AbstractMutexContender(
+            RESTART_MUTEX
+        ) {
             override fun onAcquired(mutexState: MutexState) {
                 log.info("onAcquired")
                 if (!acquiredFuture.isDone) {
@@ -104,7 +113,9 @@ abstract class MutexContendServiceSpec {
     open fun guard() {
         val acquiredFuture = CompletableFuture<MutexOwner>()
         val releasedFuture = CompletableFuture<MutexOwner>()
-        val contendService = createMutexContendService(object : AbstractMutexContender(GUARD_MUTEX) {
+        val contendService = mutexContendServiceFactory.createMutexContendService(object : AbstractMutexContender(
+            GUARD_MUTEX
+        ) {
             override fun onAcquired(mutexState: MutexState) {
                 log.info("onAcquired")
                 acquiredFuture.complete(mutexState.after)
@@ -133,7 +144,9 @@ abstract class MutexContendServiceSpec {
         val contendServiceList: MutableList<MutexContendService> = ArrayList(10)
         for (i in 0..9) {
             val contendService =
-                createMutexContendService(object : AbstractMutexContender(MULTI_CONTEND_MUTEX) {
+                mutexContendServiceFactory.createMutexContendService(object : AbstractMutexContender(
+                    MULTI_CONTEND_MUTEX
+                ) {
                     override fun onAcquired(mutexState: MutexState) {
                         currentOwnerIdRef.set(mutexState.after.ownerId)
                         super.onAcquired(mutexState)
@@ -158,5 +171,28 @@ abstract class MutexContendServiceSpec {
         }
         val ownerCount = contendServiceList.count { it.contenderId == currentOwnerId }
         assertThat(ownerCount, equalTo(1))
+    }
+
+    @Test
+    fun schedule() {
+        val countDownLatch = CountDownLatch(1)
+        val config = ScheduleConfig.delay(Duration.ZERO, Duration.ofSeconds(1))
+        val worker = "Test Worker"
+        val testScheduler = object : AbstractScheduler(SCHEDULE_MUTEX, mutexContendServiceFactory) {
+            override val config: ScheduleConfig
+                get() = config
+            override val worker: String
+                get() = worker
+
+            override fun work() {
+                countDownLatch.countDown()
+            }
+        }
+        assertThat(testScheduler.running, equalTo(false))
+        testScheduler.start()
+        assertThat(testScheduler.running, equalTo(true))
+        assertThat(countDownLatch.await(5, TimeUnit.SECONDS), equalTo(true))
+        testScheduler.stop()
+        assertThat(testScheduler.running, equalTo(false))
     }
 }
