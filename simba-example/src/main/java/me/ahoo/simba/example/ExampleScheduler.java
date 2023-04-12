@@ -19,6 +19,7 @@ import me.ahoo.simba.schedule.ScheduleConfig;
 
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Service;
 
@@ -34,16 +35,16 @@ import java.util.concurrent.TimeUnit;
 @Service
 @Slf4j
 public class ExampleScheduler extends AbstractScheduler implements SmartLifecycle {
-    
+
     public ExampleScheduler(MutexContendServiceFactory contendServiceFactory) {
-        super("example-scheduler", ScheduleConfig.delay(Duration.ofSeconds(0), Duration.ofSeconds(10)), contendServiceFactory);
+        super("example-scheduler", contendServiceFactory);
     }
-    
+
     @Override
     protected String getWorker() {
         return "ExampleScheduler";
     }
-    
+
     @SneakyThrows
     @Override
     protected void work() {
@@ -55,9 +56,15 @@ public class ExampleScheduler extends AbstractScheduler implements SmartLifecycl
             log.info("do some work end!");
         }
     }
-    
+
     @Override
     public boolean isRunning() {
         return getRunning();
+    }
+
+    @NotNull
+    @Override
+    protected ScheduleConfig getConfig() {
+        return ScheduleConfig.delay(Duration.ofSeconds(0), Duration.ofSeconds(10));
     }
 }

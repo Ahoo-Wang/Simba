@@ -46,10 +46,10 @@ internal class ZookeeperMutexContendServiceTest : MutexContendServiceSpec() {
 
     @AfterAll
     fun destroy() {
-        if (curatorFramework != null) {
+        if (this::curatorFramework.isInitialized) {
             curatorFramework.close()
         }
-        if (testingServer != null) {
+        if (this::testingServer.isInitialized) {
             testingServer.stop()
         }
     }

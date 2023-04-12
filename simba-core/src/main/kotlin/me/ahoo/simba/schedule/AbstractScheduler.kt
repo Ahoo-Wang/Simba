@@ -29,7 +29,6 @@ import java.util.concurrent.TimeUnit
  */
 abstract class AbstractScheduler(
     val mutex: String,
-    private val config: ScheduleConfig,
     contendServiceFactory: MutexContendServiceFactory
 ) {
     companion object {
@@ -42,6 +41,7 @@ abstract class AbstractScheduler(
         contendService = contendServiceFactory.createMutexContendService(WorkContender(mutex))
     }
 
+    protected abstract val config: ScheduleConfig
     protected abstract val worker: String
     protected abstract fun work()
     fun start() {
@@ -68,19 +68,19 @@ abstract class AbstractScheduler(
 
         override fun onAcquired(mutexState: MutexState) {
             super.onAcquired(mutexState)
-            if (workFuture == null || workFuture!!.isCancelled || workFuture!!.isDone) {
+            if (workFuture == null || workFuture!!.isDone) {
                 val initialDelay = config.initialDelay.toMillis()
                 val period = config.period.toMillis()
                 workFuture = if (ScheduleConfig.Strategy.FIXED_RATE == config.strategy) {
                     scheduledThreadPoolExecutor.scheduleAtFixedRate(
-                        { safeWork() },
+                        this::safeWork,
                         initialDelay,
                         period,
                         TimeUnit.MILLISECONDS
                     )
                 } else {
                     scheduledThreadPoolExecutor.scheduleWithFixedDelay(
-                        { safeWork() },
+                        this::safeWork,
                         initialDelay,
                         period,
                         TimeUnit.MILLISECONDS
@@ -94,6 +94,7 @@ abstract class AbstractScheduler(
             workFuture?.cancel(true)
         }
 
+        @Suppress("TooGenericExceptionCaught")
         private fun safeWork() {
             try {
                 work()
