@@ -12,8 +12,7 @@
  */
 package me.ahoo.simba.spring.redis
 
-import me.ahoo.simba.core.MutexContendService
-import me.ahoo.simba.core.MutexContender
+import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.test.MutexContendServiceSpec
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll
@@ -35,7 +34,7 @@ import java.util.concurrent.ForkJoinPool
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 internal class SpringRedisMutexContendServiceTest : MutexContendServiceSpec() {
     lateinit var lettuceConnectionFactory: LettuceConnectionFactory
-    lateinit var contendServiceFactory: SpringRedisMutexContendServiceFactory
+    override lateinit var mutexContendServiceFactory: MutexContendServiceFactory
     lateinit var listenerContainer: RedisMessageListenerContainer
 
     @BeforeAll
@@ -48,7 +47,7 @@ internal class SpringRedisMutexContendServiceTest : MutexContendServiceSpec() {
         listenerContainer.setConnectionFactory(lettuceConnectionFactory)
         listenerContainer.afterPropertiesSet()
         listenerContainer.start()
-        contendServiceFactory = SpringRedisMutexContendServiceFactory(
+        mutexContendServiceFactory = SpringRedisMutexContendServiceFactory(
             ttl = Duration.ofSeconds(2),
             transition = Duration.ofSeconds(1),
             redisTemplate = stringRedisTemplate,
@@ -60,15 +59,12 @@ internal class SpringRedisMutexContendServiceTest : MutexContendServiceSpec() {
 
     @AfterAll
     fun destroy() {
-        if (lettuceConnectionFactory != null) {
+        if (this::lettuceConnectionFactory.isInitialized) {
             lettuceConnectionFactory.destroy()
         }
-        if (listenerContainer != null) {
+        if (this::listenerContainer.isInitialized) {
             listenerContainer.stop()
         }
     }
 
-    override fun createMutexContendService(contender: MutexContender): MutexContendService {
-        return contendServiceFactory.createMutexContendService(contender)
-    }
 }

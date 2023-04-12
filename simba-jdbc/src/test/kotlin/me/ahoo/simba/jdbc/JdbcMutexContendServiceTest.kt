@@ -14,6 +14,7 @@ package me.ahoo.simba.jdbc
 
 import com.zaxxer.hikari.HikariDataSource
 import me.ahoo.simba.core.MutexContendService
+import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexContender
 import me.ahoo.simba.test.MutexContendServiceSpec
 import org.junit.jupiter.api.BeforeAll
@@ -27,8 +28,7 @@ import java.time.Duration
 internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
 
     private lateinit var jdbcMutexOwnerRepository: JdbcMutexOwnerRepository
-    private lateinit var contendServiceFactory: JdbcMutexContendServiceFactory
-
+    override lateinit var  mutexContendServiceFactory: MutexContendServiceFactory
     @BeforeAll
     fun setup() {
         val hikariDataSource = HikariDataSource()
@@ -36,7 +36,7 @@ internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
         hikariDataSource.username = "root"
         hikariDataSource.password = "root"
         jdbcMutexOwnerRepository = JdbcMutexOwnerRepository(hikariDataSource)
-        contendServiceFactory = JdbcMutexContendServiceFactory(
+        mutexContendServiceFactory = JdbcMutexContendServiceFactory(
             mutexOwnerRepository = jdbcMutexOwnerRepository,
             initialDelay = Duration.ofSeconds(2),
             ttl = Duration.ofSeconds(2),
@@ -47,9 +47,7 @@ internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
         jdbcMutexOwnerRepository.tryInitMutex(RESTART_MUTEX)
         jdbcMutexOwnerRepository.tryInitMutex(GUARD_MUTEX)
         jdbcMutexOwnerRepository.tryInitMutex(MULTI_CONTEND_MUTEX)
+        jdbcMutexOwnerRepository.tryInitMutex(SCHEDULE_MUTEX)
     }
 
-    override fun createMutexContendService(contender: MutexContender): MutexContendService {
-        return contendServiceFactory.createMutexContendService(contender)
-    }
 }
