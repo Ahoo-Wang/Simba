@@ -17,7 +17,7 @@ dependencies {
     api(platform("org.testcontainers:testcontainers-bom:1.18.0"))
     constraints {
         api("com.google.guava:guava:31.1-jre")
-        api("commons-io:commons-io:2.11.0")
+        api("commons-io:commons-io:2.12.0")
         api("org.hamcrest:hamcrest:2.2")
         api("io.mockk:mockk:1.13.5")
         api("io.gitlab.arturbosch.detekt:detekt-formatting:1.22.0")
