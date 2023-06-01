@@ -14,7 +14,7 @@
 dependencies {
     api(platform("org.springframework.boot:spring-boot-dependencies:2.7.12"))
     api(platform("org.springframework.cloud:spring-cloud-dependencies:2021.0.7"))
-    api(platform("org.testcontainers:testcontainers-bom:1.18.1"))
+    api(platform("org.testcontainers:testcontainers-bom:1.18.3"))
     constraints {
         api("com.google.guava:guava:32.0.0-jre")
         api("commons-io:commons-io:2.12.0")
