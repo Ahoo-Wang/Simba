@@ -14,7 +14,6 @@ package me.ahoo.simba.spring.boot.starter.redis
 
 import me.ahoo.simba.Simba
 import org.springframework.boot.context.properties.ConfigurationProperties
-import org.springframework.boot.context.properties.ConstructorBinding
 import java.time.Duration
 
 /**
@@ -22,7 +21,6 @@ import java.time.Duration
  *
  * @author ahoo wang
  */
-@ConstructorBinding
 @ConfigurationProperties(prefix = RedisProperties.PREFIX)
 data class RedisProperties(
     val enabled: Boolean = true,

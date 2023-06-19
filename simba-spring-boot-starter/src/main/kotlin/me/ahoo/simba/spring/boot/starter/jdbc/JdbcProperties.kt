@@ -14,7 +14,6 @@ package me.ahoo.simba.spring.boot.starter.jdbc
 
 import me.ahoo.simba.Simba
 import org.springframework.boot.context.properties.ConfigurationProperties
-import org.springframework.boot.context.properties.ConstructorBinding
 import java.time.Duration
 
 /**
@@ -22,7 +21,6 @@ import java.time.Duration
  *
  * @author ahoo wang
  */
-@ConstructorBinding
 @ConfigurationProperties(prefix = JdbcProperties.PREFIX)
 data class JdbcProperties(
     val enabled: Boolean = true,
