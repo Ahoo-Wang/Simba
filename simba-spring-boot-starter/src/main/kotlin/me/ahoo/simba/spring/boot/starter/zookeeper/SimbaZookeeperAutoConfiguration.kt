@@ -33,7 +33,7 @@ import java.util.concurrent.ForkJoinPool
     ZookeeperMutexContendServiceFactory::class
 )
 @EnableConfigurationProperties(ZookeeperProperties::class)
-class SimbaZookeeperAutoConfiguration(private val zookeeperProperties: ZookeeperProperties) {
+class SimbaZookeeperAutoConfiguration {
     @Bean
     @ConditionalOnBean(CuratorFramework::class)
     @ConditionalOnMissingBean

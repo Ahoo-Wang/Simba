@@ -14,14 +14,12 @@ package me.ahoo.simba.spring.boot.starter.zookeeper
 
 import me.ahoo.simba.Simba
 import org.springframework.boot.context.properties.ConfigurationProperties
-import org.springframework.boot.context.properties.ConstructorBinding
 
 /**
  * Zookeeper Properties.
  *
  * @author ahoo wang
  */
-@ConstructorBinding
 @ConfigurationProperties(prefix = ZookeeperProperties.PREFIX)
 data class ZookeeperProperties(val enabled: Boolean = true) {
 
