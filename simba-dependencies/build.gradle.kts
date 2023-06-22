@@ -12,7 +12,7 @@
  */
 
 dependencies {
-    api(platform("org.springframework.boot:spring-boot-dependencies:3.1.0"))
+    api(platform("org.springframework.boot:spring-boot-dependencies:3.1.1"))
     api(platform("org.springframework.cloud:spring-cloud-dependencies:2022.0.3"))
     api(platform("org.testcontainers:testcontainers-bom:1.18.3"))
     constraints {
