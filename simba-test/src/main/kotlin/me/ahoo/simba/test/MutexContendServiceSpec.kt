@@ -142,7 +142,7 @@ abstract class MutexContendServiceSpec {
         val count = AtomicInteger(0)
         val currentOwnerIdRef = AtomicReference<String>()
         val contendServiceList: MutableList<MutexContendService> = ArrayList(10)
-        for (i in 0..9) {
+        repeat(10) {
             val contendService =
                 mutexContendServiceFactory.createMutexContendService(object : AbstractMutexContender(
                     MULTI_CONTEND_MUTEX

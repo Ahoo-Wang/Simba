@@ -20,13 +20,12 @@ import org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension
 import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformJvmPlugin
 
 plugins {
-    id("io.github.gradle-nexus.publish-plugin")
-    id("io.gitlab.arturbosch.detekt")
-    kotlin("jvm")
-    id("org.jetbrains.dokka")
+    alias(libs.plugins.publishPlugin)
+    alias(libs.plugins.detekt)
+    alias(libs.plugins.kotlin)
+    alias(libs.plugins.dokka)
     jacoco
 }
-
 val dependenciesProject = project(":simba-dependencies")
 val bomProjects = setOf(
     project(":simba-bom"),
@@ -41,9 +40,7 @@ val codeCoverageReportProject = project(":code-coverage-report")
 val publishProjects = subprojects - exampleProjects - codeCoverageReportProject
 val libraryProjects = publishProjects - bomProjects
 
-ext {
-    set("libraryProjects", libraryProjects)
-}
+ext.set("libraryProjects", libraryProjects)
 
 allprojects {
     repositories {
@@ -62,8 +59,7 @@ configure(bomProjects) {
 configure(libraryProjects) {
     apply<DetektPlugin>()
     configure<DetektExtension> {
-        source = files(DEFAULT_SRC_DIR_JAVA, DEFAULT_SRC_DIR_KOTLIN)
-        config = files("${rootProject.rootDir}/config/detekt/detekt.yml")
+        config.setFrom(files("${rootProject.rootDir}/config/detekt/detekt.yml"))
         buildUponDefaultConfig = true
         autoCorrect = true
     }
@@ -181,7 +177,7 @@ configure(publishProjects) {
 }
 
 nexusPublishing {
-    repositories {
+    this.repositories {
         sonatype {
             username.set(System.getenv("MAVEN_USERNAME"))
             password.set(System.getenv("MAVEN_PASSWORD"))

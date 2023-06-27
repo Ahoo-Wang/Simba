@@ -12,14 +12,14 @@
  */
 
 dependencies {
-    api(platform("org.springframework.boot:spring-boot-dependencies:3.1.1"))
-    api(platform("org.springframework.cloud:spring-cloud-dependencies:2022.0.3"))
-    api(platform("org.testcontainers:testcontainers-bom:1.18.3"))
+    api(platform(libs.springBootDependencies))
+    api(platform(libs.springCloudDependencies))
+    api(platform(libs.testcontainersBom))
     constraints {
-        api("com.google.guava:guava:32.0.1-jre")
-        api("commons-io:commons-io:2.13.0")
-        api("org.hamcrest:hamcrest:2.2")
-        api("io.mockk:mockk:1.13.5")
-        api("io.gitlab.arturbosch.detekt:detekt-formatting:1.23.0")
+        api(libs.guava)
+        api(libs.commonsIo)
+        api(libs.hamcrest)
+        api(libs.mockk)
+        api(libs.detektFormatting)
     }
 }
