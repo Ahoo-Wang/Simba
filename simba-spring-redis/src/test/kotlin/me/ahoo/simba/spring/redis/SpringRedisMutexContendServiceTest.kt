@@ -66,5 +66,4 @@ internal class SpringRedisMutexContendServiceTest : MutexContendServiceSpec() {
             listenerContainer.stop()
         }
     }
-
 }

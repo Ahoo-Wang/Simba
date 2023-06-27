@@ -13,9 +13,7 @@
 package me.ahoo.simba.jdbc
 
 import com.zaxxer.hikari.HikariDataSource
-import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.core.MutexContender
 import me.ahoo.simba.test.MutexContendServiceSpec
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.TestInstance
@@ -28,7 +26,8 @@ import java.time.Duration
 internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
 
     private lateinit var jdbcMutexOwnerRepository: JdbcMutexOwnerRepository
-    override lateinit var  mutexContendServiceFactory: MutexContendServiceFactory
+    override lateinit var mutexContendServiceFactory: MutexContendServiceFactory
+
     @BeforeAll
     fun setup() {
         val hikariDataSource = HikariDataSource()
@@ -49,5 +48,4 @@ internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
         jdbcMutexOwnerRepository.tryInitMutex(MULTI_CONTEND_MUTEX)
         jdbcMutexOwnerRepository.tryInitMutex(SCHEDULE_MUTEX)
     }
-
 }

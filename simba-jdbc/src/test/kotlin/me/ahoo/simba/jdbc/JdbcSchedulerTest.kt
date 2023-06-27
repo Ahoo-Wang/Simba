@@ -54,7 +54,8 @@ class JdbcSchedulerTest {
     fun start() {
         val countDownLatch = CountDownLatch(0)
         val scheduler = object : AbstractScheduler(
-            "start", contendServiceFactory
+            "start",
+            contendServiceFactory
         ) {
             override val config: ScheduleConfig
                 get() = ScheduleConfig.delay(
