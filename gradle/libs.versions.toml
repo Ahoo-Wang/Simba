@@ -3,7 +3,7 @@
 springBoot = "3.1.1"
 springCloud = "2022.0.3"
 testcontainers = "1.18.3"
-guava = "32.0.1-jre"
+guava = "32.1.0-jre"
 commonsIo = "2.13.0"
 hamcrest = "2.2"
 mockk = "1.13.5"
