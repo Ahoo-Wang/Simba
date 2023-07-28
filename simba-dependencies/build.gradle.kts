@@ -14,6 +14,7 @@
 dependencies {
     api(platform(libs.springBootDependencies))
     api(platform(libs.springCloudDependencies))
+    api(platform(libs.cosidBom))
     api(platform(libs.testcontainersBom))
     constraints {
         api(libs.guava)
