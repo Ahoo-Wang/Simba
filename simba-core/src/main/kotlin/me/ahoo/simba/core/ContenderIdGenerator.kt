@@ -12,8 +12,8 @@
  */
 package me.ahoo.simba.core
 
-import me.ahoo.simba.util.ProcessId.currentProcessId
-import java.net.InetAddress
+import me.ahoo.cosid.machine.LocalHostAddressSupplier
+import me.ahoo.cosid.util.ProcessId
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -42,10 +42,10 @@ object UUIDContenderIdGenerator : ContenderIdGenerator {
 object HostContenderIdGenerator : ContenderIdGenerator {
     private val counter = AtomicLong()
     private val host: String by lazy {
-        InetAddress.getLocalHost().hostAddress
+        LocalHostAddressSupplier.INSTANCE.hostAddress
     }
 
     override fun generate(): String {
-        return "${counter.getAndIncrement()}:$currentProcessId@$host"
+        return "${counter.getAndIncrement()}:${ProcessId.CURRENT.processId}@$host"
     }
 }
