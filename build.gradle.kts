@@ -91,7 +91,9 @@ configure(libraryProjects) {
         // fix logging missing code for JacocoPlugin
         jvmArgs = listOf("-Dlogback.configurationFile=${rootProject.rootDir}/config/logback.xml")
     }
-
+    tasks.withType<JavaCompile> {
+        options.compilerArgs.addAll(listOf("-parameters"))
+    }
     dependencies {
         api(platform(dependenciesProject))
         detektPlugins(platform(dependenciesProject))
