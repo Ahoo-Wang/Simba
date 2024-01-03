@@ -2,7 +2,7 @@
 # libraries
 springBoot = "3.2.1"
 springCloud = "2023.0.0"
-cosid = "2.6.2"
+cosid = "2.6.4"
 testcontainers = "1.19.3"
 guava = "32.1.3-jre"
 commonsIo = "2.15.1"
