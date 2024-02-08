@@ -3,7 +3,7 @@
 springBoot = "3.2.2"
 springCloud = "2023.0.0"
 cosid = "2.6.5"
-testcontainers = "1.19.4"
+testcontainers = "1.19.5"
 guava = "32.1.3-jre"
 commonsIo = "2.15.1"
 hamcrest = "2.2"
