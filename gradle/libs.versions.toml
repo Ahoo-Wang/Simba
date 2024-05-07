@@ -12,7 +12,7 @@ detektFormatting = "1.23.6"
 # plugins
 detekt = "1.23.6"
 dokka = "1.9.20"
-kotlin = "1.9.23"
+kotlin = "1.9.24"
 publishPlugin = "2.0.0"
 
 [libraries]
