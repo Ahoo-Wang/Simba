@@ -7,7 +7,7 @@ testcontainers = "1.20.4"
 guava = "33.4.0-jre"
 commonsIo = "2.18.0"
 hamcrest = "3.0"
-mockk = "1.13.13"
+mockk = "1.13.14"
 detektFormatting = "1.23.7"
 # plugins
 detekt = "1.23.7"
