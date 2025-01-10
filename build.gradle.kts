@@ -18,7 +18,7 @@ import org.jetbrains.dokka.gradle.DokkaPlugin
 import org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension
 
 plugins {
-    alias(libs.plugins.publish.plugin)
+    alias(libs.plugins.publish)
     alias(libs.plugins.detekt)
     alias(libs.plugins.kotlin)
     alias(libs.plugins.dokka)
