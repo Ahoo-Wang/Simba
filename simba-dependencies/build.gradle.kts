@@ -12,15 +12,15 @@
  */
 
 dependencies {
-    api(platform(libs.springBootDependencies))
-    api(platform(libs.springCloudDependencies))
-    api(platform(libs.cosidBom))
-    api(platform(libs.testcontainersBom))
+    api(platform(libs.spring.boot.dependencies))
+    api(platform(libs.spring.cloud.dependencies))
+    api(platform(libs.cosid.bom))
+    api(platform(libs.testcontainers.bom))
     constraints {
         api(libs.guava)
-        api(libs.commonsIo)
+        api(libs.commons.io)
         api(libs.hamcrest)
         api(libs.mockk)
-        api(libs.detektFormatting)
+        api(libs.detekt.formatting)
     }
 }
