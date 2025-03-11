@@ -77,7 +77,11 @@ configure(libraryProjects) {
     tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         compilerOptions {
             freeCompilerArgs = listOf("-Xjsr305=strict", "-Xjvm-default=all-compatibility")
+            javaParameters = true
         }
+    }
+    tasks.withType<JavaCompile> {
+        options.compilerArgs.addAll(listOf("-parameters"))
     }
     tasks.withType<Test> {
         useJUnitPlatform()
@@ -86,9 +90,6 @@ configure(libraryProjects) {
         }
         // fix logging missing code for JacocoPlugin
         jvmArgs = listOf("-Dlogback.configurationFile=${rootProject.rootDir}/config/logback.xml")
-    }
-    tasks.withType<JavaCompile> {
-        options.compilerArgs.addAll(listOf("-parameters"))
     }
     dependencies {
         api(platform(dependenciesProject))
