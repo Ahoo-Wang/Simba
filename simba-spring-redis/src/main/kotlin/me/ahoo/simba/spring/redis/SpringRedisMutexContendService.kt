@@ -114,6 +114,14 @@ class SpringRedisMutexContendService(
         }
         scheduleFuture = scheduledExecutorService.schedule<MutexOwner>({
             if (!status.isActive) {
+                if (log.isWarnEnabled) {
+                    log.warn(
+                        "nextSchedule - mutex:[{}] contender_id:[{}] is not active[{}].",
+                        mutex,
+                        contenderId,
+                        status
+                    )
+                }
                 return@schedule MutexOwner.NONE
             }
             if (isOwner) {
@@ -244,7 +252,7 @@ class SpringRedisMutexContendService(
             if (!status.isActive) {
                 if (log.isWarnEnabled) {
                     log.warn(
-                        "onMessage - ignore - mutex:[{}] contender_id:[{}] status:[{}]",
+                        "onMessage - ignore - mutex:[{}] contender_id:[{}] is not active[{}].",
                         mutex,
                         contenderId,
                         status
