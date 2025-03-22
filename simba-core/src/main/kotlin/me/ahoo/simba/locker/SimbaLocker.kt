@@ -45,19 +45,15 @@ class SimbaLocker(
         val OWNER: AtomicReferenceFieldUpdater<SimbaLocker, Thread> = AtomicReferenceFieldUpdater.newUpdater(
             SimbaLocker::class.java,
             Thread::class.java,
-            "owner"
+            SimbaLocker::owner.name
         )
     }
 
-    private val contendService: MutexContendService
+    private val contendService: MutexContendService = contendServiceFactory.createMutexContendService(this)
 
     @Volatile
     @Suppress("unused")
     private var owner: Thread? = null
-
-    init {
-        contendService = contendServiceFactory.createMutexContendService(this)
-    }
 
     @Throws(Exception::class)
     override fun close() {
@@ -80,7 +76,7 @@ class SimbaLocker(
             LockSupport.parkNanos(this, timeout.toNanos())
             if (!contendService.isOwner) {
                 throw TimeoutException(
-                    "Could not acquire [$contenderId]@mutex:[$mutex] within timeout of %${timeout.toMillis()}ms"
+                    "Could not acquire [$contenderId]@mutex:[$mutex] within timeout of ${timeout.toMillis()}ms"
                 )
             }
         } else {
