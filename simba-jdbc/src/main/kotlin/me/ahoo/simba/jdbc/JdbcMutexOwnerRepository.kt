@@ -85,6 +85,7 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
         }
     }
 
+    @Suppress("TooGenericExceptionCaught")
     override fun tryInitMutex(mutex: String): Boolean {
         return try {
             initMutex(mutex)
@@ -129,6 +130,7 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
         dataSource.connection.use { connection -> return ensureOwner(connection, mutex) }
     }
 
+    @Suppress("SwallowedException")
     @Throws(SQLException::class)
     private fun ensureOwner(connection: Connection, mutex: String): MutexOwnerEntity {
         return try {

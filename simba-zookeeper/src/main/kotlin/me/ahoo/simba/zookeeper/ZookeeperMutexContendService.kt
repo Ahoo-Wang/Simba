@@ -29,18 +29,12 @@ import java.util.concurrent.Executor
 class ZookeeperMutexContendService(
     contender: MutexContender,
     handleExecutor: Executor,
-    curatorFramework: CuratorFramework
-) : AbstractMutexContendService(contender, handleExecutor), LeaderLatchListener {
     private val curatorFramework: CuratorFramework
+) : AbstractMutexContendService(contender, handleExecutor), LeaderLatchListener {
 
     @Volatile
     private var leaderLatch: LeaderLatch? = null
-    private val mutexPath: String
-
-    init {
-        mutexPath = RESOURCE_PREFIX + contender.mutex
-        this.curatorFramework = curatorFramework
-    }
+    private val mutexPath: String = RESOURCE_PREFIX + contender.mutex
 
     override fun startContend() {
         leaderLatch = LeaderLatch(curatorFramework, mutexPath, contenderId)

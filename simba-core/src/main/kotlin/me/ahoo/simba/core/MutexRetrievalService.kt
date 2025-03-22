@@ -18,6 +18,7 @@ package me.ahoo.simba.core
  * @author ahoo wang
  */
 interface MutexRetrievalService : AutoCloseable {
+    val status: Status
     val retriever: MutexRetriever
     val mutex: String
         get() = retriever.mutex
@@ -44,6 +45,18 @@ interface MutexRetrievalService : AutoCloseable {
     }
 
     val running: Boolean
+        get() = status.isActive
+
     fun start()
     fun stop()
+
+    enum class Status {
+        INITIAL,
+        STARTING,
+        RUNNING,
+        STOPPING;
+
+        val isActive: Boolean
+            get() = this == STARTING || this == RUNNING
+    }
 }

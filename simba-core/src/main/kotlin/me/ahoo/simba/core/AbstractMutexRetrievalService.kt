@@ -12,9 +12,11 @@
  */
 package me.ahoo.simba.core
 
+import me.ahoo.simba.core.MutexRetrievalService.Status
 import org.slf4j.LoggerFactory
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 
 /**
  * Abstract Mutex Retrieval Service.
@@ -27,11 +29,16 @@ abstract class AbstractMutexRetrievalService protected constructor(
 ) : MutexRetrievalService {
     companion object {
         private val log = LoggerFactory.getLogger(AbstractMutexRetrievalService::class.java)
+        val STATUS: AtomicReferenceFieldUpdater<AbstractMutexRetrievalService, Status> =
+            AtomicReferenceFieldUpdater.newUpdater(
+                AbstractMutexRetrievalService::class.java,
+                Status::class.java,
+                MutexRetrievalService::status.name
+            )
     }
 
     @Volatile
-    override var running = false
-        protected set
+    override var status = Status.INITIAL
 
     @Volatile
     override var mutexState: MutexState = MutexState.NONE
@@ -41,16 +48,21 @@ abstract class AbstractMutexRetrievalService protected constructor(
         mutexState = MutexState.NONE
     }
 
-    @Synchronized
+    @Suppress("TooGenericExceptionCaught")
     override fun start() {
         if (log.isInfoEnabled) {
-            log.info("start - mutex:[{}] - running:[{}]", retriever.mutex, running)
+            log.info("start - mutex:[{}] - status:[{}]", retriever.mutex, status)
         }
-        if (running) {
-            return
+        check(STATUS.compareAndSet(this, Status.INITIAL, Status.STARTING)) {
+            "Cannot start from state [$status]. Expected: [${Status.INITIAL}]"
         }
-        running = true
-        startRetrieval()
+        try {
+            startRetrieval()
+            STATUS.set(this, Status.RUNNING)
+        } catch (error: Throwable) {
+            STATUS.set(this, Status.INITIAL)
+            throw error
+        }
     }
 
     protected abstract fun startRetrieval()
@@ -59,7 +71,8 @@ abstract class AbstractMutexRetrievalService protected constructor(
         return CompletableFuture.runAsync({ safeNotifyOwner(newOwner) }, handleExecutor)
     }
 
-    protected fun safeNotifyOwner(newOwner: MutexOwner) {
+    @Suppress("TooGenericExceptionCaught")
+    private fun safeNotifyOwner(newOwner: MutexOwner) {
         try {
             /*
              * Concurrency issues.
@@ -75,16 +88,18 @@ abstract class AbstractMutexRetrievalService protected constructor(
         }
     }
 
-    @Synchronized
     override fun stop() {
         if (log.isInfoEnabled) {
-            log.info("stop - mutex:[{}] - running:[{}]", retriever.mutex, running)
+            log.info("stop - mutex:[{}] - running:[{}]", retriever.mutex, status)
         }
-        if (!running) {
-            return
+        check(STATUS.compareAndSet(this, Status.RUNNING, Status.STOPPING)) {
+            "Cannot stop mutex:[${retriever.mutex}] from state:[$status]. Expected:[${Status.RUNNING}]"
         }
-        running = false
-        stopRetrieval()
+        try {
+            stopRetrieval()
+        } finally {
+            STATUS.set(this, Status.INITIAL)
+        }
     }
 
     @Throws(Exception::class)

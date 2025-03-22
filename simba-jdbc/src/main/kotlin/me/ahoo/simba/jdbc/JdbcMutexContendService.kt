@@ -72,6 +72,7 @@ class JdbcMutexContendService(
         mutexOwnerRepository.release(mutex, contenderId)
     }
 
+    @Suppress("TooGenericExceptionCaught")
     private fun safeHandleContend() {
         try {
             val mutexOwner = contend()
