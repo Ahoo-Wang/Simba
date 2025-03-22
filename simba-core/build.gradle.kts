@@ -11,5 +11,6 @@
  * limitations under the License.
  */
 dependencies {
+    api("io.github.oshai:kotlin-logging-jvm")
     implementation("me.ahoo.cosid:cosid-core")
 }
