@@ -12,8 +12,8 @@
  */
 package me.ahoo.simba.jdbc
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.SimbaException
-import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.sql.SQLException
 import java.sql.SQLIntegrityConstraintViolationException
@@ -26,7 +26,7 @@ import javax.sql.DataSource
  */
 class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerRepository {
     companion object {
-        private val log = LoggerFactory.getLogger(JdbcMutexOwnerRepository::class.java)
+        private val log = KotlinLogging.logger {}
         private const val SQL_INIT_MUTEX =
             """
                 insert into simba_mutex 
@@ -70,8 +70,8 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
     @Throws(SQLException::class, SQLIntegrityConstraintViolationException::class)
     override fun initMutex(mutex: String): Boolean {
         require(mutex.isNotBlank()) { "mutex is blank!" }
-        if (log.isInfoEnabled) {
-            log.info("initMutex - mutex:[{}].", mutex)
+        log.info {
+            "initMutex - mutex:[$mutex]."
         }
         dataSource.connection.use { connection -> return initMutex(connection, mutex) }
     }
@@ -91,8 +91,8 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
             initMutex(mutex)
             true
         } catch (throwable: Throwable) {
-            if (log.isInfoEnabled) {
-                log.info("tryInitMutex failed.[{}]", throwable.message)
+            log.error(throwable) {
+                "tryInitMutex failed.[${throwable.message}]"
             }
             false
         }
@@ -137,8 +137,8 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
             getOwner(connection, mutex)
         } catch (notFoundMutexOwnerException: NotFoundMutexOwnerException) {
             try {
-                if (log.isInfoEnabled) {
-                    log.info("ensureOwner - initMutex:[{}].", mutex)
+                log.info {
+                    "ensureOwner - initMutex:[$mutex]."
                 }
                 initMutex(connection, mutex)
             } catch (sqlIntegrityConstraintViolationException: SQLException) {
@@ -196,10 +196,8 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
                         /**
                          * 没有竞争到领导权 && 当前不存在领导者 ==> 初始化时
                          */
-                        if (log.isInfoEnabled) {
-                            log.info(
-                                "acquireAndGetOwner - There is no competition for leadership && There is currently no leader [When initializing]. Retry!"
-                            )
+                        log.info {
+                            "acquireAndGetOwner - There is no competition for leadership && There is currently no leader [When initializing]. Retry!"
                         }
                         acquired = acquire(connection, mutex, contenderId, ttl, transition)
                         mutexOwner = ensureOwner(connection, mutex)

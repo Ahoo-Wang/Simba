@@ -12,12 +12,12 @@
  */
 package me.ahoo.simba.jdbc
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.core.AbstractMutexContendService
 import me.ahoo.simba.core.ContendPeriod
 import me.ahoo.simba.core.MutexContender
 import me.ahoo.simba.core.MutexOwner
 import me.ahoo.simba.util.Threads.defaultFactory
-import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.util.concurrent.Executor
 import java.util.concurrent.ScheduledFuture
@@ -38,7 +38,7 @@ class JdbcMutexContendService(
     private val transition: Duration
 ) : AbstractMutexContendService(mutexContender, handleExecutor) {
     companion object {
-        private val log = LoggerFactory.getLogger(JdbcMutexContendService::class.java)
+        private val log = KotlinLogging.logger {}
     }
 
     private var executorService: ScheduledThreadPoolExecutor? = null
@@ -54,13 +54,8 @@ class JdbcMutexContendService(
     }
 
     private fun nextSchedule(nextDelay: Long) {
-        if (log.isDebugEnabled) {
-            log.debug(
-                "nextSchedule - mutex:[{}] contenderId:[{}] - nextDelay:[{}].",
-                mutex,
-                contenderId,
-                nextDelay
-            )
+        log.debug {
+            "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] - nextDelay:[$nextDelay]."
         }
         contendScheduledFuture = executorService!!.schedule({ safeHandleContend() }, nextDelay, TimeUnit.MILLISECONDS)
     }
@@ -80,8 +75,8 @@ class JdbcMutexContendService(
             val nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
             nextSchedule(nextDelay)
         } catch (throwable: Throwable) {
-            if (log.isErrorEnabled) {
-                log.error(throwable.message, throwable)
+            log.error(throwable) {
+                "safeHandleContend - mutex:[$mutex] contenderId:[$contenderId] - failed:[${throwable.message}]."
             }
             nextSchedule(ttl.toMillis())
         }
@@ -93,13 +88,8 @@ class JdbcMutexContendService(
     private fun contend(): MutexOwner {
         val mutexOwner =
             mutexOwnerRepository.acquireAndGetOwner(mutex, contenderId, ttl.toMillis(), transition.toMillis())
-        if (log.isDebugEnabled) {
-            log.debug(
-                "contend - mutex:[{}] contenderId:[{}] - succeeded:[{}].",
-                mutex,
-                contenderId,
-                mutexOwner.isOwner(contenderId)
-            )
+        log.debug {
+            "contend - mutex:[$mutex] contenderId:[$contenderId] - succeeded:[${mutexOwner.isOwner(contenderId)}]."
         }
         return mutexOwner
     }

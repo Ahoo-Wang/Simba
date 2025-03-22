@@ -12,8 +12,8 @@
  */
 package me.ahoo.simba.core
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.core.MutexRetrievalService.Status
-import org.slf4j.LoggerFactory
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
@@ -28,7 +28,7 @@ abstract class AbstractMutexRetrievalService protected constructor(
     protected val handleExecutor: Executor
 ) : MutexRetrievalService {
     companion object {
-        private val log = LoggerFactory.getLogger(AbstractMutexRetrievalService::class.java)
+        private val log = KotlinLogging.logger {}
         val STATUS: AtomicReferenceFieldUpdater<AbstractMutexRetrievalService, Status> =
             AtomicReferenceFieldUpdater.newUpdater(
                 AbstractMutexRetrievalService::class.java,
@@ -50,8 +50,8 @@ abstract class AbstractMutexRetrievalService protected constructor(
 
     @Suppress("TooGenericExceptionCaught")
     override fun start() {
-        if (log.isInfoEnabled) {
-            log.info("start - mutex:[{}] - status:[{}]", retriever.mutex, status)
+        log.info {
+            "start - mutex:[${retriever.mutex}] - status:[$status]"
         }
         check(STATUS.compareAndSet(this, Status.INITIAL, Status.STARTING)) {
             "Cannot start from state [$status]. Expected: [${Status.INITIAL}]"
@@ -82,15 +82,15 @@ abstract class AbstractMutexRetrievalService protected constructor(
             mutexState = newState
             retriever.notifyOwner(newState)
         } catch (throwable: Throwable) {
-            if (log.isErrorEnabled) {
-                log.error(throwable.message, throwable)
+            log.error(throwable) {
+                "safeNotifyOwner error - mutex:[$retriever] - newOwner:[$newOwner]"
             }
         }
     }
 
     override fun stop() {
-        if (log.isInfoEnabled) {
-            log.info("stop - mutex:[{}] - running:[{}]", retriever.mutex, status)
+        log.info {
+            "stop - mutex:[${retriever.mutex}] - status:[$status]"
         }
         check(STATUS.compareAndSet(this, Status.RUNNING, Status.STOPPING)) {
             "Cannot stop mutex:[${retriever.mutex}] from state:[$status]. Expected:[${Status.RUNNING}]"

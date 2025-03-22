@@ -35,11 +35,8 @@ abstract class AbstractScheduler(
         private val log = LoggerFactory.getLogger(AbstractScheduler::class.java)
     }
 
-    private val contendService: MutexContendService
-
-    init {
-        contendService = contendServiceFactory.createMutexContendService(WorkContender(mutex))
-    }
+    private val contendService: MutexContendService =
+        contendServiceFactory.createMutexContendService(WorkContender(mutex))
 
     protected abstract val config: ScheduleConfig
     protected abstract val worker: String

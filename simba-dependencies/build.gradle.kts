@@ -19,6 +19,7 @@ dependencies {
     constraints {
         api(libs.guava)
         api(libs.commons.io)
+        api(libs.kotlin.logging)
         api(libs.hamcrest)
         api(libs.mockk)
         api(libs.detekt.formatting)

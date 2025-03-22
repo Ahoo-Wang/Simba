@@ -12,12 +12,12 @@
  */
 package me.ahoo.simba.spring.redis
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.Simba
 import me.ahoo.simba.core.AbstractMutexContendService
 import me.ahoo.simba.core.ContendPeriod
 import me.ahoo.simba.core.MutexContender
 import me.ahoo.simba.core.MutexOwner
-import org.slf4j.LoggerFactory
 import org.springframework.core.io.ClassPathResource
 import org.springframework.core.io.Resource
 import org.springframework.data.redis.connection.Message
@@ -49,7 +49,7 @@ class SpringRedisMutexContendService(
     private val scheduledExecutorService: ScheduledExecutorService
 ) : AbstractMutexContendService(contender, handleExecutor) {
     companion object {
-        private val log = LoggerFactory.getLogger(SpringRedisMutexContendService::class.java)
+        private val log = KotlinLogging.logger {}
         private val ACQUIRE_RESOURCE: Resource = ClassPathResource("mutex_acquire.lua")
         private val SCRIPT_ACQUIRE = RedisScript.of(ACQUIRE_RESOURCE, String::class.java)
         private val RELEASE_RESOURCE: Resource = ClassPathResource("mutex_release.lua")
@@ -89,8 +89,8 @@ class SpringRedisMutexContendService(
      *
      */
     override fun startContend() {
-        if (log.isInfoEnabled) {
-            log.info("startContend - mutex:[{}] contender_id:[{}]", mutex, contenderId)
+        log.info {
+            "startContend - mutex:[$mutex] contenderId:[$contenderId]."
         }
         startSubscribe()
         nextSchedule(0)
@@ -104,23 +104,13 @@ class SpringRedisMutexContendService(
     }
 
     private fun nextSchedule(nextDelay: Long) {
-        if (log.isDebugEnabled) {
-            log.debug(
-                "nextSchedule - mutex:[{}] contender_id:[{}] status:[{}] delay:[{}ms].",
-                mutex,
-                contenderId,
-                status,
-                nextDelay
-            )
+        log.debug {
+            "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] status:[$status] delay:[${nextDelay}ms]."
         }
+
         if (!status.isActive) {
-            if (log.isWarnEnabled) {
-                log.warn(
-                    "nextSchedule - mutex:[{}] contender_id:[{}] is not active[{}].",
-                    mutex,
-                    contenderId,
-                    status
-                )
+            log.warn {
+                "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] is not active[$status]."
             }
             return
         }
@@ -142,9 +132,7 @@ class SpringRedisMutexContendService(
             nextSchedule(nextDelay)
             mutexOwner
         } catch (throwable: Throwable) {
-            if (log.isErrorEnabled) {
-                log.error(throwable.message, throwable)
-            }
+            log.error(throwable) { "notifyOwnerAndScheduleNext - mutex:[$mutex] contenderId:[$contenderId] error." }
             nextSchedule(ttl.toMillis())
             MutexOwner.NONE
         }
@@ -152,13 +140,8 @@ class SpringRedisMutexContendService(
 
     private fun guard(): MutexOwner {
         val message = redisTemplate.execute(SCRIPT_GUARD, keys, contenderId, ttl.toMillis().toString())
-        if (log.isDebugEnabled) {
-            log.debug(
-                "guard - mutex:[{}] contenderId:[{}] - message:[{}].",
-                mutex,
-                contenderId,
-                message
-            )
+        log.debug {
+            "guard - mutex:[$mutex] contenderId:[$contenderId] - message:[$message]."
         }
         return notifyOwnerAndScheduleNext(message)
     }
@@ -170,13 +153,8 @@ class SpringRedisMutexContendService(
             contenderId,
             (ttl.toMillis() + transition.toMillis()).toString()
         )
-        if (log.isDebugEnabled) {
-            log.debug(
-                "acquire - mutex:[{}] contenderId:[{}] - message:[{}].",
-                mutex,
-                contenderId,
-                message
-            )
+        log.debug {
+            "acquire - mutex:[$mutex] contenderId:[$contenderId] - message:[$message]."
         }
         return notifyOwnerAndScheduleNext(message)
     }
@@ -201,8 +179,8 @@ class SpringRedisMutexContendService(
      * 3.
      */
     override fun stopContend() {
-        if (log.isInfoEnabled) {
-            log.info("stopContend - mutex:[{}] contender_id:[{}]", mutex, contenderId)
+        log.info {
+            "stopContend - mutex:[$mutex] contenderId:[$contenderId]."
         }
         stopSubscribe()
         disposeSchedule()
@@ -226,24 +204,14 @@ class SpringRedisMutexContendService(
     @Suppress("TooGenericExceptionCaught")
     private fun release() {
         val succeed = redisTemplate.execute(SCRIPT_RELEASE, keys, contenderId)
-        if (log.isDebugEnabled) {
-            log.debug(
-                "release - mutex:[{}] - contenderId:[{}] - succeed:[{}]",
-                mutex,
-                contenderId,
-                succeed
-            )
+        log.debug {
+            "release - mutex:[$mutex] - contenderId:[$contenderId] - succeed:[$succeed]"
         }
         try {
             notifyOwner(MutexOwner.NONE)
         } catch (throwable: Throwable) {
-            if (log.isWarnEnabled) {
-                log.warn(
-                    "release - mutex:[{}] - contenderId:[{}] - message:[{}]",
-                    mutex,
-                    contenderId,
-                    throwable.message
-                )
+            log.warn(throwable) {
+                "release - mutex:[$mutex] - contenderId:[$contenderId] - error."
             }
         }
     }
@@ -251,26 +219,15 @@ class SpringRedisMutexContendService(
     inner class MutexMessageListener : MessageListener {
         override fun onMessage(message: Message, pattern: ByteArray?) {
             if (!status.isActive) {
-                if (log.isWarnEnabled) {
-                    log.warn(
-                        "onMessage - ignore - mutex:[{}] contender_id:[{}] is not active[{}].",
-                        mutex,
-                        contenderId,
-                        status
-                    )
+                log.warn {
+                    "onMessage - ignore - mutex:[$mutex] contenderId:[$contenderId] is not active[$status]."
                 }
                 return
             }
             val channel = String(message.channel, StandardCharsets.UTF_8)
             val body = String(message.body, StandardCharsets.UTF_8)
-            if (log.isDebugEnabled) {
-                log.debug(
-                    "onMessage - mutex:[{}] - contenderId:[{}] - channel:[{}] - message:[{}].",
-                    mutex,
-                    contenderId,
-                    channel,
-                    body
-                )
+            log.debug {
+                "onMessage - mutex:[$mutex] - contenderId:[$contenderId] - channel:[$channel] - message:[$body]."
             }
             val ownerEvent: OwnerEvent = OwnerEvent.of(body)
             when (ownerEvent.event) {
