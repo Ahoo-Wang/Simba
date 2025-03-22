@@ -12,7 +12,7 @@
  */
 package me.ahoo.simba.core
 
-import org.slf4j.LoggerFactory
+import io.github.oshai.kotlinlogging.KotlinLogging
 
 /**
  * Abstract Mutex Contender.
@@ -24,7 +24,7 @@ abstract class AbstractMutexContender(
     final override val contenderId: String = ContenderIdGenerator.HOST.generate()
 ) : MutexContender {
     companion object {
-        private val log = LoggerFactory.getLogger(AbstractMutexContender::class.java)
+        private val log = KotlinLogging.logger {}
     }
 
     init {
@@ -33,14 +33,14 @@ abstract class AbstractMutexContender(
     }
 
     override fun onAcquired(mutexState: MutexState) {
-        if (log.isInfoEnabled) {
-            log.info("onAcquired - mutex:[{}] - contenderId:[{}].", mutex, contenderId)
+        log.info {
+            "onAcquired - mutex:[$mutex] - contenderId:[$contenderId]."
         }
     }
 
     override fun onReleased(mutexState: MutexState) {
-        if (log.isInfoEnabled) {
-            log.info("onReleased - mutex:[{}] - contenderId:[{}].", mutex, contenderId)
+        log.info {
+            "onReleased - mutex:[$mutex] - contenderId:[$contenderId]."
         }
     }
 }

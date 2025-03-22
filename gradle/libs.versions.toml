@@ -6,6 +6,7 @@ cosid = "2.12.1"
 testcontainers = "1.20.6"
 guava = "33.4.5-jre"
 commons-io = "2.18.0"
+kotlin-logging = "7.0.3"
 hamcrest = "3.0"
 mockk = "1.13.17"
 detekt-formatting = "1.23.8"
@@ -22,6 +23,7 @@ cosid-bom = { module = "me.ahoo.cosid:cosid-bom", version.ref = "cosid" }
 testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
 commons-io = { module = "commons-io:commons-io", version.ref = "commons-io" }
+kotlin-logging = { module = "io.github.oshai:kotlin-logging-jvm", version.ref = "kotlin-logging" }
 hamcrest = { module = "org.hamcrest:hamcrest", version.ref = "hamcrest" }
 mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
 detekt-formatting = { module = "io.gitlab.arturbosch.detekt:detekt-formatting", version.ref = "detekt-formatting" }
