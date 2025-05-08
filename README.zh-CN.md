@@ -5,6 +5,7 @@
 [![Maven Central](https://maven-badges.herokuapp.com/maven-central/me.ahoo.simba/simba-core/badge.svg)](https://maven-badges.herokuapp.com/maven-central/me.ahoo.simba/simba-core)
 [![Codacy Badge](https://app.codacy.com/project/badge/Grade/41f28a111d9c457ab7a9aae6861185eb)](https://www.codacy.com/gh/Ahoo-Wang/Simba/dashboard?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=Ahoo-Wang/Simba&amp;utm_campaign=Badge_Grade)
 [![codecov](https://codecov.io/gh/Ahoo-Wang/Simba/branch/main/graph/badge.svg?token=P9EMJKJ2I5)](https://codecov.io/gh/Ahoo-Wang/Simba)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Ahoo-Wang/Simba)
 
 ## 介绍
 
