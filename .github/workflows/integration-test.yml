@@ -12,7 +12,7 @@
 #
 
 name: Integration Test
-on: [ push,pull_request ]
+on: [ pull_request ]
 jobs:
   simba-core-test:
     name: Simba Core Test
