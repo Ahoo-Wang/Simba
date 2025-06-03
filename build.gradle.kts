@@ -93,6 +93,7 @@ configure(libraryProjects) {
     }
     dependencies {
         api(platform(dependenciesProject))
+        testImplementation(platform(rootProject.libs.junit.bom))
         detektPlugins(platform(dependenciesProject))
         implementation("com.google.guava:guava")
         implementation("org.slf4j:slf4j-api")
@@ -103,6 +104,7 @@ configure(libraryProjects) {
         testImplementation("io.mockk:mockk") {
             exclude(group = "org.slf4j", module = "slf4j-api")
         }
+        testRuntimeOnly("org.junit.platform:junit-platform-launcher")
         testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine")
         detektPlugins("io.gitlab.arturbosch.detekt:detekt-formatting")
     }

@@ -7,6 +7,7 @@ testcontainers = "1.21.1"
 guava = "33.4.8-jre"
 commons-io = "2.19.0"
 kotlin-logging = "7.0.7"
+junit = "5.13.0"
 hamcrest = "3.0"
 mockk = "1.14.2"
 detekt-formatting = "1.23.8"
@@ -24,6 +25,7 @@ testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
 commons-io = { module = "commons-io:commons-io", version.ref = "commons-io" }
 kotlin-logging = { module = "io.github.oshai:kotlin-logging-jvm", version.ref = "kotlin-logging" }
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 hamcrest = { module = "org.hamcrest:hamcrest", version.ref = "hamcrest" }
 mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
 detekt-formatting = { module = "io.gitlab.arturbosch.detekt:detekt-formatting", version.ref = "detekt-formatting" }
