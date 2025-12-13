@@ -9,13 +9,13 @@ spring:
     url: jdbc:mysql://localhost:3306/simba_db
     username: root
     password: root
-  redis:
-    url: redis://localhost:6379
   task:
     scheduling:
       pool:
         size: 2
-
+  data:
+    redis:
+      url: redis://localhost:6379
 
 logging:
   level:
