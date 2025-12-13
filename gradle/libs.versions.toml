@@ -1,8 +1,8 @@
 [versions]
 # libraries
-spring-boot = "3.5.8"
-spring-cloud = "2025.0.0"
-cosid = "2.15.1"
+spring-boot = "4.0.0"
+spring-cloud = "2025.1.0"
+cosid = "3.0.0"
 testcontainers = "2.0.0"
 guava = "33.5.0-jre"
 commons-io = "2.21.0"
