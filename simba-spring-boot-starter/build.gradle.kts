@@ -34,6 +34,7 @@ dependencies {
     api(project(":simba-core"))
 
     "springRedisSupportImplementation"(project(":simba-spring-redis"))
+    "springRedisSupportImplementation"("org.springframework.boot:spring-boot-starter-data-redis")
 
     "jdbcSupportImplementation"(project(":simba-jdbc"))
 
