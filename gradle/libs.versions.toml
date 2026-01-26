@@ -9,7 +9,7 @@ commons-io = "2.21.0"
 kotlin-logging = "7.0.14"
 junit = "6.0.2"
 hamcrest = "3.0"
-mockk = "1.14.7"
+mockk = "1.14.9"
 detekt-formatting = "1.23.8"
 # plugins
 detekt = "1.23.8"
