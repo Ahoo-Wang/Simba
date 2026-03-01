@@ -142,11 +142,8 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
                 }
                 initMutex(connection, mutex)
             } catch (sqlIntegrityConstraintViolationException: SQLException) {
-                if (log.isWarnEnabled) {
-                    log.warn(
-                        sqlIntegrityConstraintViolationException.message,
-                        sqlIntegrityConstraintViolationException
-                    )
+                log.warn(sqlIntegrityConstraintViolationException) {
+                    sqlIntegrityConstraintViolationException.message
                 }
             }
             getOwner(connection, mutex)
