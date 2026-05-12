@@ -5,8 +5,12 @@ import { zh } from './zh'
 export default defineConfig({
   title: 'Simba',
   description: 'Distributed Mutex Library for the JVM',
+  site: 'https://simba.ahoo.me/',
   lastUpdated: true,
   cleanUrls: true,
+  sitemap: {
+    hostname: 'https://simba.ahoo.me/',
+  },
   ignoreDeadLinks: [
     /localhost/,
     /file_path:/,
