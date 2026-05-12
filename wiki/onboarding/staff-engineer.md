@@ -97,13 +97,20 @@ This means:
 
 The dual-timestamp model (`ttlAt` + `transitionAt`) is Simba's key design innovation:
 
-```
-timeline: ----[acquired]----[ttlAt]----[transitionAt]----
-                      |          |              |
-                      |   TTL expires    Transition expires
-                      |          |              |
-                Owner can   Owner can      Any contender
-                use lock    still renew     can take over
+```mermaid
+gantt
+    title TTL + Transition Timeline
+    dateFormat X
+    axisFormat %L ms
+
+    section Owner
+    Exclusive use (TTL window)    :active, ttl, 0, 5000
+    Grace period (transition)     :trans, 5000, 8000
+
+    section Contenders
+    Must not contend              :done, wait1, 0, 5000
+    Timing jitter window          :crit, jitter, 7800, 9000
+    Can acquire                   :acq, 8000, 10000
 ```
 
 - **TTL period** (`acquiredAt` to `ttlAt`): The owner has exclusive use of the lock. No other contender should attempt acquisition.
@@ -175,42 +182,54 @@ The transition period gives the existing owner a window to renew even after TTL 
 
 ### Class Hierarchy
 
-```
-MutexRetriever (interface)
-  mutex: String
-  notifyOwner(MutexState)
+```mermaid
+classDiagram
+    class MutexRetriever {
+        <<interface>>
+        +mutex: String
+        +notifyOwner(MutexState)
+    }
+    class MutexContender {
+        <<interface>>
+        +contenderId: String
+        +onAcquired(MutexState)
+        +onReleased(MutexState)
+    }
+    class MutexRetrievalService {
+        <<interface>>
+        +status: Status
+        +retriever: MutexRetriever
+        +mutexState: MutexState
+        +start()
+        +stop()
+    }
+    class MutexContendService {
+        <<interface>>
+        +contender: MutexContender
+        +isOwner: Boolean
+    }
+    class MutexContendServiceFactory {
+        <<interface>>
+        +createMutexContendService(MutexContender) MutexContendService
+    }
 
-MutexContender (interface extends MutexRetriever)
-  contenderId: String
-  onAcquired(MutexState)    -- callback
-  onReleased(MutexState)    -- callback
-
-MutexRetrievalService (interface extends AutoCloseable)
-  status: Status {INITIAL, STARTING, RUNNING, STOPPING}
-  retriever: MutexRetriever
-  mutexState: MutexState
-  start(), stop()
-
-MutexContendService (interface extends MutexRetrievalService)
-  contender: MutexContender
-  isOwner: Boolean
-
-MutexContendServiceFactory (interface)
-  createMutexContendService(MutexContender) -> MutexContendService
+    MutexRetriever <|-- MutexContender
+    MutexRetrievalService <|-- MutexContendService
+    MutexContendServiceFactory ..> MutexContendService
+    MutexContendServiceFactory ..> MutexContender
 ```
 
 ### State Machine
 
-```
-INITIAL --start()--> STARTING
-  ^                     |
-  |                     | startRetrieval() succeeds
-  |                     v
-  +--stop()-------- RUNNING
-  ^                     |
-  |                     | stop()
-  |                     v
-  +--cleanup()---- STOPPING
+```mermaid
+stateDiagram-v2
+    [*] --> INITIAL
+    INITIAL --> STARTING : start()
+    STARTING --> RUNNING : startRetrieval() succeeds
+    RUNNING --> STOPPING : stop()
+    STOPPING --> INITIAL : cleanup()
+    INITIAL --> INITIAL : stop() - illegal
+    RUNNING --> RUNNING : start() - illegal
 ```
 
 The status transitions use `AtomicReferenceFieldUpdater.compareAndSet()` to prevent concurrent transitions. This means `start()` from `INITIAL` and `stop()` from `RUNNING` are the only valid paths.
@@ -618,8 +637,13 @@ Simba scales horizontally by design: each application instance runs its own cont
 
 The status field in [`AbstractMutexRetrievalService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/AbstractMutexRetrievalService.kt) uses `AtomicReferenceFieldUpdater` with `compareAndSet`:
 
-```
-INITIAL --[CAS]--> STARTING --[set]--> RUNNING --[CAS]--> STOPPING --[set]--> INITIAL
+```mermaid
+stateDiagram-v2
+    [*] --> INITIAL
+    INITIAL --> STARTING : CAS - compareAndSet
+    STARTING --> RUNNING : set
+    RUNNING --> STOPPING : CAS - compareAndSet
+    STOPPING --> INITIAL : set
 ```
 
 - `start()` uses `compareAndSet(INITIAL, STARTING)` -- only one thread can succeed
