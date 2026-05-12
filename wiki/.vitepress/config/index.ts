@@ -17,6 +17,8 @@ export default defineConfig({
   ],
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
+    ['script', { async: '', src: 'https://www.googletagmanager.com/gtag/js?id=G-Y0VR1WK13V' }],
+    ['script', {}, `window.dataLayer = window.dataLayer || [];function gtag(){dataLayer.push(arguments);}gtag('js', new Date());gtag('config', 'G-Y0VR1WK13V');`],
   ],
   themeConfig: {
     search: {
