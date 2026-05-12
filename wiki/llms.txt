@@ -1,0 +1,48 @@
+# Simba
+
+> Distributed Mutex Library for the JVM — easy-to-use distributed lock services supporting JDBC/MySQL, Redis, and Zookeeper backends.
+
+## Onboarding
+
+- [Contributor Guide](wiki/onboarding/contributor.md) — Comprehensive guide for new contributors (Kotlin, Gradle, architecture)
+- [Staff Engineer Guide](wiki/onboarding/staff-engineer.md) — Deep architectural analysis and design tradeoffs
+- [Executive Guide](wiki/onboarding/executive.md) — Non-technical capability map and risk assessment
+- [Product Manager Guide](wiki/onboarding/product-manager.md) — Plain-language feature overview and use cases
+
+## Architecture
+
+- [Architecture Overview](wiki/architecture/index.md) — High-level system design, class hierarchy, design patterns
+- [Core Abstractions](wiki/architecture/core-abstractions.md) — MutexOwner, MutexState, MutexContender, MutexContendService
+- [Contention Mechanics](wiki/architecture/contention-mechanics.md) — TTL, transition, jitter, guard/renewal, SimbaLocker, AbstractScheduler
+- [Backend Implementations](wiki/architecture/backends.md) — JDBC, Redis (Lua scripts + pub/sub), Zookeeper (LeaderLatch)
+
+## Getting Started
+
+- [Introduction](wiki/guide/index.md) — What Simba is, core concepts, comparison with alternatives
+- [Quick Start](wiki/guide/quick-start.md) — Dependencies, basic usage, Spring Boot auto-config
+- [Configuration](wiki/guide/configuration.md) — Spring Boot properties, programmatic configuration
+- [Contributing](wiki/guide/contributing.md) — Development setup, build commands, PR process
+
+## API Reference
+
+- [API Overview](wiki/api/index.md) — Public interface summary
+- [Core Interfaces](wiki/api/core-interfaces.md) — MutexRetriever, MutexContender, MutexContendService, factories
+- [Locker API](wiki/api/locker-api.md) — SimbaLocker RAII-style locking
+- [Scheduler API](wiki/api/scheduler-api.md) — AbstractScheduler leader-gated tasks
+
+## Modules
+
+- [Module Overview](wiki/modules/index.md) — Module dependency map
+- [simba-core](wiki/modules/simba-core.md) — Core interfaces and abstractions
+- [simba-jdbc](wiki/modules/simba-jdbc.md) — JDBC/MySQL backend with optimistic locking
+- [simba-spring-redis](wiki/modules/simba-spring-redis.md) — Redis backend with Lua scripts and pub/sub
+- [simba-zookeeper](wiki/modules/simba-zookeeper.md) — Zookeeper backend with Curator LeaderLatch
+- [simba-spring-boot-starter](wiki/modules/simba-spring-boot-starter.md) — Spring Boot auto-configuration
+- [simba-test](wiki/modules/simba-test.md) — TCK (Technology Compatibility Kit)
+
+## Testing
+
+- [Testing Overview](wiki/testing/index.md) — Strategy, pyramid, backend requirements
+- [Unit Testing](wiki/testing/unit-testing.md) — MockK patterns, value object tests
+- [Integration Testing](wiki/testing/integration-testing.md) — Backend-specific setup, Docker Compose
+- [TCK](wiki/testing/tck.md) — MutexContendServiceSpec, adding new backends
