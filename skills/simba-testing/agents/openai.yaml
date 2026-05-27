@@ -1,0 +1,4 @@
+interface:
+  display_name: "Simba Testing"
+  short_description: "Test Simba locking behavior"
+  default_prompt: "Use $simba-testing to write tests for a Simba scheduler or backend."
