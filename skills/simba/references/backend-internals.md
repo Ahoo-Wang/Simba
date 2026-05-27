@@ -1,5 +1,7 @@
 # Backend Internals Reference
 
+Use this reference for backend debugging, not for everyday Simba usage. It mirrors the current repository implementation; when backend source changes, update this file in the same change.
+
 ## Redis Backend — Lua Scripts
 
 The Redis backend uses three Lua scripts for atomicity. Understanding these helps with debugging and tuning.
@@ -7,17 +9,17 @@ The Redis backend uses three Lua scripts for atomicity. Understanding these help
 ### mutex_acquire.lua
 
 Atomically tries to acquire the lock:
-1. `SET key contenderId NX PX transition` — set only if not exists, with millisecond expiry.
-2. On success: publishes `acquired@@contenderId` on the mutex channel, returns `contenderId@@transitionMs`.
-3. On failure (lock exists): adds contender to a sorted set wait queue (`ZADD NX score=timestamp`), returns current owner info.
+1. `SET key contenderId NX PX (ttl + transition)` - set only if not exists, with millisecond expiry.
+2. On success: publishes `acquired@@contenderId` on the mutex channel and returns `contenderId@@remainingMs`.
+3. On failure (lock exists): adds the contender to a sorted-set wait queue (`ZADD NX score=redisTimeSeconds`) and returns `currentOwnerId@@remainingPttl`.
 
-The sorted set acts as a FIFO queue — contenders are notified via Pub/Sub when the lock is released.
+The sorted set acts as the wait queue. Contenders are notified via Pub/Sub when the lock is released.
 
 ### mutex_guard.lua
 
 For the current owner to renew (extend TTL):
 1. Checks if the lock is held by this contender (`GET key == contenderId`).
-2. If yes: `SET XX PX transition` to extend the expiry. Returns success.
+2. If yes: `SET XX PX ttlMs` to extend the expiry. Returns `contenderId@@ttlMs`.
 3. If no: returns the current owner info so the contender knows it lost the lock.
 
 ### mutex_release.lua
@@ -25,7 +27,7 @@ For the current owner to renew (extend TTL):
 Releases the lock and wakes the next contender:
 1. If lock is held by this contender: `DEL key`.
 2. Picks the oldest contender from the sorted set (`ZREVRANGE -1 -1`), removes it.
-3. Publishes `released@@nextContenderId` on the contender's personal channel to wake them up.
+3. Publishes `released@@releasedOwnerId` on the next contender's personal channel to wake it up.
 
 ### Pub/Sub Channels
 
@@ -44,14 +46,13 @@ The `simba_mutex` table:
 
 ```sql
 CREATE TABLE simba_mutex (
-    mutex VARCHAR(127) NOT NULL PRIMARY KEY COMMENT 'mutex name',
-    owner_id VARCHAR(255) NOT NULL DEFAULT '' COMMENT 'current owner contender ID',
-    ttl_at BIGINT NOT NULL DEFAULT 0 COMMENT 'TTL expiry timestamp (ms)',
-    transition_at BIGINT NOT NULL DEFAULT 0 COMMENT 'transition/grace period expiry (ms)',
-    version BIGINT NOT NULL DEFAULT 0 COMMENT 'optimistic lock version',
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-) COMMENT='Simba distributed mutex table';
+    mutex varchar(66) not null primary key comment 'mutex name',
+    acquired_at bigint unsigned not null,
+    ttl_at bigint unsigned not null,
+    transition_at bigint unsigned not null,
+    owner_id char(32) not null,
+    version int unsigned not null
+);
 ```
 
 ### Acquire Logic (SQL CAS)
@@ -61,8 +62,9 @@ The critical `acquire` SQL atomically updates ownership:
 ```sql
 UPDATE simba_mutex
 SET owner_id = #{contenderId},
-    ttl_at = #{ttlAt},
-    transition_at = #{transitionAt},
+    acquired_at = currentDbAt,
+    ttl_at = currentDbAt + #{ttlMs},
+    transition_at = currentDbAt + #{ttlMs} + #{transitionMs},
     version = version + 1
 WHERE mutex = #{mutex}
   AND (
@@ -74,8 +76,8 @@ WHERE mutex = #{mutex}
 This ensures:
 - A new contender can only acquire if `transition_at` has passed (hard expiry).
 - The current owner can renew if still within the transition window (soft renewal).
-- `version` column prevents lost updates under concurrent access.
-- `currentDbAt` comes from `SELECT NOW()` on the DB server to avoid application-node clock skew.
+- `version` records ownership changes and helps inspect concurrent updates.
+- `currentDbAt` comes from MySQL `current_timestamp(3)` to avoid application-node clock skew.
 
 ## Zookeeper Backend — Curator Integration
 

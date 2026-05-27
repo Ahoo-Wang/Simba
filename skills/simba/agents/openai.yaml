@@ -1,0 +1,4 @@
+interface:
+  display_name: "Simba"
+  short_description: "Use Simba distributed locks"
+  default_prompt: "Use $simba to configure Redis-backed leader election in a Spring Boot service."

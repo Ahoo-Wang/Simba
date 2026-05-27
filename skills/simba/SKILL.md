@@ -1,11 +1,21 @@
 ---
 name: simba
-description: Guide for using the Simba distributed mutex / leader-election library in JVM projects. Use this skill whenever a developer is working with Simba — creating distributed locks, implementing leader election, configuring Simba backends (JDBC, Redis, Zookeeper), writing MutexContender or AbstractScheduler subclasses, using SimbaLocker, integrating Simba with Spring Boot, or writing tests for Simba-based code. Also trigger on questions about choosing between Simba backends, TTL/transition tuning, or distributed lock patterns.
+description: Guide for using the Simba distributed mutex and leader-election library in JVM projects. Use when creating distributed locks, implementing leader-only work, configuring Simba backends (JDBC/MySQL, Redis, Zookeeper), writing MutexContender or AbstractScheduler subclasses, using SimbaLocker, integrating Simba with Spring Boot, choosing backends, or tuning TTL/transition settings. For test-focused work, use the simba-testing skill as well.
 ---
 
 # Simba — Distributed Mutex Library
 
 Simba provides distributed mutex (leader election) for JVM applications with three pluggable backends: JDBC/MySQL, Redis (Spring Data Redis), and Zookeeper (Apache Curator).
+
+## How to Use This Skill
+
+Start by identifying four things:
+1. Which backend the project already runs: Redis, JDBC/MySQL, or Zookeeper.
+2. Which usage pattern fits the job: `MutexContender`, `SimbaLocker`, or `AbstractScheduler`.
+3. Who owns lifecycle: explicit `start()`/`stop()`, Kotlin `.use {}`, Java try-with-resources, or Spring `SmartLifecycle`.
+4. Whether the task is usage/configuration work or test work. For test-heavy tasks, also use `simba-testing`.
+
+Read `references/backend-internals.md` only when debugging backend behavior, explaining Lua/SQL/Curator internals, or tuning failure and handoff semantics.
 
 ## Backend Selection
 
@@ -27,7 +37,7 @@ For **Redis**:
 ```kotlin
 implementation("me.ahoo.simba:simba-spring-boot-starter") {
     capabilities {
-        requireCapability("me.ahoo.simba:simba-spring-redis-support")
+        requireCapability("me.ahoo.simba:spring-redis-support")
     }
 }
 ```
@@ -36,7 +46,7 @@ For **JDBC**:
 ```kotlin
 implementation("me.ahoo.simba:simba-spring-boot-starter") {
     capabilities {
-        requireCapability("me.ahoo.simba:simba-jdbc-support")
+        requireCapability("me.ahoo.simba:jdbc-support")
     }
 }
 ```
@@ -45,7 +55,7 @@ For **Zookeeper**:
 ```kotlin
 implementation("me.ahoo.simba:simba-spring-boot-starter") {
     capabilities {
-        requireCapability("me.ahoo.simba:simba-zookeeper-support")
+        requireCapability("me.ahoo.simba:zookeeper-support")
     }
 }
 ```
@@ -93,7 +103,7 @@ contendService.stop()
 ```
 
 Key points to explain:
-- `mutex` is the logical lock name — all contenders for the same mutex compete for one lock.
+- `mutex` is the logical lock name. All contenders for the same mutex compete for one lock.
 - `contenderId` defaults to `"{counter}:{pid}@{hostAddress}"` via `ContenderIdGenerator.HOST`. Override to use `ContenderIdGenerator.UUID` or a custom ID.
 - `onAcquired` / `onReleased` are called asynchronously on the `handleExecutor`. Don't block these callbacks.
 - The service must be started with `start()` and stopped with `stop()` when done.
@@ -129,7 +139,7 @@ Key points:
 - `acquire(timeout)` blocks the current thread until the lock is acquired or timeout expires (throws `TimeoutException`).
 - `acquire()` blocks indefinitely.
 - `close()` releases the lock. Always use try-with-resources / `.use {}` to guarantee release.
-- Internally creates a `MutexContendService` — the thread parks until `onAcquired` fires.
+- Internally creates a `MutexContendService`; the thread parks until `onAcquired` fires.
 
 ### Pattern 3: AbstractScheduler (leader-only periodic task)
 
@@ -208,7 +218,7 @@ simba:
     enabled: true                  # enable Zookeeper backend (default: true)
 ```
 
-Only enable ONE backend at a time. If multiple are on the classpath, Spring will create multiple `MutexContendServiceFactory` beans — use `@Primary` or `@Qualifier` to disambiguate.
+Prefer one backend capability and one enabled backend per application. If multiple backend modules are on the classpath and enabled, Spring can expose multiple `MutexContendServiceFactory` beans; use `@Primary` or `@Qualifier` only when that ambiguity is intentional.
 
 ### TTL and Transition Tuning
 
@@ -230,34 +240,12 @@ The JDBC backend requires a `simba_mutex` table. Provide the init script at:
 
 Requires a `DataSource` bean in the Spring context.
 
-## Writing Tests
+## Testing Pointer
 
-Tests for Simba-based code should use the TCK base classes from `simba-test`. The main test class is `MutexContendServiceSpec` which verifies:
-
-1. `start()` — acquire and release lifecycle
-2. `restart()` — stop and restart works correctly
-3. `guard()` — owner renews before TTL expires
-4. `multiContend()` — 10 contenders, exactly one owner at any time
-5. `schedule()` — AbstractScheduler lifecycle
-
-To test a new backend, extend `MutexContendServiceSpec`:
-```kotlin
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.test.MutexContendServiceSpec
-
-class MyBackendMutexContendServiceTest : MutexContendServiceSpec() {
-    override val mutexContendServiceFactory: MutexContendServiceFactory = // create your factory
-}
-```
-
-For application-level tests that use Simba, mock the `MutexContendServiceFactory` with MockK:
-```kotlin
-val mockFactory = mockk<MutexContendServiceFactory>()
-val mockService = mockk<MutexContendService>(relaxed = true)
-every { mockFactory.createMutexContendService(any()) } returns mockService
-```
-
-Use `fluent-assert` for assertions: `import me.ahoo.test.asserts.assert` and use `.assert()` extension.
+For tests, use the `simba-testing` skill. In short:
+- Application code usually mocks `MutexContendServiceFactory` and captures the created `MutexContender`.
+- Backend implementations should extend `simba-test`'s `MutexContendServiceSpec`.
+- New Kotlin assertions should use `import me.ahoo.test.asserts.assert` and the `.assert()` extension.
 
 ## Common Pitfalls
 

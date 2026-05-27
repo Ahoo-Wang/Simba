@@ -1,6 +1,6 @@
 ---
 name: simba-testing
-description: Guide for testing Simba distributed lock code. Use this skill whenever writing or reviewing tests for classes that use Simba — MutexContender tests, SimbaLocker tests, AbstractScheduler tests, backend TCK conformance tests, or integration tests with real backends. Trigger on "test Simba", "distributed lock test", "leader election test", or when extending MutexContendServiceSpec.
+description: Guide for testing Simba distributed lock and leader-election code. Use when writing or reviewing tests for MutexContender, SimbaLocker, AbstractScheduler, backend TCK conformance via MutexContendServiceSpec, Redis/JDBC/Zookeeper integration tests, timing-sensitive lock behavior, or new Kotlin assertions in Simba-based code.
 ---
 
 # Testing Simba-Based Code
@@ -14,6 +14,11 @@ Simba testing has three layers:
 
 Choose the simplest layer that gives confidence. Most application code only needs unit tests with mocks. Backend implementors need TCK + integration tests.
 
+Before writing a test, decide:
+- **Application behavior**: mock `MutexContendServiceFactory`, capture the contender, and trigger callbacks directly.
+- **Backend implementation**: extend `MutexContendServiceSpec` and run against the real backend.
+- **Scheduler behavior**: verify leadership gating separately from the business logic in `work()`.
+
 ## Unit Tests with MockK
 
 For application code that injects `MutexContendServiceFactory`, mock it:
@@ -24,6 +29,7 @@ import io.mockk.mockk
 import io.mockk.verify
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.core.MutexContender
 import me.ahoo.simba.core.MutexOwner
 import me.ahoo.simba.core.MutexState
 
@@ -121,23 +127,11 @@ This gives you five standard tests:
 
 | Backend | External dependency | Notes |
 |---------|-------------------|-------|
-| Redis | Running Redis instance | Use Testcontainers or embedded Redis |
-| JDBC | Running MySQL instance | Init script: `simba-jdbc/src/init-script/init-simba-mysql.sql` |
+| Redis | Running Redis instance | Current repository tests use `RedisStandaloneConfiguration` defaults |
+| JDBC | Running MySQL instance | Current repository tests use `jdbc:mysql://localhost:3306/simba_db`, `root`/`root`; init script: `simba-jdbc/src/init-script/init-simba-mysql.sql` |
 | Zookeeper | None | Uses Curator's `TestingServer` (embedded) |
 
-For Redis and JDBC, use Testcontainers for CI:
-```kotlin
-@Testcontainers
-class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
-    companion object {
-        @Container
-        val mysql = MySQLContainer("mysql:8.0")
-    }
-    override val mutexContendServiceFactory: MutexContendServiceFactory by lazy {
-        // create factory from mysql.jdbcUrl
-    }
-}
-```
+Do not silently add Testcontainers to this repository's tests. If CI isolation is required, add the dependency and Gradle wiring intentionally, then update the backend setup code and this skill together.
 
 ## AbstractScheduler Tests
 
@@ -169,7 +163,7 @@ fun `scheduler should run work only when leader`() {
 
 ## Assertion Style
 
-Use `fluent-assert` for all assertions:
+Use `fluent-assert` for new Kotlin assertions:
 ```kotlin
 import me.ahoo.test.asserts.assert
 
@@ -178,11 +172,11 @@ collection.assert().hasSize(3)
 bool.assert().isTrue()
 ```
 
-Do NOT use AssertJ's `assertThat()` — it's verbose and not null-safe in Kotlin.
+Do not churn existing Hamcrest/AssertJ assertions solely for style. When adding or touching assertions, prefer `.assert()` and keep the local test readable.
 
 ## Common Test Pitfalls
 
-1. **Timing-dependent tests**: Distributed lock tests are inherently timing-sensitive. Use generous timeouts (5-30s) and `CountDownLatch` / `CompletableFuture` rather than `Thread.sleep`.
+1. **Timing-dependent tests**: Distributed lock tests are inherently timing-sensitive. Use generous timeouts (5-30s) and prefer `CountDownLatch` / `CompletableFuture` over new `Thread.sleep` calls.
 2. **Shared mutex names**: Each test should use a unique mutex name to avoid cross-test interference. Use `"test-mutex-${UUID.randomUUID()}"`.
 3. **Resource cleanup**: Always stop/close services in `@AfterEach` to avoid leaked threads and held locks.
 4. **Mocking `MutexContendService` vs `MutexContendServiceFactory`**: Mock the factory (the DI seam), not the service directly. The factory is what application code injects.

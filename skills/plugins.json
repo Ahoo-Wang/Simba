@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "name": "ahoo-simba-skills",
+      "description": "Skills for using and testing Simba, a JVM distributed mutex and leader-election library with JDBC/MySQL, Redis, and Zookeeper backends.",
+      "skills": {
+        "include": [
+          "*"
+        ],
+        "exclude": [
+          "*-workspace"
+        ]
+      },
+      "keywords": [
+        "simba",
+        "distributed-lock",
+        "distributed-mutex",
+        "leader-election",
+        "jvm",
+        "kotlin",
+        "spring-boot",
+        "redis",
+        "jdbc",
+        "zookeeper"
+      ],
+      "category": "development",
+      "interface": {
+        "displayName": "Ahoo Simba Skills",
+        "capabilities": [
+          "Skills"
+        ],
+        "defaultPrompt": "Help me use Simba distributed locks, leader election, backend configuration, and tests for JVM applications."
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      }
+    }
+  ]
+}
