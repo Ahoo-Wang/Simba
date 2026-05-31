@@ -50,7 +50,7 @@ CREATE TABLE simba_mutex (
     acquired_at bigint unsigned not null,
     ttl_at bigint unsigned not null,
     transition_at bigint unsigned not null,
-    owner_id char(32) not null,
+    owner_id varchar(128) not null,
     version int unsigned not null
 );
 ```

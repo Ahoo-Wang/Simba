@@ -59,12 +59,13 @@ class SpringRedisMutexContendService(
     }
 
     private val keys: List<String> = listOf("{${contender.mutex}}")
+    private val mutexKey: String = "${Simba.SIMBA}:${keys.single()}"
 
     /**
      * 锁获取成功通道（关联锁）.
      * 1. 当有竞争者成功获取到锁时往该通道发送消息
      */
-    private val mutexChannel: String = "${Simba.SIMBA}:${contender.mutex}"
+    private val mutexChannel: String = mutexKey
 
     /**
      * 竞争者的通道（关联竞争者编号）.

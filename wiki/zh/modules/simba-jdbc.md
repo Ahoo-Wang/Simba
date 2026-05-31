@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS simba_mutex (
     acquired_at   BIGINT UNSIGNED NOT NULL,
     ttl_at        BIGINT UNSIGNED NOT NULL,
     transition_at BIGINT UNSIGNED NOT NULL,
-    owner_id      CHAR(32)       NOT NULL,
+    owner_id      VARCHAR(128)   NOT NULL,
     version       INT UNSIGNED   NOT NULL
 );
 ```
@@ -49,7 +49,7 @@ erDiagram
 | `acquired_at` | `BIGINT UNSIGNED` | 当前所有者获取锁时的纪元毫秒时间戳。无所有者时为 `0`。 |
 | `ttl_at` | `BIGINT UNSIGNED` | TTL 到期的纪元毫秒时间戳。此后其他竞争者可以尝试获取。 |
 | `transition_at` | `BIGINT UNSIGNED` | 宽限期结束的纪元毫秒时间戳。等于 `acquired_at + ttl + transition`。 |
-| `owner_id` | `CHAR(32)` | 当前所有者的 `contenderId`。无所有者时为空字符串。 |
+| `owner_id` | `VARCHAR(128)` | 当前所有者的 `contenderId`。无所有者时为空字符串。 |
 | `version` | `INT UNSIGNED` | 每次获取/释放时递增，用于乐观并发控制。 |
 
 ## 关键类

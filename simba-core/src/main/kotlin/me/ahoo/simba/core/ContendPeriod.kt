@@ -36,7 +36,7 @@ class ContendPeriod(private val contenderId: String) {
     companion object {
         @JvmStatic
         fun nextOwnerDelay(mutexOwner: MutexOwner): Long {
-            return mutexOwner.ttlAt - System.currentTimeMillis()
+            return mutexOwner.ttlAt - mutexOwner.currentAt
         }
 
         @JvmStatic
@@ -45,7 +45,7 @@ class ContendPeriod(private val contenderId: String) {
             val max: Long = 1000
             val min: Long = if (transition == 0L) 0 else -200
             val random = ThreadLocalRandom.current().nextLong(min, max)
-            val now = System.currentTimeMillis()
+            val now = mutexOwner.currentAt
             return mutexOwner.transitionAt - now + random
         }
     }

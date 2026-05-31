@@ -74,7 +74,7 @@ simba:
 |---|---|---|---|
 | `simba.zookeeper.enabled` | `Boolean` | `true` | 启用 Zookeeper 后端。 |
 
-Zookeeper 后端将 TTL 和租约管理委托给 Curator 的 `InterProcessMutex`，因此在 Simba 层面不需要额外的时序参数。
+Zookeeper 后端将领导权生命周期管理委托给 Curator 的 `LeaderLatch`，因此在 Simba 层面不需要额外的时序参数。
 
 **示例 `application.yml`：**
 

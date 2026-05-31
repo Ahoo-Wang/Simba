@@ -37,4 +37,11 @@ class MutexOwnerEntity(val mutex: String, ownerId: String, acquiredAt: Long, ttl
      * [java.util.concurrent.TimeUnit.MILLISECONDS]
      */
     var currentDbAt: Long = 0
+
+    override val currentAt: Long
+        get() = if (currentDbAt > 0) {
+            currentDbAt
+        } else {
+            super.currentAt
+        }
 }

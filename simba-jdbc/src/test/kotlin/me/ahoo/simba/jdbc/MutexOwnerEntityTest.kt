@@ -11,15 +11,24 @@
  * limitations under the License.
  */
 
-create database if not exists simba_db;
-use simba_db;
+package me.ahoo.simba.jdbc
 
-create table if not exists simba_mutex
-(
-    mutex         varchar(66) not null primary key comment 'mutex name',
-    acquired_at   bigint unsigned not null,
-    ttl_at        bigint unsigned not null,
-    transition_at bigint unsigned not null,
-    owner_id      varchar(128) not null,
-    version       int unsigned not null
-);
+import org.hamcrest.MatcherAssert.assertThat
+import org.hamcrest.Matchers.equalTo
+import org.junit.jupiter.api.Test
+
+class MutexOwnerEntityTest {
+    @Test
+    fun `current time comes from database timestamp`() {
+        val entity = MutexOwnerEntity(
+            mutex = "db-clock",
+            ownerId = "owner",
+            acquiredAt = 900,
+            ttlAt = 1400,
+            transitionAt = 2000
+        )
+        entity.currentDbAt = 1000
+
+        assertThat(entity.currentAt, equalTo(1000))
+    }
+}

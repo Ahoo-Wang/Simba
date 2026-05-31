@@ -103,7 +103,7 @@ graph TD
         direction TB
         MYSQL[("MySQL<br>simba_mutex")]
         REDIS[("Redis<br>Lua scripts + Pub/Sub")]
-        ZK[("Zookeeper<br>Curator InterProcessMutex")]
+        ZK[("Zookeeper<br>Curator LeaderLatch")]
     end
 
     APP --> CS
@@ -200,7 +200,7 @@ stateDiagram-v2
 | Feature | Simba | Redisson | Curator | ShedLock |
 |---|---|---|---|---|
 | **Storage** | JDBC, Redis, Zookeeper | Redis only | Zookeeper only | JDBC, Redis, Mongo |
-| **API style** | Callback, RAII, Scheduler | Lock, Semaphore, etc. | InterProcessMutex | Annotation-based |
+| **API style** | Callback, RAII, Scheduler | Lock, Semaphore, etc. | LeaderLatch | Annotation-based |
 | **Leader election** | Built-in (TTL + transition) | Lock-based | Ephemeral nodes | N/A |
 | **Scheduled task support** | `AbstractScheduler` | Not built-in | Not built-in | Core feature |
 | **Thundering herd mitigation** | Random jitter (-200ms..+1s) | Pub/Sub wait | Watch-based | N/A |
