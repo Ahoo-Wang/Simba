@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS simba_mutex (
     acquired_at   BIGINT UNSIGNED NOT NULL,
     ttl_at        BIGINT UNSIGNED NOT NULL,
     transition_at BIGINT UNSIGNED NOT NULL,
-    owner_id      CHAR(32)    NOT NULL,
+    owner_id      VARCHAR(128) NOT NULL,
     version       INT UNSIGNED NOT NULL
 );
 ```

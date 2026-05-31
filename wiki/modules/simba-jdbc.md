@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS simba_mutex (
     acquired_at   BIGINT UNSIGNED NOT NULL,
     ttl_at        BIGINT UNSIGNED NOT NULL,
     transition_at BIGINT UNSIGNED NOT NULL,
-    owner_id      CHAR(32)       NOT NULL,
+    owner_id      VARCHAR(128)   NOT NULL,
     version       INT UNSIGNED   NOT NULL
 );
 ```
@@ -49,7 +49,7 @@ erDiagram
 | `acquired_at` | `BIGINT UNSIGNED` | Epoch millis when the current owner acquired the lock. `0` when no owner. |
 | `ttl_at` | `BIGINT UNSIGNED` | Epoch millis when the TTL expires. After this, other contenders may attempt acquisition. |
 | `transition_at` | `BIGINT UNSIGNED` | Epoch millis when the grace period ends. Equals `acquired_at + ttl + transition`. |
-| `owner_id` | `CHAR(32)` | The `contenderId` of the current owner. Empty string when no owner. |
+| `owner_id` | `VARCHAR(128)` | The `contenderId` of the current owner. Empty string when no owner. |
 | `version` | `INT UNSIGNED` | Incremented on every acquire/release for optimistic concurrency control. |
 
 ## Key Classes

@@ -74,7 +74,7 @@ Defined in [`ZookeeperProperties`]([file_path:simba-spring-boot-starter/src/main
 |---|---|---|---|
 | `simba.zookeeper.enabled` | `Boolean` | `true` | Enable the Zookeeper backend. |
 
-The Zookeeper backend delegates TTL and lease management to Curator's `InterProcessMutex`, so no additional timing properties are needed at the Simba level.
+The Zookeeper backend delegates leadership lifecycle management to Curator's `LeaderLatch`, so no additional timing properties are needed at the Simba level.
 
 **Example `application.yml`:**
 

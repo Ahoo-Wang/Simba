@@ -81,7 +81,7 @@ create table simba_mutex
     acquired_at       bigint unsigned not null,
     ttl_at         bigint unsigned not null,
     transition_at bigint unsigned not null,
-    owner_id          char(32)        not null,
+    owner_id          varchar(128)    not null,
     version           int unsigned    not null
 );
 ```
@@ -91,7 +91,7 @@ create table simba_mutex
 > Kotlin DSL
 
 ``` kotlin
-    implementation("me.ahoo.simba:simba-redis:${simbaVersion}")
+    implementation("me.ahoo.simba:simba-spring-redis:${simbaVersion}")
 ```
 
 ### Optional-3: ZookeeperMutexContendService
@@ -144,12 +144,17 @@ create table simba_mutex
 public class ExampleScheduler extends AbstractScheduler implements SmartLifecycle {
 
     public ExampleScheduler(MutexContendServiceFactory contendServiceFactory) {
-        super("example-scheduler", ScheduleConfig.ofDelay(Duration.ofSeconds(0), Duration.ofSeconds(10)), contendServiceFactory);
+        super("example-scheduler", contendServiceFactory);
     }
 
     @Override
     protected String getWorker() {
         return "ExampleScheduler";
+    }
+
+    @Override
+    protected ScheduleConfig getConfig() {
+        return ScheduleConfig.delay(Duration.ofSeconds(0), Duration.ofSeconds(10));
     }
 
     @Override

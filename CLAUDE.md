@@ -28,7 +28,7 @@ Simba is a distributed mutex (distributed lock) library for the JVM, written in 
 | `simba-core` | Core interfaces: `MutexContender`, `MutexContendService`, `MutexContendServiceFactory`, `SimbaLocker`, `AbstractScheduler` |
 | `simba-jdbc` | JDBC/MySQL backend — polls `simba_mutex` table with optimistic locking |
 | `simba-spring-redis` | Redis backend — atomic Lua scripts (`mutex_acquire/guard/release.lua`) + pub/sub notifications |
-| `simba-zookeeper` | Zookeeper backend — wraps Curator `InterProcessMutex` |
+| `simba-zookeeper` | Zookeeper backend — wraps Curator `LeaderLatch` |
 | `simba-spring-boot-starter` | Spring Boot auto-config, conditional on `simba.{jdbc,redis,zookeeper}.enabled=true` |
 | `simba-test` | TCK — shared test base classes for backend implementations |
 | `simba-bom` / `simba-dependencies` | Dependency version management (no code) |

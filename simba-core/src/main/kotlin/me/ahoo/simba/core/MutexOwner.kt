@@ -47,7 +47,7 @@ open class MutexOwner(
         return ownerId == contenderId
     }
 
-    val currentAt: Long
+    open val currentAt: Long
         get() = System.currentTimeMillis()
     val isInTtl: Boolean
         get() = ttlAt > currentAt
