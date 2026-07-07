@@ -71,7 +71,7 @@ This two-phase design (TTL + transition) gives the incumbent owner a fair chance
 | **APIs** | `MutexContender` (callback), `SimbaLocker` (RAII), `AbstractScheduler` (scheduled) |
 | **Spring Boot** | Auto-config via `simba-spring-boot-starter` |
 | **License** | Apache 2.0 |
-| **Version** | 3.0.2 |
+| **Version** | 3.1.0 |
 
 ## Architecture Overview
 

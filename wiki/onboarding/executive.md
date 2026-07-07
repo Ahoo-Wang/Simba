@@ -318,7 +318,7 @@ If a team would otherwise spend 2-4 weeks building a custom leader election solu
 
 ### For Library Issues
 
-- **Pin the version**: Use a specific version (e.g., `3.0.2`) rather than a dynamic version range
+- **Pin the version**: Use a specific version (e.g., `3.1.0`) rather than a dynamic version range
 - **Monitor the GitHub repository**: Watch for security advisories and breaking changes
 - **Have a rollback plan**: Simba is a library, not a service -- rolling back means reverting a code deployment
 
@@ -418,7 +418,7 @@ Simba occupies a specific niche: it is a **focused library** (not a full platfor
 | **Vulnerability management** | Active Renovate bot for dependency updates |
 | **Code quality** | Detekt static analysis, JaCoCo coverage reporting |
 | **Testing** | TCK-driven with 5 mandatory test cases per backend |
-| **Versioning** | Semantic versioning (current: 3.0.2) |
+| **Versioning** | Semantic versioning (current: 3.1.0) |
 
 ## Summary
 
