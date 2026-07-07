@@ -12,3 +12,17 @@ gradle-app.setting
 
 # # Work around https://youtrack.jetbrains.com/issue/IDEA-116898
 # gradle/wrapper/gradle-wrapper.properties
+
+# Build outputs (per-module)
+**/build/
+**/out/
+
+# Local logs
+logs/
+
+# IDE metadata
+.idea/
+.kotlin/
+
+# OS
+.DS_Store
