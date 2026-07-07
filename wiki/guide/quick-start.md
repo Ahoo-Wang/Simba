@@ -22,20 +22,20 @@ Simba is organized as a multi-module library. You need the core module plus exac
 ::: code-group
 
 ```kotlin [JDBC/MySQL]
-implementation("me.ahoo.simba:simba-jdbc:3.0.2")
+implementation("me.ahoo.simba:simba-jdbc:3.1.0")
 ```
 
 ```kotlin [Redis]
-implementation("me.ahoo.simba:simba-spring-redis:3.0.2")
+implementation("me.ahoo.simba:simba-spring-redis:3.1.0")
 ```
 
 ```kotlin [Zookeeper]
-implementation("me.ahoo.simba:simba-zookeeper:3.0.2")
+implementation("me.ahoo.simba:simba-zookeeper:3.1.0")
 ```
 
 ```kotlin [Spring Boot Starter (add one backend)]
-implementation("me.ahoo.simba:simba-spring-boot-starter:3.0.2")
-implementation("me.ahoo.simba:simba-jdbc:3.0.2")  // or simba-spring-redis, or simba-zookeeper
+implementation("me.ahoo.simba:simba-spring-boot-starter:3.1.0")
+implementation("me.ahoo.simba:simba-jdbc:3.1.0")  // or simba-spring-redis, or simba-zookeeper
 ```
 
 :::
@@ -48,7 +48,7 @@ implementation("me.ahoo.simba:simba-jdbc:3.0.2")  // or simba-spring-redis, or s
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-jdbc</artifactId>
-    <version>3.0.2</version>
+    <version>3.1.0</version>
 </dependency>
 ```
 
@@ -56,7 +56,7 @@ implementation("me.ahoo.simba:simba-jdbc:3.0.2")  // or simba-spring-redis, or s
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-redis</artifactId>
-    <version>3.0.2</version>
+    <version>3.1.0</version>
 </dependency>
 ```
 
@@ -64,7 +64,7 @@ implementation("me.ahoo.simba:simba-jdbc:3.0.2")  // or simba-spring-redis, or s
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-zookeeper</artifactId>
-    <version>3.0.2</version>
+    <version>3.1.0</version>
 </dependency>
 ```
 
@@ -72,7 +72,7 @@ implementation("me.ahoo.simba:simba-jdbc:3.0.2")  // or simba-spring-redis, or s
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
-    <version>3.0.2</version>
+    <version>3.1.0</version>
 </dependency>
 ```
 

@@ -2116,7 +2116,7 @@ If a team would otherwise spend 2-4 weeks building a custom leader election solu
 
 ### For Library Issues
 
-- **Pin the version**: Use a specific version (e.g., `3.0.2`) rather than a dynamic version range
+- **Pin the version**: Use a specific version (e.g., `3.1.0`) rather than a dynamic version range
 - **Monitor the GitHub repository**: Watch for security advisories and breaking changes
 - **Have a rollback plan**: Simba is a library, not a service -- rolling back means reverting a code deployment
 
@@ -2216,7 +2216,7 @@ Simba occupies a specific niche: it is a **focused library** (not a full platfor
 | **Vulnerability management** | Active Renovate bot for dependency updates |
 | **Code quality** | Detekt static analysis, JaCoCo coverage reporting |
 | **Testing** | TCK-driven with 5 mandatory test cases per backend |
-| **Versioning** | Semantic versioning (current: 3.0.2) |
+| **Versioning** | Semantic versioning (current: 3.1.0) |
 
 ## Summary
 
@@ -4373,7 +4373,7 @@ This two-phase design (TTL + transition) gives the incumbent owner a fair chance
 | **APIs** | `MutexContender` (callback), `SimbaLocker` (RAII), `AbstractScheduler` (scheduled) |
 | **Spring Boot** | Auto-config via `simba-spring-boot-starter` |
 | **License** | Apache 2.0 |
-| **Version** | 3.0.2 |
+| **Version** | 3.1.0 |
 
 ## Architecture Overview
 
@@ -4538,20 +4538,20 @@ Simba is organized as a multi-module library. You need the core module plus exac
 ::: code-group
 
 ```kotlin [JDBC/MySQL]
-implementation("me.ahoo.simba:simba-jdbc:3.0.2")
+implementation("me.ahoo.simba:simba-jdbc:3.1.0")
 ```
 
 ```kotlin [Redis]
-implementation("me.ahoo.simba:simba-spring-redis:3.0.2")
+implementation("me.ahoo.simba:simba-spring-redis:3.1.0")
 ```
 
 ```kotlin [Zookeeper]
-implementation("me.ahoo.simba:simba-zookeeper:3.0.2")
+implementation("me.ahoo.simba:simba-zookeeper:3.1.0")
 ```
 
 ```kotlin [Spring Boot Starter (add one backend)]
-implementation("me.ahoo.simba:simba-spring-boot-starter:3.0.2")
-implementation("me.ahoo.simba:simba-jdbc:3.0.2")  // or simba-spring-redis, or simba-zookeeper
+implementation("me.ahoo.simba:simba-spring-boot-starter:3.1.0")
+implementation("me.ahoo.simba:simba-jdbc:3.1.0")  // or simba-spring-redis, or simba-zookeeper
 ```
 
 :::
@@ -4564,7 +4564,7 @@ implementation("me.ahoo.simba:simba-jdbc:3.0.2")  // or simba-spring-redis, or s
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-jdbc</artifactId>
-    <version>3.0.2</version>
+    <version>3.1.0</version>
 </dependency>
 ```
 
@@ -4572,7 +4572,7 @@ implementation("me.ahoo.simba:simba-jdbc:3.0.2")  // or simba-spring-redis, or s
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-redis</artifactId>
-    <version>3.0.2</version>
+    <version>3.1.0</version>
 </dependency>
 ```
 
@@ -4580,7 +4580,7 @@ implementation("me.ahoo.simba:simba-jdbc:3.0.2")  // or simba-spring-redis, or s
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-zookeeper</artifactId>
-    <version>3.0.2</version>
+    <version>3.1.0</version>
 </dependency>
 ```
 
@@ -4588,7 +4588,7 @@ implementation("me.ahoo.simba:simba-jdbc:3.0.2")  // or simba-spring-redis, or s
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
-    <version>3.0.2</version>
+    <version>3.1.0</version>
 </dependency>
 ```
 

@@ -71,7 +71,7 @@ interface MutexRetriever {
 | **API** | `MutexContender`（回调式）、`SimbaLocker`（RAII 式）、`AbstractScheduler`（调度式） |
 | **Spring Boot** | 通过 `simba-spring-boot-starter` 自动配置 |
 | **许可证** | Apache 2.0 |
-| **版本** | 3.0.2 |
+| **版本** | 3.1.0 |
 
 ## 架构概览
 
