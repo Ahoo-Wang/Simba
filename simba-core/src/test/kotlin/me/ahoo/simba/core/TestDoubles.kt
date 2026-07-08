@@ -96,11 +96,11 @@ class FakeMutexContendService(
     }
 }
 
-/**
- * [MutexContendServiceFactory] that returns a preconfigured service.
+/*
+ * No shared MutexContendServiceFactory is provided here because the classes that need one
+ * (SimbaLocker, AbstractScheduler) build their contend service *inside their own constructor*
+ * via the factory — so the factory must construct the service lazily, using the contender
+ * passed to createMutexContendService (which is the locker/scheduler itself). A pre-built
+ * factory cannot work because its service's contender would be fixed before the locker exists.
+ * See SimbaLockerTest.ControllableFactory and AbstractSchedulerTest.CapturingFactory.
  */
-class FakeContendServiceFactory(private val service: MutexContendService) : MutexContendServiceFactory {
-    override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
-        return service
-    }
-}

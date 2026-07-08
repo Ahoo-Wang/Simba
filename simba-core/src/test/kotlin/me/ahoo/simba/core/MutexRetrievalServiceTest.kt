@@ -51,7 +51,7 @@ class MutexRetrievalServiceTest {
         val service = FakeMutexContendService(contender)
         service.start()
 
-        service.publishOwner(MutexOwner("c1", 0, 100, 200))
+        service.publishOwner(MutexOwner("c1", 0, 100, 200)).join()
 
         assertThat(service.hasOwner(), equalTo(true))
         service.stop()
