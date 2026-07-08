@@ -109,6 +109,9 @@ class AbstractSchedulerTest {
             assertThat("work should run at least once", latch.await(2, TimeUnit.SECONDS))
             assertThat(counter.get(), greaterThanOrEqualTo(1))
         } finally {
+            // onReleased cancels the scheduled workFuture; NoopContendService.stop() alone
+            // would not, leaving the non-daemon scheduler thread running.
+            contender.onReleased(MutexState(MutexOwner(contender.contenderId, 0, 100, 200), MutexOwner.NONE))
             handle.scheduler.stop()
         }
     }
@@ -133,6 +136,7 @@ class AbstractSchedulerTest {
             assertThat("work should run at least once", latch.await(2, TimeUnit.SECONDS))
             assertThat(counter.get(), greaterThanOrEqualTo(1))
         } finally {
+            contender.onReleased(MutexState(MutexOwner(contender.contenderId, 0, 100, 200), MutexOwner.NONE))
             handle.scheduler.stop()
         }
     }
@@ -181,6 +185,7 @@ class AbstractSchedulerTest {
             assertThat("work should continue after a thrown exception", latch.await(2, TimeUnit.SECONDS))
             assertThat(counter.get(), greaterThanOrEqualTo(2))
         } finally {
+            contender.onReleased(MutexState(MutexOwner(contender.contenderId, 0, 100, 200), MutexOwner.NONE))
             handle.scheduler.stop()
         }
     }
