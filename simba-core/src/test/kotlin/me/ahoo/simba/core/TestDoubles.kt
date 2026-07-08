@@ -13,6 +13,7 @@
 
 package me.ahoo.simba.core
 
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
 
 /**
@@ -90,8 +91,8 @@ class FakeMutexContendService(
     }
 
     /** Exposes the protected [notifyOwner] for tests. */
-    fun publishOwner(newOwner: MutexOwner) {
-        notifyOwner(newOwner)
+    fun publishOwner(newOwner: MutexOwner): CompletableFuture<Void> {
+        return notifyOwner(newOwner)
     }
 }
 
