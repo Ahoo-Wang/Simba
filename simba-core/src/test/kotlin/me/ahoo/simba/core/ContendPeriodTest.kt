@@ -15,6 +15,8 @@ package me.ahoo.simba.core
 
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.equalTo
+import org.hamcrest.Matchers.greaterThanOrEqualTo
+import org.hamcrest.Matchers.lessThan
 import org.junit.jupiter.api.Test
 
 class ContendPeriodTest {
@@ -30,13 +32,91 @@ class ContendPeriodTest {
         assertThat(ContendPeriod.nextOwnerDelay(owner), equalTo(400))
     }
 
-    private class FixedClockOwner(
-        ownerId: String,
-        ttlAt: Long,
-        transitionAt: Long,
-        private val fixedCurrentAt: Long
-    ) : MutexOwner(ownerId = ownerId, acquiredAt = 0, ttlAt = ttlAt, transitionAt = transitionAt) {
-        override val currentAt: Long
-            get() = fixedCurrentAt
+    @Test
+    fun `ensureNextDelay clamps negative delay to zero`() {
+        val owner = FixedClockOwner(
+            ownerId = "owner",
+            ttlAt = 500,
+            transitionAt = 2000,
+            fixedCurrentAt = 1000
+        )
+        val period = ContendPeriod("owner")
+
+        assertThat(period.ensureNextDelay(owner), equalTo(0L))
+    }
+
+    @Test
+    fun `ensureNextDelay returns computed delay when positive`() {
+        val owner = FixedClockOwner(
+            ownerId = "owner",
+            ttlAt = 1400,
+            transitionAt = 2000,
+            fixedCurrentAt = 1000
+        )
+        val period = ContendPeriod("owner")
+
+        assertThat(period.ensureNextDelay(owner), equalTo(400L))
+    }
+
+    @Test
+    fun `nextDelay delegates to owner delay when contender is owner`() {
+        val owner = FixedClockOwner(
+            ownerId = "owner",
+            ttlAt = 1400,
+            transitionAt = 2000,
+            fixedCurrentAt = 1000
+        )
+        val period = ContendPeriod("owner")
+
+        assertThat(period.nextDelay(owner), equalTo(ContendPeriod.nextOwnerDelay(owner)))
+    }
+
+    @Test
+    fun `nextDelay delegates to contender delay when contender is not owner`() {
+        val owner = FixedClockOwner(
+            ownerId = "owner",
+            ttlAt = 1400,
+            transitionAt = 2000,
+            fixedCurrentAt = 1000
+        )
+        val period = ContendPeriod("other")
+
+        // The owner branch would return exactly 400; the contender branch returns a
+        // non-deterministic value in [800, 2000) (transitionAt - currentAt + random).
+        // Asserting that range confirms the contender dispatch was taken.
+        val delay = period.nextDelay(owner)
+
+        assertThat(delay, greaterThanOrEqualTo(800L))
+        assertThat(delay, lessThan(2000L))
+    }
+
+    @Test
+    fun `nextContenderDelay with zero transition stays in non-negative range`() {
+        val owner = FixedClockOwner(
+            ownerId = "owner",
+            ttlAt = 2000,
+            transitionAt = 2000,
+            fixedCurrentAt = 1000
+        )
+
+        val delay = ContendPeriod.nextContenderDelay(owner)
+
+        assertThat(delay, greaterThanOrEqualTo(1000L))
+        assertThat(delay, lessThan(2000L))
+    }
+
+    @Test
+    fun `nextContenderDelay with non-zero transition allows negative offset`() {
+        val owner = FixedClockOwner(
+            ownerId = "owner",
+            ttlAt = 1400,
+            transitionAt = 2000,
+            fixedCurrentAt = 1000
+        )
+
+        val delay = ContendPeriod.nextContenderDelay(owner)
+
+        assertThat(delay, greaterThanOrEqualTo(800L))
+        assertThat(delay, lessThan(2000L))
     }
 }
