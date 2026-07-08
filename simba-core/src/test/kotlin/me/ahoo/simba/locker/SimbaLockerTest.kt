@@ -37,8 +37,8 @@ import java.util.concurrent.TimeoutException
 private class ControllableContendService(
     contender: MutexContender
 ) : AbstractMutexContendService(contender, SameThreadExecutor) {
-    override fun startContend() {}
-    override fun stopContend() {}
+    override fun startContend() = Unit
+    override fun stopContend() = Unit
 
     fun markOwner(ownerId: String) {
         notifyOwner(MutexOwner(ownerId, 0, Long.MAX_VALUE, Long.MAX_VALUE))

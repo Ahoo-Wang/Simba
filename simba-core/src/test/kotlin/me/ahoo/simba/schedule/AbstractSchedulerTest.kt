@@ -42,8 +42,8 @@ private class CapturingFactory : MutexContendServiceFactory {
 
 private class NoopContendService(contender: MutexContender) :
     me.ahoo.simba.core.AbstractMutexContendService(contender, me.ahoo.simba.core.SameThreadExecutor) {
-    override fun startContend() {}
-    override fun stopContend() {}
+    override fun startContend() = Unit
+    override fun stopContend() = Unit
 }
 
 /**
