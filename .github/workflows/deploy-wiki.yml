@@ -33,7 +33,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
-          version: 11.13.0
+          version: 11.13.1
 
       - name: Setup Pages
         uses: actions/configure-pages@v6
