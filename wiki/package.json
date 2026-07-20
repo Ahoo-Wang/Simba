@@ -14,5 +14,10 @@
     "sitemap": "^9.0.1",
     "vitepress": "^1.6.4",
     "vitepress-mermaid-renderer": "^1.1.28"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
