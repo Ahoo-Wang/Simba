@@ -18,8 +18,7 @@ wiki/
 │   ├── config/          # VitePress configuration
 │   │   ├── index.ts     # Main config (locales, search)
 │   │   ├── en.ts        # English locale (nav, sidebar)
-│   │   ├── zh.ts        # Chinese locale (nav, sidebar)
-│   │   └── mermaid.ts   # Mermaid dark-mode theme
+│   │   └── zh.ts        # Chinese locale (nav, sidebar)
 │   └── theme/
 │       ├── index.ts     # Theme setup (mermaid-renderer)
 │       └── custom.css   # Custom CSS (brand colors, mermaid)
