@@ -14,7 +14,7 @@ flowchart LR
     subgraph tools["Unit Test Toolkit"]
         style tools fill:#161b22,stroke:#30363d,color:#e6edf3
         JUNIT["JUnit 5 (Jupiter)<br>Test runner & lifecycle"]
-        MOCKK["MockK 1.14.9<br>Kotlin-native mocking"]
+        MOCKK["MockK 1.14.11<br>Kotlin-native mocking"]
         FA["fluent-assert<br>.assert() extensions"]
     end
 
@@ -27,8 +27,8 @@ flowchart LR
 
 | 工具 | 版本 | 用途 |
 |---|---|---|
-| JUnit 5 (Jupiter) | Spring Boot 4.0.5 内置 | 测试运行器和生命周期 |
-| MockK | 1.14.9 | Kotlin 原生 mock |
+| JUnit 5 (Jupiter) | Spring Boot 4.1.0 内置 | 测试运行器和生命周期 |
+| MockK | 1.14.11 | Kotlin 原生 mock |
 | fluent-assert | `me.ahoo.test:fluent-assert-core` | 通过 `.assert()` 实现 Kotlin 惯用风格断言 |
 
 **重要提示**：始终使用 `import me.ahoo.test.asserts.assert` 而不是 AssertJ 的 `assertThat()`。fluent-assert 库提供了对 AssertJ 的空安全 Kotlin 扩展函数。

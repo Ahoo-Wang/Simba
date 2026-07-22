@@ -291,14 +291,14 @@ Simba 提供三个 API 层级，从低到高分别是：
 
 | 技术 | 版本 | 角色 |
 |---|---|---|
-| Kotlin | 2.3.20 | 实现语言 |
+| Kotlin | 2.4.0 | 实现语言 |
 | JVM | 17（工具链） | 运行时目标 |
 | Gradle | Kotlin DSL | 构建系统 |
-| Spring Boot | 4.0.5 | 自动配置（starter 模块） |
+| Spring Boot | 4.1.0 | 自动配置（starter 模块） |
 | Spring Data Redis | （由 Boot 管理） | Redis 后端客户端 |
 | Apache Curator | （由依赖管理） | Zookeeper 后端客户端 |
 | JUnit 5 (Jupiter) | （由依赖管理） | 测试框架 |
-| MockK | 1.14.9 | Kotlin 模拟框架 |
+| MockK | 1.14.11 | Kotlin 模拟框架 |
 | Detekt | 1.23.8 | 静态分析 |
 
 ## 相关页面

@@ -9,7 +9,7 @@ Welcome to Simba. This guide assumes you are proficient in Kotlin and/or Java an
 
 ### Kotlin Essentials for This Codebase
 
-Simba is written in Kotlin 2.3.20 targeting JVM 17. If you are coming from Java, here are the Kotlin patterns used heavily in this project.
+Simba is written in Kotlin 2.4.0 targeting JVM 17. If you are coming from Java, here are the Kotlin patterns used heavily in this project.
 
 #### Extension Functions and Properties
 
@@ -2979,14 +2979,14 @@ so the `work()` method only fires on the leader node.
 
 | Technology | Version | Role |
 |---|---|---|
-| Kotlin | 2.3.20 | Implementation language |
+| Kotlin | 2.4.0 | Implementation language |
 | JVM | 17 (toolchain) | Runtime target |
 | Gradle | Kotlin DSL | Build system |
-| Spring Boot | 4.0.5 | Auto-configuration (starter module) |
+| Spring Boot | 4.1.0 | Auto-configuration (starter module) |
 | Spring Data Redis | (managed by Boot) | Redis backend client |
 | Apache Curator | (managed) | Zookeeper backend client |
 | JUnit 5 (Jupiter) | (managed) | Test framework |
-| MockK | 1.14.9 | Kotlin mocking |
+| MockK | 1.14.11 | Kotlin mocking |
 | Detekt | 1.23.8 | Static analysis |
 
 ## Related Pages
@@ -8954,7 +8954,7 @@ flowchart LR
     subgraph tools["Unit Test Toolkit"]
         style tools fill:#161b22,stroke:#30363d,color:#e6edf3
         JUNIT["JUnit 5 (Jupiter)<br>Test runner & lifecycle"]
-        MOCKK["MockK 1.14.9<br>Kotlin-native mocking"]
+        MOCKK["MockK 1.14.11<br>Kotlin-native mocking"]
         FA["fluent-assert<br>.assert() extensions"]
     end
 
@@ -8967,8 +8967,8 @@ flowchart LR
 
 | Tool | Version | Purpose |
 |---|---|---|
-| JUnit 5 (Jupiter) | Bundled with Spring Boot 4.0.5 | Test runner and lifecycle |
-| MockK | 1.14.9 | Kotlin-native mocking |
+| JUnit 5 (Jupiter) | Bundled with Spring Boot 4.1.0 | Test runner and lifecycle |
+| MockK | 1.14.11 | Kotlin-native mocking |
 | fluent-assert | `me.ahoo.test:fluent-assert-core` | Kotlin-idiomatic assertions via `.assert()` |
 
 **Important**: Always use `import me.ahoo.test.asserts.assert` instead of AssertJ's `assertThat()`. The fluent-assert library provides null-safe Kotlin extension functions that wrap AssertJ.

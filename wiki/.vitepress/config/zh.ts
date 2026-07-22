@@ -11,9 +11,10 @@ export const zh: DefaultTheme.Config = {
       { text: '架构', link: '/zh/architecture/' },
       { text: 'API', link: '/zh/api/' },
       { text: '模块', link: '/zh/modules/' },
+      { text: '测试', link: '/zh/testing/' },
       { text: '入门指南', link: '/zh/onboarding/' },
       {
-        text: 'v3.0',
+        text: 'v3.1',
         items: [
           { text: '贡献指南', link: '/zh/guide/contributing' },
         ],
@@ -82,6 +83,7 @@ export const zh: DefaultTheme.Config = {
           text: '入门指南',
           collapsed: false,
           items: [
+            { text: '概览', link: '/zh/onboarding/' },
             { text: '贡献者指南', link: '/zh/onboarding/contributor' },
             { text: '高级工程师指南', link: '/zh/onboarding/staff-engineer' },
             { text: '管理层指南', link: '/zh/onboarding/executive' },
