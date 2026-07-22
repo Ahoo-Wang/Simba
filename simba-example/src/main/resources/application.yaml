@@ -1,14 +1,14 @@
 simba:
-  jdbc:
-    enabled: true
-#  redis:
+#  jdbc:
 #    enabled: true
+  redis:
+    enabled: true
 
 spring:
-  datasource:
-    url: jdbc:mysql://localhost:3306/simba_db
-    username: root
-    password: root
+#  datasource:
+#    url: jdbc:mysql://localhost:3306/simba_db
+#    username: root
+#    password: root
   task:
     scheduling:
       pool:
