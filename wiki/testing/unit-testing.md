@@ -14,7 +14,7 @@ flowchart LR
     subgraph tools["Unit Test Toolkit"]
         style tools fill:#161b22,stroke:#30363d,color:#e6edf3
         JUNIT["JUnit 5 (Jupiter)<br>Test runner & lifecycle"]
-        MOCKK["MockK 1.14.9<br>Kotlin-native mocking"]
+        MOCKK["MockK 1.14.11<br>Kotlin-native mocking"]
         FA["fluent-assert<br>.assert() extensions"]
     end
 
@@ -27,8 +27,8 @@ flowchart LR
 
 | Tool | Version | Purpose |
 |---|---|---|
-| JUnit 5 (Jupiter) | Bundled with Spring Boot 4.0.5 | Test runner and lifecycle |
-| MockK | 1.14.9 | Kotlin-native mocking |
+| JUnit 5 (Jupiter) | Bundled with Spring Boot 4.1.0 | Test runner and lifecycle |
+| MockK | 1.14.11 | Kotlin-native mocking |
 | fluent-assert | `me.ahoo.test:fluent-assert-core` | Kotlin-idiomatic assertions via `.assert()` |
 
 **Important**: Always use `import me.ahoo.test.asserts.assert` instead of AssertJ's `assertThat()`. The fluent-assert library provides null-safe Kotlin extension functions that wrap AssertJ.

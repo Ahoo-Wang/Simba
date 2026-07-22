@@ -13,7 +13,7 @@ Welcome to Simba. This guide assumes you are proficient in Kotlin and/or Java an
 
 ### Kotlin Essentials for This Codebase
 
-Simba is written in Kotlin 2.3.20 targeting JVM 17. If you are coming from Java, here are the Kotlin patterns used heavily in this project.
+Simba is written in Kotlin 2.4.0 targeting JVM 17. If you are coming from Java, here are the Kotlin patterns used heavily in this project.
 
 #### Extension Functions and Properties
 

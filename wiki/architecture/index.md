@@ -339,14 +339,14 @@ so the `work()` method only fires on the leader node.
 
 | Technology | Version | Role |
 |---|---|---|
-| Kotlin | 2.3.20 | Implementation language |
+| Kotlin | 2.4.0 | Implementation language |
 | JVM | 17 (toolchain) | Runtime target |
 | Gradle | Kotlin DSL | Build system |
-| Spring Boot | 4.0.5 | Auto-configuration (starter module) |
+| Spring Boot | 4.1.0 | Auto-configuration (starter module) |
 | Spring Data Redis | (managed by Boot) | Redis backend client |
 | Apache Curator | (managed) | Zookeeper backend client |
 | JUnit 5 (Jupiter) | (managed) | Test framework |
-| MockK | 1.14.9 | Kotlin mocking |
+| MockK | 1.14.11 | Kotlin mocking |
 | Detekt | 1.23.8 | Static analysis |
 
 ## Related Pages
