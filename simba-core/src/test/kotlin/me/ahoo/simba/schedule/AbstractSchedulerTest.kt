@@ -208,4 +208,43 @@ class AbstractSchedulerTest {
         handle.scheduler.stop()
         assertThat(handle.scheduler.running, equalTo(false))
     }
+
+    @Test
+    fun `stop terminates the work scheduler thread`() {
+        val latch = CountDownLatch(1)
+        val counter = AtomicInteger(0)
+        val handle = newScheduler(
+            mutex = "m",
+            config = ScheduleConfig.rate(Duration.ofMillis(0), Duration.ofMillis(50)),
+            worker = "shutdown-worker",
+            latch = latch,
+            counter = counter
+        )
+
+        handle.scheduler.start()
+        // drive acquisition directly so the work executor thread is created and scheduled
+        handle.contender.onAcquired(
+            MutexState(MutexOwner.NONE, MutexOwner(handle.contender.contenderId, 0, 100, 200))
+        )
+        assertThat("work should run at least once", latch.await(2, TimeUnit.SECONDS))
+
+        handle.scheduler.stop()
+
+        assertThat(
+            "work scheduler thread should terminate after stop",
+            awaitThreadGone("shutdown-worker-0", 2, TimeUnit.SECONDS),
+            equalTo(true)
+        )
+    }
+
+    private fun awaitThreadGone(name: String, timeout: Long, unit: TimeUnit): Boolean {
+        val deadline = System.nanoTime() + unit.toNanos(timeout)
+        while (System.nanoTime() < deadline) {
+            if (Thread.getAllStackTraces().keys.none { it.name == name }) {
+                return true
+            }
+            Thread.sleep(20)
+        }
+        return Thread.getAllStackTraces().keys.none { it.name == name }
+    }
 }

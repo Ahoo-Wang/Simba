@@ -35,8 +35,9 @@ abstract class AbstractScheduler(
         private val log = LoggerFactory.getLogger(AbstractScheduler::class.java)
     }
 
+    private val workContender = WorkContender(mutex)
     private val contendService: MutexContendService =
-        contendServiceFactory.createMutexContendService(WorkContender(mutex))
+        contendServiceFactory.createMutexContendService(workContender)
 
     protected abstract val config: ScheduleConfig
     protected abstract val worker: String
@@ -46,19 +47,23 @@ abstract class AbstractScheduler(
     }
 
     fun stop() {
-        contendService.stop()
+        try {
+            contendService.stop()
+        } finally {
+            workContender.shutdown()
+        }
     }
 
     val running: Boolean
         get() = contendService.running
 
     inner class WorkContender(mutex: String) : AbstractMutexContender(mutex) {
-        private val scheduledThreadPoolExecutor: ScheduledThreadPoolExecutor = ScheduledThreadPoolExecutor(
-            1,
-            defaultFactory(
-                worker
-            )
-        )
+        /**
+         * Created lazily on first acquisition and shut down by [shutdown] on scheduler stop,
+         * so a stopped (or never-started) scheduler holds no threads; a restart recreates it.
+         */
+        @Volatile
+        private var scheduledThreadPoolExecutor: ScheduledThreadPoolExecutor? = null
 
         @Volatile
         private var workFuture: ScheduledFuture<*>? = null
@@ -68,15 +73,16 @@ abstract class AbstractScheduler(
             if (workFuture == null || workFuture!!.isDone) {
                 val initialDelay = config.initialDelay.toMillis()
                 val period = config.period.toMillis()
+                val executor = ensureExecutor()
                 workFuture = if (ScheduleConfig.Strategy.FIXED_RATE == config.strategy) {
-                    scheduledThreadPoolExecutor.scheduleAtFixedRate(
+                    executor.scheduleAtFixedRate(
                         this::safeWork,
                         initialDelay,
                         period,
                         TimeUnit.MILLISECONDS
                     )
                 } else {
-                    scheduledThreadPoolExecutor.scheduleWithFixedDelay(
+                    executor.scheduleWithFixedDelay(
                         this::safeWork,
                         initialDelay,
                         period,
@@ -89,6 +95,17 @@ abstract class AbstractScheduler(
         override fun onReleased(mutexState: MutexState) {
             super.onReleased(mutexState)
             workFuture?.cancel(true)
+        }
+
+        private fun ensureExecutor(): ScheduledThreadPoolExecutor {
+            return scheduledThreadPoolExecutor
+                ?: ScheduledThreadPoolExecutor(1, defaultFactory(worker))
+                    .also { scheduledThreadPoolExecutor = it }
+        }
+
+        fun shutdown() {
+            scheduledThreadPoolExecutor?.shutdown()
+            scheduledThreadPoolExecutor = null
         }
 
         @Suppress("TooGenericExceptionCaught")
