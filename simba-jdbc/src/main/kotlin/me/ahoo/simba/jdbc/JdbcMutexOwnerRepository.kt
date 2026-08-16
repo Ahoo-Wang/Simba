@@ -209,11 +209,11 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
                     mutexOwner
                 } catch (throwable: Throwable) {
                     connection.rollback()
-                    throw SimbaException(throwable.message!!, throwable)
+                    throw SimbaException(throwable)
                 }
             }
         } catch (sqlException: SQLException) {
-            throw SimbaException(sqlException.message!!, sqlException)
+            throw SimbaException(sqlException)
         }
     }
 
