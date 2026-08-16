@@ -57,6 +57,17 @@ class JdbcMutexContendService(
         log.debug {
             "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] - nextDelay:[$nextDelay]."
         }
+        if (!status.isActive) {
+            /*
+             * A contend task can still be in flight when stop() shuts the executor down
+             * (JDBC calls are not interruptible); scheduling on from that path would throw
+             * RejectedExecutionException that nobody observes.
+             */
+            log.warn {
+                "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] is not active[$status]."
+            }
+            return
+        }
         contendScheduledFuture = executorService!!.schedule({ safeHandleContend() }, nextDelay, TimeUnit.MILLISECONDS)
     }
 
