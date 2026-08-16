@@ -51,7 +51,7 @@ class SimbaSpringRedisAutoConfiguration(private val redisProperties: RedisProper
         return container
     }
 
-    @Bean
+    @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
     @ConditionalOnBean(StringRedisTemplate::class)
     fun redisMutexContendServiceFactory(
