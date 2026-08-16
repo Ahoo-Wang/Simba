@@ -22,12 +22,14 @@ import me.ahoo.simba.core.MutexState
 import me.ahoo.simba.core.SameThreadExecutor
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.containsString
+import org.hamcrest.Matchers.equalTo
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import kotlin.concurrent.thread
 
 /**
  * Controllable contend service bound to the contender passed by the factory.
@@ -137,6 +139,32 @@ class SimbaLockerTest {
         // Call onAcquired directly without a prior acquire() — OWNER[this] is null,
         // LockSupport.unpark(null) is a safe no-op.
         locker.onAcquired(MutexState(MutexOwner.NONE, MutexOwner(locker.contenderId, 0, 100, 200)))
+    }
+
+    @Test
+    fun `acquire does not return without ownership when interrupted while parked`() {
+        val factory = ControllableFactory()
+        val locker = SimbaLocker("m", factory)
+        val returned = CountDownLatch(1)
+
+        val ownerThread = thread(isDaemon = true) {
+            locker.acquire()
+            returned.countDown()
+        }
+
+        // acquire() parks waiting for ownership; the service never grants it
+        awaitThreadState(ownerThread, Thread.State.WAITING, 2, TimeUnit.SECONDS)
+        ownerThread.interrupt()
+
+        assertThat(
+            "acquire() returned without ownership after interrupt",
+            returned.await(500, TimeUnit.MILLISECONDS),
+            equalTo(false)
+        )
+
+        // release the parked thread: grant ownership so acquire() returns and the thread ends
+        factory.service!!.markOwner(locker.contenderId)
+        assertThat("acquire() should return once ownership is granted", returned.await(2, TimeUnit.SECONDS))
     }
 
     @Test
