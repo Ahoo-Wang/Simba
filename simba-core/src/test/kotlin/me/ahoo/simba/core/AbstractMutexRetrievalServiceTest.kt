@@ -148,4 +148,27 @@ class AbstractMutexRetrievalServiceTest {
         assertThat(service.mutexState, equalTo(MutexState.NONE))
         service.stop()
     }
+
+    @Test
+    fun `concurrent duplicate owner notifications dispatch onAcquired at most once`() {
+        // The read->write window inside safeNotifyOwner is nanoseconds wide, so a single
+        // barrier-paired pair rarely interleaves; thousands of attempts make hitting the
+        // window a statistical certainty before the fix, while the fix passes deterministically.
+        for (attempt in 0 until 5000) {
+            val contender = ConcurrentCountingContender("m", "c1-$attempt")
+            val service = FakeMutexContendService(contender, BarrierPairExecutor())
+            val selfOwner = MutexOwner(contender.contenderId, 0, Long.MAX_VALUE, Long.MAX_VALUE)
+
+            val first = service.publishOwner(selfOwner)
+            val second = service.publishOwner(selfOwner)
+            first.join()
+            second.join()
+
+            assertThat(
+                "attempt [$attempt]: duplicate onAcquired dispatched for a single NONE->self transition",
+                contender.acquiredCount.get(),
+                equalTo(1)
+            )
+        }
+    }
 }

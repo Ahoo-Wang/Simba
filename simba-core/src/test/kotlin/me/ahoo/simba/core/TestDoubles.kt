@@ -14,7 +14,11 @@
 package me.ahoo.simba.core
 
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.concurrent.thread
 
 /**
  * [MutexOwner] with a fixed [currentAt] for deterministic time-based tests.
@@ -63,6 +67,40 @@ object SameThreadExecutor : Executor {
     override fun execute(command: Runnable) {
         command.run()
     }
+}
+
+/**
+ * Executor that pairs two submitted tasks at a barrier and then runs each on its
+ * own thread, so both notifications enter [AbstractMutexRetrievalService.safeNotifyOwner]
+ * at the same instant — a deterministic stand-in for a multi-threaded handleExecutor
+ * (the production default is ForkJoinPool.commonPool).
+ */
+class BarrierPairExecutor : Executor {
+    private val barrier = CyclicBarrier(2)
+
+    override fun execute(command: Runnable) {
+        thread(isDaemon = true) {
+            runCatching { barrier.await(10, TimeUnit.SECONDS) }
+            command.run()
+        }
+    }
+}
+
+/**
+ * [MutexContender] that counts [onAcquired] calls atomically.
+ * Unlike [FakeMutexContender] this is safe under concurrent notification.
+ */
+class ConcurrentCountingContender(
+    override val mutex: String,
+    override val contenderId: String
+) : MutexContender {
+    val acquiredCount = AtomicInteger()
+
+    override fun onAcquired(mutexState: MutexState) {
+        acquiredCount.incrementAndGet()
+    }
+
+    override fun onReleased(mutexState: MutexState) = Unit
 }
 
 /**

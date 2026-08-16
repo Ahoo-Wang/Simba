@@ -44,6 +44,13 @@ abstract class AbstractMutexRetrievalService protected constructor(
     override var mutexState: MutexState = MutexState.NONE
         protected set
 
+    /**
+     * Serializes the read-before/write/notify sequence in [safeNotifyOwner]:
+     * without it, two concurrent notifications can both observe a stale `before`
+     * owner and dispatch duplicate owner-change events for one transition.
+     */
+    private val notifyLock = Any()
+
     protected fun resetOwner() {
         mutexState = MutexState.NONE
     }
@@ -78,9 +85,11 @@ abstract class AbstractMutexRetrievalService protected constructor(
              * Concurrency issues.
              * Order of assignment is very important.
              */
-            val newState = MutexState(afterOwner, newOwner)
-            mutexState = newState
-            retriever.notifyOwner(newState)
+            synchronized(notifyLock) {
+                val newState = MutexState(afterOwner, newOwner)
+                mutexState = newState
+                retriever.notifyOwner(newState)
+            }
         } catch (throwable: Throwable) {
             log.error(throwable) {
                 "safeNotifyOwner error - mutex:[$retriever] - newOwner:[$newOwner]"
