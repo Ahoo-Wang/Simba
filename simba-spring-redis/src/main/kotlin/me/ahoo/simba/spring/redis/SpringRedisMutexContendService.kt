@@ -78,6 +78,9 @@ class SpringRedisMutexContendService(
     private val listenTopics: List<ChannelTopic> = listOf(ChannelTopic(mutexChannel), ChannelTopic(contenderChannel))
     private val contendPeriod: ContendPeriod = ContendPeriod(contenderId)
     private val mutexMessageListener: MutexMessageListener = MutexMessageListener()
+    private val lifecycleLock = Any()
+    private var lifecycleGeneration = 0L
+    private var activeGeneration: Long? = null
 
     /**
      * Written by the scheduling executor thread and cancelled by the stopping thread;
@@ -95,12 +98,27 @@ class SpringRedisMutexContendService(
      * 3. 开始守护
      *
      */
+    @Suppress("TooGenericExceptionCaught")
     override fun startContend() {
         log.info {
             "startContend - mutex:[$mutex] contenderId:[$contenderId]."
         }
-        startSubscribe()
-        nextSchedule(0)
+        synchronized(lifecycleLock) {
+            startSubscribe()
+            val generation = ++lifecycleGeneration
+            activeGeneration = generation
+            try {
+                nextSchedule(0, generation)
+            } catch (error: Throwable) {
+                activeGeneration = null
+                try {
+                    stopSubscribe()
+                } catch (cleanupError: Throwable) {
+                    error.addSuppressed(cleanupError)
+                }
+                throw error
+            }
+        }
     }
 
     /**
@@ -110,50 +128,88 @@ class SpringRedisMutexContendService(
         listenerContainer.addMessageListener(mutexMessageListener, listenTopics)
     }
 
-    private fun nextSchedule(nextDelay: Long) {
-        log.debug {
-            "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] status:[$status] delay:[${nextDelay}ms]."
-        }
+    private fun nextSchedule(nextDelay: Long, generation: Long) {
+        synchronized(lifecycleLock) {
+            log.debug {
+                "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] status:[$status] delay:[${nextDelay}ms]."
+            }
 
-        if (!status.isActive) {
-            log.warn {
-                "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] is not active[$status]."
+            if (!status.isActive || generation != activeGeneration) {
+                log.warn {
+                    "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] is not active[$status]."
+                }
+                return
             }
-            return
+            scheduleFuture = scheduledExecutorService.schedule<MutexOwner>({
+                safeContend(generation)
+            }, nextDelay, TimeUnit.MILLISECONDS)
         }
-        scheduleFuture = scheduledExecutorService.schedule<MutexOwner>({
-            if (isOwner) {
-                return@schedule guard()
-            }
-            acquire()
-        }, nextDelay, TimeUnit.MILLISECONDS)
     }
 
     @Suppress("TooGenericExceptionCaught")
-    private fun notifyOwnerAndScheduleNext(resultStr: String): MutexOwner {
+    private fun safeContend(generation: Long): MutexOwner {
         return try {
-            val result: AcquireResult = AcquireResult.of(resultStr)
-            val mutexOwner = newMutexOwner(result)
-            notifyOwner(mutexOwner)
-            val nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
-            nextSchedule(nextDelay)
-            mutexOwner
+            if (isOwner) {
+                guard(generation)
+            } else {
+                acquire(generation)
+            }
         } catch (throwable: Throwable) {
-            log.error(throwable) { "notifyOwnerAndScheduleNext - mutex:[$mutex] contenderId:[$contenderId] error." }
-            nextSchedule(ttl.toMillis())
+            log.error(throwable) {
+                "safeContend - mutex:[$mutex] contenderId:[$contenderId] error."
+            }
+            revokeOwnerOnFailure(generation)
+            nextSchedule(ttl.toMillis(), generation)
             MutexOwner.NONE
         }
     }
 
-    private fun guard(): MutexOwner {
+    private fun revokeOwnerOnFailure(generation: Long) {
+        synchronized(lifecycleLock) {
+            if (status.isActive && generation == activeGeneration && isOwner) {
+                notifyOwner(MutexOwner.NONE)
+            }
+        }
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun notifyOwnerAndScheduleNext(resultStr: String, generation: Long): MutexOwner {
+        return try {
+            val result: AcquireResult = AcquireResult.of(resultStr)
+            val mutexOwner = newMutexOwner(result)
+            if (!notifyOwnerIfActive(generation, mutexOwner)) {
+                return MutexOwner.NONE
+            }
+            val nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
+            nextSchedule(nextDelay, generation)
+            mutexOwner
+        } catch (throwable: Throwable) {
+            log.error(throwable) { "notifyOwnerAndScheduleNext - mutex:[$mutex] contenderId:[$contenderId] error." }
+            revokeOwnerOnFailure(generation)
+            nextSchedule(ttl.toMillis(), generation)
+            MutexOwner.NONE
+        }
+    }
+
+    private fun notifyOwnerIfActive(generation: Long, mutexOwner: MutexOwner): Boolean {
+        return synchronized(lifecycleLock) {
+            if (!status.isActive || generation != activeGeneration) {
+                return@synchronized false
+            }
+            notifyOwner(mutexOwner)
+            true
+        }
+    }
+
+    private fun guard(generation: Long): MutexOwner {
         val message = redisTemplate.execute(SCRIPT_GUARD, keys, contenderId, ttl.toMillis().toString())
         log.debug {
             "guard - mutex:[$mutex] contenderId:[$contenderId] - message:[$message]."
         }
-        return notifyOwnerAndScheduleNext(message)
+        return notifyOwnerAndScheduleNext(message, generation)
     }
 
-    private fun acquire(): MutexOwner {
+    private fun acquire(generation: Long): MutexOwner {
         val message = redisTemplate.execute(
             SCRIPT_ACQUIRE,
             keys,
@@ -163,7 +219,7 @@ class SpringRedisMutexContendService(
         log.debug {
             "acquire - mutex:[$mutex] contenderId:[$contenderId] - message:[$message]."
         }
-        return notifyOwnerAndScheduleNext(message)
+        return notifyOwnerAndScheduleNext(message, generation)
     }
 
     private fun newMutexOwner(result: AcquireResult): MutexOwner {
@@ -189,9 +245,12 @@ class SpringRedisMutexContendService(
         log.info {
             "stopContend - mutex:[$mutex] contenderId:[$contenderId]."
         }
-        stopSubscribe()
-        disposeSchedule()
-        release()
+        synchronized(lifecycleLock) {
+            activeGeneration = null
+            stopSubscribe()
+            disposeSchedule()
+            release()
+        }
     }
 
     /**
@@ -240,7 +299,10 @@ class SpringRedisMutexContendService(
             when (ownerEvent.event) {
                 OwnerEvent.EVENT_RELEASED -> {
                     notifyOwner(MutexOwner.NONE)
-                    acquire()
+                    val generation = synchronized(lifecycleLock) { activeGeneration }
+                    if (generation != null) {
+                        acquire(generation)
+                    }
                 }
 
                 OwnerEvent.EVENT_ACQUIRED -> {
