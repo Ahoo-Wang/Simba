@@ -19,6 +19,10 @@ me.ahoo.simba.spring.boot.starter.redis.SimbaSpringRedisAutoConfiguration
 me.ahoo.simba.spring.boot.starter.zookeeper.SimbaZookeeperAutoConfiguration
 ```
 
+### Backend Selection Order
+
+Enable exactly **one** backend per application. If several backends end up on the classpath at once, the auto-configurations are applied in a deterministic order — **Redis, then JDBC, then Zookeeper** — and the first backend whose required beans are present registers its `MutexContendServiceFactory`; the others back off through `@ConditionalOnMissingBean(MutexContendServiceFactory.class)`.
+
 ## Configuration Flow
 
 ```mermaid
@@ -373,6 +377,8 @@ simba:
   zookeeper:
     enabled: false
 ```
+
+Explicitly enabling a single backend (as above) is the recommended setup. When multiple backends are enabled simultaneously, the [backend selection order](#backend-selection-order) applies (Redis > JDBC > Zookeeper) and only the first available one is activated.
 
 ## See Also
 

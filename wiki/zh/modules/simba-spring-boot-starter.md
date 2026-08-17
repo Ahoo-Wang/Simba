@@ -19,6 +19,10 @@ me.ahoo.simba.spring.boot.starter.redis.SimbaSpringRedisAutoConfiguration
 me.ahoo.simba.spring.boot.starter.zookeeper.SimbaZookeeperAutoConfiguration
 ```
 
+### 后端选择顺序
+
+每个应用应只启用**一个**后端。若多个后端同时出现在 classpath 上，自动配置按确定性顺序应用——**Redis、JDBC、Zookeeper**——第一个所需 bean 齐备的后端注册其 `MutexContendServiceFactory`，其余后端通过 `@ConditionalOnMissingBean(MutexContendServiceFactory.class)` 退避。
+
 ## 配置流程
 
 ```mermaid
@@ -373,6 +377,8 @@ simba:
   zookeeper:
     enabled: false
 ```
+
+如上显式启用单一后端是推荐用法。多个后端同时启用时，按[后端选择顺序](#后端选择顺序)（Redis > JDBC > Zookeeper）仅激活第一个可用后端。
 
 ## 另请参阅
 
