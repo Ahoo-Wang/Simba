@@ -23,6 +23,7 @@ import me.ahoo.simba.core.SameThreadExecutor
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.containsString
 import org.hamcrest.Matchers.equalTo
+import org.hamcrest.Matchers.sameInstance
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.time.Duration
@@ -39,8 +40,18 @@ import kotlin.concurrent.thread
 private class ControllableContendService(
     contender: MutexContender
 ) : AbstractMutexContendService(contender, SameThreadExecutor) {
-    override fun startContend() = Unit
-    override fun stopContend() = Unit
+    var startFailure: Throwable? = null
+    var stopFailure: Throwable? = null
+    var stopInterrupted: Boolean? = null
+
+    override fun startContend() {
+        startFailure?.let { throw it }
+    }
+
+    override fun stopContend() {
+        stopInterrupted = Thread.currentThread().isInterrupted
+        stopFailure?.let { throw it }
+    }
 
     fun markOwner(ownerId: String) {
         notifyOwner(MutexOwner(ownerId, 0, Long.MAX_VALUE, Long.MAX_VALUE))
@@ -73,6 +84,70 @@ class SimbaLockerTest {
         }
         assertThat(error.message, containsString("Could not acquire"))
         assertThat(error.message, containsString("within timeout of 50ms"))
+    }
+
+    @Test
+    fun `timed out acquire cleans up so same locker can retry`() {
+        val factory = ControllableFactory()
+        val locker = SimbaLocker("m", factory)
+
+        assertThrows<TimeoutException> {
+            locker.acquire(Duration.ofMillis(1))
+        }
+
+        assertThrows<TimeoutException> {
+            locker.acquire(Duration.ofMillis(1))
+        }
+    }
+
+    @Test
+    fun `start failure clears local owner so acquire can retry`() {
+        val factory = ControllableFactory()
+        val locker = SimbaLocker("m", factory)
+        val failure = IllegalStateException("boom")
+        factory.service!!.startFailure = failure
+
+        val error = assertThrows<IllegalStateException> {
+            locker.acquire()
+        }
+        assertThat(error, equalTo(failure))
+
+        factory.service!!.startFailure = null
+        assertThrows<TimeoutException> {
+            locker.acquire(Duration.ofMillis(1))
+        }
+    }
+
+    @Test
+    fun `timeout preserves acquisition error when cleanup fails`() {
+        val factory = ControllableFactory()
+        val locker = SimbaLocker("m", factory)
+        val cleanupFailure = IllegalStateException("cleanup-boom")
+        factory.service!!.stopFailure = cleanupFailure
+
+        val error = assertThrows<TimeoutException> {
+            locker.acquire(Duration.ofMillis(1))
+        }
+
+        assertThat(error.suppressed.single(), sameInstance(cleanupFailure))
+    }
+
+    @Test
+    fun `interrupted timeout cleans up before restoring interrupt status`() {
+        val factory = ControllableFactory()
+        val locker = SimbaLocker("m", factory)
+        Thread.currentThread().interrupt()
+
+        try {
+            assertThrows<TimeoutException> {
+                locker.acquire(Duration.ZERO)
+            }
+
+            assertThat(factory.service!!.stopInterrupted, equalTo(false))
+            assertThat(Thread.currentThread().isInterrupted, equalTo(true))
+        } finally {
+            Thread.interrupted()
+        }
     }
 
     @Test
@@ -168,12 +243,12 @@ class SimbaLockerTest {
     }
 
     @Test
-    fun `close throws IllegalStateException when contend service not running`() {
+    fun `close is idempotent when contend service is not running`() {
         val factory = ControllableFactory()
         val locker = SimbaLocker("m", factory)
 
-        val error = assertThrows<IllegalStateException> { locker.close() }
-        assertThat(error.message, containsString("Cannot stop mutex:[m]"))
+        locker.close()
+        locker.close()
     }
 
     /**
