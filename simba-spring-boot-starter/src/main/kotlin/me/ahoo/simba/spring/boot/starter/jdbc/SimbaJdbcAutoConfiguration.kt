@@ -17,8 +17,10 @@ import me.ahoo.simba.jdbc.JdbcMutexContendServiceFactory
 import me.ahoo.simba.jdbc.JdbcMutexOwnerRepository
 import me.ahoo.simba.jdbc.MutexOwnerRepository
 import org.springframework.boot.autoconfigure.AutoConfiguration
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
+import org.springframework.boot.autoconfigure.condition.ConditionalOnSingleCandidate
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import java.util.concurrent.ForkJoinPool
@@ -38,12 +40,14 @@ import javax.sql.DataSource
 class SimbaJdbcAutoConfiguration(private val jdbcProperties: JdbcProperties) {
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnSingleCandidate(DataSource::class)
     fun mutexOwnerRepository(dataSource: DataSource): MutexOwnerRepository {
         return JdbcMutexOwnerRepository(dataSource)
     }
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnBean(MutexOwnerRepository::class)
     fun jdbcMutexContendServiceFactory(mutexOwnerRepository: MutexOwnerRepository): MutexContendServiceFactory {
         return JdbcMutexContendServiceFactory(
             mutexOwnerRepository = mutexOwnerRepository,
