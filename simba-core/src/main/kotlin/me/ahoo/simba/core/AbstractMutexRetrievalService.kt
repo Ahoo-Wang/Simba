@@ -12,10 +12,12 @@
  */
 package me.ahoo.simba.core
 
+import com.google.common.util.concurrent.MoreExecutors
 import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.core.MutexRetrievalService.Status
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 
 /**
@@ -50,6 +52,8 @@ abstract class AbstractMutexRetrievalService protected constructor(
      * owner and dispatch duplicate owner-change events for one transition.
      */
     private val notifyLock = Any()
+    private val notifyExecutor = MoreExecutors.newSequentialExecutor(handleExecutor)
+    private val lifecycleGeneration = AtomicLong()
 
     protected fun resetOwner() {
         mutexState = MutexState.NONE
@@ -60,8 +64,11 @@ abstract class AbstractMutexRetrievalService protected constructor(
         log.info {
             "start - mutex:[${retriever.mutex}] - status:[$status]"
         }
-        check(STATUS.compareAndSet(this, Status.INITIAL, Status.STARTING)) {
-            "Cannot start from state [$status]. Expected: [${Status.INITIAL}]"
+        synchronized(notifyLock) {
+            check(STATUS.compareAndSet(this, Status.INITIAL, Status.STARTING)) {
+                "Cannot start from state [$status]. Expected: [${Status.INITIAL}]"
+            }
+            lifecycleGeneration.incrementAndGet()
         }
         try {
             startRetrieval()
@@ -76,24 +83,30 @@ abstract class AbstractMutexRetrievalService protected constructor(
     protected abstract fun stopRetrieval()
 
     protected fun notifyOwner(newOwner: MutexOwner): CompletableFuture<Void> {
-        return CompletableFuture.runAsync({ safeNotifyOwner(newOwner) }, handleExecutor)
+        val generation = lifecycleGeneration.get()
+        return CompletableFuture.runAsync({ safeNotifyOwner(newOwner, generation) }, notifyExecutor)
     }
 
     @Suppress("TooGenericExceptionCaught")
-    private fun safeNotifyOwner(newOwner: MutexOwner) {
+    private fun safeNotifyOwner(newOwner: MutexOwner, generation: Long) {
         try {
             /*
              * Concurrency issues.
              * Order of assignment is very important.
              */
             synchronized(notifyLock) {
+                if (generation != lifecycleGeneration.get()) {
+                    log.warn {
+                        "safeNotifyOwner - ignore - mutex:[${retriever.mutex}] - newOwner:[$newOwner] belongs to a previous lifecycle."
+                    }
+                    return
+                }
                 /*
-                 * A notification submitted while active may execute after stop() completed
-                 * (out-of-order dispatch on a multi-threaded handleExecutor). Once INITIAL,
-                 * only a release notification (NONE) may still be applied — the stop-release
-                 * contract depends on it — while any claim of ownership is stale and dropped.
+                 * A notification submitted while active may execute after stop() completes.
+                 * Once inactive, only a release notification (NONE) may still be applied —
+                 * the stop-release contract depends on it — while any ownership claim is stale.
                  */
-                if (Status.INITIAL == status && newOwner.ownerId.isNotBlank()) {
+                if (!status.isActive && newOwner.ownerId.isNotBlank()) {
                     log.warn {
                         "safeNotifyOwner - ignore - mutex:[${retriever.mutex}] - newOwner:[$newOwner] is not active[$status]."
                     }
@@ -114,12 +127,15 @@ abstract class AbstractMutexRetrievalService protected constructor(
         log.info {
             "stop - mutex:[${retriever.mutex}] - status:[$status]"
         }
-        check(STATUS.compareAndSet(this, Status.RUNNING, Status.STOPPING)) {
-            "Cannot stop mutex:[${retriever.mutex}] from state:[$status]. Expected:[${Status.RUNNING}]"
+        synchronized(notifyLock) {
+            check(STATUS.compareAndSet(this, Status.RUNNING, Status.STOPPING)) {
+                "Cannot stop mutex:[${retriever.mutex}] from state:[$status]. Expected:[${Status.RUNNING}]"
+            }
         }
         try {
             stopRetrieval()
         } finally {
+            safeNotifyOwner(MutexOwner.NONE, lifecycleGeneration.get())
             STATUS.set(this, Status.INITIAL)
         }
     }
