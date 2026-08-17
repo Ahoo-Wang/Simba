@@ -13,6 +13,7 @@
 package me.ahoo.simba.jdbc
 
 import me.ahoo.simba.core.MutexOwner
+import java.util.concurrent.TimeUnit
 
 /**
  * 互斥体实体.
@@ -36,11 +37,19 @@ class MutexOwnerEntity(val mutex: String, ownerId: String, acquiredAt: Long, ttl
      * 当前Db时间戳 (统一使用Db时间作为统一时间，防止全局时间不一致).
      * [java.util.concurrent.TimeUnit.MILLISECONDS]
      */
+    @Volatile
+    private var currentDbAtNanos: Long = System.nanoTime()
+
+    @Volatile
     var currentDbAt: Long = 0
+        set(value) {
+            currentDbAtNanos = System.nanoTime()
+            field = value
+        }
 
     override val currentAt: Long
         get() = if (currentDbAt > 0) {
-            currentDbAt
+            currentDbAt + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - currentDbAtNanos)
         } else {
             super.currentAt
         }
