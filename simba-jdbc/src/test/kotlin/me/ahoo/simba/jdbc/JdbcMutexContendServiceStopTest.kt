@@ -127,6 +127,46 @@ class JdbcMutexContendServiceStopTest {
     }
 
     @Test
+    fun `stale failure does not revoke restarted lifecycle ownership`() {
+        val repository = BlockingMutexOwnerRepository()
+        repository.firstFailure = IllegalStateException("stale database failure")
+        val acquired = CountDownLatch(1)
+        val released = AtomicInteger()
+        val contender = object : AbstractMutexContender("m") {
+            override fun onAcquired(mutexState: MutexState) {
+                acquired.countDown()
+            }
+
+            override fun onReleased(mutexState: MutexState) {
+                released.incrementAndGet()
+            }
+        }
+        val contendService = JdbcMutexContendService(
+            contender,
+            Executor { it.run() },
+            repository,
+            Duration.ZERO,
+            Duration.ofSeconds(10),
+            Duration.ofSeconds(6)
+        )
+
+        contendService.start()
+        assertThat("first acquire should be in flight", repository.firstInvoked.await(2, TimeUnit.SECONDS))
+        val oldExecutor = executorOf(contendService)
+
+        contendService.stop()
+        contendService.start()
+        assertThat("restarted lifecycle should acquire", acquired.await(2, TimeUnit.SECONDS))
+
+        repository.unblockFirst.countDown()
+        assertThat("stale task should finish", oldExecutor.awaitTermination(2, TimeUnit.SECONDS))
+
+        assertThat(contendService.isOwner, equalTo(true))
+        assertThat(released.get(), equalTo(0))
+        contendService.stop()
+    }
+
+    @Test
     fun `restart failure rolls back lifecycle so stale acquisition is compensated`() {
         val repository = BlockingMutexOwnerRepository()
         val contender = object : AbstractMutexContender("m") {
@@ -172,6 +212,7 @@ class JdbcMutexContendServiceStopTest {
     }
 
     private class BlockingMutexOwnerRepository : MutexOwnerRepository {
+        var firstFailure: Throwable? = null
         val firstInvoked = CountDownLatch(1)
         val unblockFirst = CountDownLatch(1)
         val firstCompleted = CountDownLatch(1)
@@ -205,6 +246,7 @@ class JdbcMutexContendServiceStopTest {
                     } catch (_: InterruptedException) {
                     }
                 }
+                firstFailure?.let { throw it }
             }
             ownerId.set(contenderId)
             if (attempt == 1) {
