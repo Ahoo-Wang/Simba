@@ -17,6 +17,7 @@ import me.ahoo.simba.core.MutexState
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.equalTo
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
@@ -125,10 +126,49 @@ class JdbcMutexContendServiceStopTest {
         contendService.stop()
     }
 
+    @Test
+    fun `restart failure rolls back lifecycle so stale acquisition is compensated`() {
+        val repository = BlockingMutexOwnerRepository()
+        val contender = object : AbstractMutexContender("m") {
+            override fun onAcquired(mutexState: MutexState) = Unit
+            override fun onReleased(mutexState: MutexState) = Unit
+        }
+        val contendService = JdbcMutexContendService(
+            contender,
+            Executor { it.run() },
+            repository,
+            Duration.ZERO,
+            Duration.ofSeconds(10),
+            Duration.ofSeconds(6)
+        )
+
+        contendService.start()
+        assertThat("first acquire should be in flight", repository.firstInvoked.await(2, TimeUnit.SECONDS))
+        val oldExecutor = executorOf(contendService)
+        contendService.stop()
+
+        setInitialDelay(contendService, Duration.ofSeconds(Long.MAX_VALUE))
+        assertThrows<ArithmeticException> { contendService.start() }
+        val failedExecutor = executorOf(contendService)
+
+        repository.unblockFirst.countDown()
+        assertThat("stale task should finish", oldExecutor.awaitTermination(2, TimeUnit.SECONDS))
+
+        assertThat(failedExecutor.isShutdown, equalTo(true))
+        assertThat(repository.compensatingRelease.await(1, TimeUnit.SECONDS), equalTo(true))
+        assertThat(repository.ownerId.get(), equalTo(""))
+    }
+
     private fun executorOf(contendService: JdbcMutexContendService): ScheduledThreadPoolExecutor {
         val executorField = JdbcMutexContendService::class.java.getDeclaredField("executorService")
         executorField.isAccessible = true
         return executorField.get(contendService) as ScheduledThreadPoolExecutor
+    }
+
+    private fun setInitialDelay(contendService: JdbcMutexContendService, initialDelay: Duration) {
+        val initialDelayField = JdbcMutexContendService::class.java.getDeclaredField("initialDelay")
+        initialDelayField.isAccessible = true
+        initialDelayField.set(contendService, initialDelay)
     }
 
     private class BlockingMutexOwnerRepository : MutexOwnerRepository {

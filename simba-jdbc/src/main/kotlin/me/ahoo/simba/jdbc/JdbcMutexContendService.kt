@@ -50,13 +50,20 @@ class JdbcMutexContendService(
     @Volatile
     private var contendScheduledFuture: ScheduledFuture<*>? = null
 
+    @Suppress("TooGenericExceptionCaught")
     override fun startContend() {
         synchronized(lifecycleLock) {
+            val executor = ScheduledThreadPoolExecutor(1, defaultFactory("JdbcSimba_${mutex}_$contenderId"))
             val generation = ++lifecycleGeneration
             activeGeneration = generation
-            executorService =
-                ScheduledThreadPoolExecutor(1, defaultFactory("JdbcSimba_${mutex}_$contenderId"))
-            nextSchedule(initialDelay.toMillis(), generation)
+            executorService = executor
+            try {
+                nextSchedule(initialDelay.toMillis(), generation)
+            } catch (error: Throwable) {
+                activeGeneration = null
+                executor.shutdown()
+                throw error
+            }
         }
     }
 
