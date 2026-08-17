@@ -39,19 +39,31 @@ class MutexRetrievalServiceTest {
     }
 
     @Test
-    fun `hasOwner is false when afterOwner is NONE by identity`() {
+    fun `hasOwner is false when afterOwner is NONE`() {
         val service = FakeMutexContendService(FakeMutexContender("m", "c1"))
         // mutexState defaults to MutexState.NONE -> afterOwner is MutexOwner.NONE
         assertThat(service.hasOwner(), equalTo(false))
     }
 
     @Test
-    fun `hasOwner is true when afterOwner is a real owner`() {
+    fun `hasOwner is false when an equivalent owner has expired`() {
         val contender = FakeMutexContender("m", "c1")
         val service = FakeMutexContendService(contender)
         service.start()
 
-        service.publishOwner(MutexOwner("c1", 0, 100, 200)).join()
+        service.publishOwner(FixedClockOwner("", 0, 0, 1)).join()
+
+        assertThat(service.hasOwner(), equalTo(false))
+        service.stop()
+    }
+
+    @Test
+    fun `hasOwner is true when afterOwner is active`() {
+        val contender = FakeMutexContender("m", "c1")
+        val service = FakeMutexContendService(contender)
+        service.start()
+
+        service.publishOwner(FixedClockOwner("c1", 100, 200, 150)).join()
 
         assertThat(service.hasOwner(), equalTo(true))
         service.stop()
