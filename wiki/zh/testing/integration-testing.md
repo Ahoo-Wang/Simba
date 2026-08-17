@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS simba_mutex (
 );
 ```
 
-`version` 列实现了并发获取尝试的乐观锁。[`JdbcMutexOwnerRepository`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexOwnerRepository.kt) 使用 `UPDATE ... WHERE version = ?` 确保每个周期只有一个竞争者成功。
+并发获取尝试由 owner/transition 谓词守卫的原子条件 `UPDATE` 串行化。[`JdbcMutexOwnerRepository`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexOwnerRepository.kt) 执行 `UPDATE ... WHERE mutex = ? AND (transition_at < now OR (owner_id = ? AND transition_at > now))`，InnoDB 行锁加谓词重评估确保每个周期只有一个竞争者成功。`version` 列是变更计数器——每次状态变更递增，从不比较。
 
 ### 测试类
 
@@ -114,7 +114,7 @@ autonumber
     C->>CS: start()
     CS->>CS: startContend() -> schedule(initialDelay)
     CS->>DB: acquireAndGetOwner(mutex, contenderId, ttl, transition)
-    DB->>DB: UPDATE WHERE version matches (optimistic lock)
+    DB->>DB: UPDATE guarded by owner/transition predicates
     DB-->>CS: MutexOwner (current state)
     CS->>CS: notifyOwner(mutexOwner)
     CS->>CS: nextDelay = contendPeriod.ensureNextDelay()

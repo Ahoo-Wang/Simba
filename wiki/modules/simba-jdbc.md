@@ -1,11 +1,13 @@
 ---
 title: simba-jdbc Module
-description: JDBC/MySQL backend for Simba distributed mutex -- schema DDL, optimistic locking, polling-based contention, and auto-configuration properties.
+description: JDBC/MySQL backend for Simba distributed mutex -- schema DDL, atomic conditional updates, polling-based contention, and auto-configuration properties.
 ---
 
 # simba-jdbc Module
 
-The `simba-jdbc` module provides a JDBC-based distributed mutex backend using MySQL. It uses optimistic locking (a `version` column) to ensure safe concurrent updates to the `simba_mutex` table, and polls the database on a `ScheduledThreadPoolExecutor` to detect ownership changes.
+The `simba-jdbc` module provides a JDBC-based distributed mutex backend using MySQL. It serializes concurrent updates to the `simba_mutex` table with atomic conditional `UPDATE`s guarded by owner/transition predicates, and polls the database on a `ScheduledThreadPoolExecutor` to detect ownership changes.
+
+> **MySQL version requirement**: the backend reads database time through `UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))`. On 64-bit MySQL 8.0.28+ the returned value is valid through year 3001; on older versions the valid range ends at 2038-01-19 UTC, where out-of-range calls return 0 and owner timestamps silently fall back to JVM time. Plan an upgrade before 2038 if you run an older MySQL.
 
 ## Schema DDL
 
@@ -35,10 +37,10 @@ erDiagram
         bigint ttl_at "epoch millis -- TTL expiry"
         bigint transition_at "epoch millis -- grace period end"
         char owner_id "contender ID of current owner"
-        int version "optimistic lock version"
+        int version "state change counter"
     }
 
-    note for SIMBA_MUTEX "Each row represents one distributed mutex.<br>Optimistic locking via version column prevents<br>concurrent ownership conflicts."
+    note for SIMBA_MUTEX "Each row represents one distributed mutex.<br>Conditional UPDATE + InnoDB row lock prevents<br>concurrent ownership conflicts."
 ```
 
 ### Column Semantics
@@ -50,7 +52,7 @@ erDiagram
 | `ttl_at` | `BIGINT UNSIGNED` | Epoch millis when the TTL expires. After this, other contenders may attempt acquisition. |
 | `transition_at` | `BIGINT UNSIGNED` | Epoch millis when the grace period ends. Equals `acquired_at + ttl + transition`. |
 | `owner_id` | `VARCHAR(128)` | The `contenderId` of the current owner. Empty string when no owner. |
-| `version` | `INT UNSIGNED` | Incremented on every acquire/release for optimistic concurrency control. |
+| `version` | `INT UNSIGNED` | Incremented on every acquire/release as a state-change counter. Not compared in `WHERE` — concurrency is guarded by the owner/transition predicates. |
 
 ## Key Classes
 
@@ -129,7 +131,7 @@ class MutexOwnerEntity(
 
 | Field | Description |
 |---|---|
-| `version` | The optimistic lock version from the database. Used for concurrency control. |
+| `version` | State-change counter from the database. Not used for concurrency decisions. |
 | `currentDbAt` | The database server's current timestamp, used to prevent clock skew issues between application servers. |
 
 ### JdbcMutexContendService
@@ -232,7 +234,7 @@ simba:
 | Situation | Behavior |
 |---|---|
 | Mutex row does not exist | `NotFoundMutexOwnerException` thrown; use `tryInitMutex()` or `ensureOwner()` to auto-create |
-| Concurrent acquisition conflict | Optimistic locking via `version` column; the `UPDATE` returns 0 affected rows |
+| Concurrent acquisition conflict | Atomic conditional `UPDATE` guarded by owner/transition predicates; the loser's `UPDATE` affects 0 rows |
 | SQL error during contend | Logged at ERROR level; next contend scheduled after `ttl` period |
 | Transaction rollback | `acquireAndGetOwner` rolls back on any exception and wraps in `SimbaException` |
 

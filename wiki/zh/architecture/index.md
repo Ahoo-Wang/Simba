@@ -233,7 +233,7 @@ flowchart LR
 | 模块 | 职责 |
 |---|---|
 | `simba-core` | 核心接口和抽象实现 |
-| `simba-jdbc` | JDBC/MySQL 后端 — 基于乐观锁的轮询 |
+| `simba-jdbc` | JDBC/MySQL 后端 — 基于原子条件更新的轮询 |
 | `simba-spring-redis` | Redis 后端 — Lua 脚本 + 发布/订阅通知 |
 | `simba-zookeeper` | Zookeeper 后端 — Curator LeaderLatch 配方 |
 | `simba-spring-boot-starter` | Spring Boot 自动配置 |

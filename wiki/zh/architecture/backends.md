@@ -9,7 +9,7 @@ Simba 提供三种可插拔的分布式互斥锁存储后端。每种后端都�
 
 ## JDBC 后端
 
-JDBC 后端使用 MySQL 表（`simba_mutex`），通过 `version` 列实现乐观锁。争用由 `ScheduledThreadPoolExecutor` 通过轮询驱动。
+JDBC 后端使用 MySQL 表（`simba_mutex`），通过由 owner/transition 谓词守卫的原子条件 `UPDATE` 实现并发安全。争用由 `ScheduledThreadPoolExecutor` 通过轮询驱动。
 
 ### 表结构
 
@@ -34,13 +34,13 @@ erDiagram
         bigint ttl_at "Epoch millis: TTL expiry"
         bigint transition_at "Epoch millis: transition window end"
         char owner_id "Contender ID of current owner"
-        int version "Optimistic lock version counter"
+        int version "State change counter"
     }
 ```
 
-`MutexOwnerEntity` 类（[`JdbcMutexOwnerRepository.kt`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/MutexOwnerRepository.kt)）在 `MutexOwner` 的基础上扩展了 `version` 字段用于乐观锁，以及一个 `currentDbAt` 字段来捕获数据库服务器的当前时间戳，从而防止应用节点之间的时钟偏移问题。
+`MutexOwnerEntity` 类（[`JdbcMutexOwnerRepository.kt`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/MutexOwnerRepository.kt)）在 `MutexOwner` 的基础上扩展了 `version` 状态变更计数字段，以及一个 `currentDbAt` 字段来捕获数据库服务器的当前时间戳，从而防止应用节点之间的时钟偏移问题。
 
-### 原子获取（乐观锁）
+### 原子获取（条件更新）
 
 [`JdbcMutexOwnerRepository`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexOwnerRepository.kt#L43) 中的 `SQL_ACQUIRE` 查询执行带有两个条件的原子 `UPDATE ... WHERE`：
 
@@ -389,7 +389,7 @@ flowchart LR
 
 | 特性 | JDBC | Redis | Zookeeper |
 |---|---|---|---|
-| **获取机制** | `UPDATE ... WHERE` + 乐观锁 | `SET NX PX` 原子 Lua 脚本 | Curator `LeaderLatch`（临时顺序节点） |
+| **获取机制** | `UPDATE ... WHERE` + owner/transition 谓词守卫 | `SET NX PX` 原子 Lua 脚本 | Curator `LeaderLatch`（临时顺序节点） |
 | **通知方式** | 通过 `ScheduledThreadPoolExecutor` 轮询 | 发布/订阅即时通知 | ZNode 监听（内置于 Curator） |
 | **故障检测** | TTL 到期（轮询间隔） | 键 TTL 到期 + 发布/订阅 | 会话丢失时删除临时节点 |
 | **延迟** | 轮询间隔（通常基于 ttl） | 亚毫秒级（发布/订阅推送） | 会话超时（通常 5-30 秒） |

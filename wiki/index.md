@@ -19,7 +19,7 @@ hero:
 features:
   - icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
     title: Multiple Backends
-    details: "Choose the storage that fits your stack: JDBC/MySQL with optimistic locking, Redis with atomic Lua scripts and pub/sub, or Zookeeper via Apache Curator."
+    details: "Choose the storage that fits your stack: JDBC/MySQL with atomic conditional updates, Redis with atomic Lua scripts and pub/sub, or Zookeeper via Apache Curator."
   - icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
     title: Leader Election
     details: "Automatic ownership with configurable TTL and transition periods. The current leader renews before expiry; contenders wait with jitter to avoid thundering herd."

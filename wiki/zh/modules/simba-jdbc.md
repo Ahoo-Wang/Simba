@@ -1,11 +1,13 @@
 ---
 title: simba-jdbc 模块
-description: Simba 分布式互斥锁的 JDBC/MySQL 后端 -- 模式 DDL、乐观锁、基于轮询的竞争和自动配置属性。
+description: Simba 分布式互斥锁的 JDBC/MySQL 后端 -- 模式 DDL、原子条件更新、基于轮询的竞争和自动配置属性。
 ---
 
 # simba-jdbc 模块
 
-`simba-jdbc` 模块提供了基于 JDBC 的分布式互斥后端，使用 MySQL。它使用乐观锁（`version` 列）来确保对 `simba_mutex` 表的安全并发更新，并通过 `ScheduledThreadPoolExecutor` 轮询数据库以检测所有权变更。
+`simba-jdbc` 模块提供了基于 JDBC 的分布式互斥后端，使用 MySQL。它通过由 owner/transition 谓词守卫的原子条件 `UPDATE` 确保对 `simba_mutex` 表的并发安全，并通过 `ScheduledThreadPoolExecutor` 轮询数据库以检测所有权变更。
+
+> **MySQL 版本要求**：后端通过 `UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))` 读取数据库时间。64 位平台的 MySQL 8.0.28+ 返回值有效期到 3001 年；更早版本的有效范围止于 2038-01-19 UTC，超范围调用返回 0，持有者时间戳会静默回退为 JVM 时钟。运行旧版本 MySQL 的部署请在此日期前规划升级。
 
 ## 模式 DDL
 
@@ -35,10 +37,10 @@ erDiagram
         bigint ttl_at "epoch millis -- TTL expiry"
         bigint transition_at "epoch millis -- grace period end"
         char owner_id "contender ID of current owner"
-        int version "optimistic lock version"
+        int version "state change counter"
     }
 
-    note for SIMBA_MUTEX "Each row represents one distributed mutex.<br>Optimistic locking via version column prevents<br>concurrent ownership conflicts."
+    note for SIMBA_MUTEX "Each row represents one distributed mutex.<br>Conditional UPDATE + InnoDB row lock prevents<br>concurrent ownership conflicts."
 ```
 
 ### 列语义
@@ -50,7 +52,7 @@ erDiagram
 | `ttl_at` | `BIGINT UNSIGNED` | TTL 到期的纪元毫秒时间戳。此后其他竞争者可以尝试获取。 |
 | `transition_at` | `BIGINT UNSIGNED` | 宽限期结束的纪元毫秒时间戳。等于 `acquired_at + ttl + transition`。 |
 | `owner_id` | `VARCHAR(128)` | 当前所有者的 `contenderId`。无所有者时为空字符串。 |
-| `version` | `INT UNSIGNED` | 每次获取/释放时递增，用于乐观并发控制。 |
+| `version` | `INT UNSIGNED` | 每次获取/释放时递增的状态变更计数器。不参与 `WHERE` 比较——并发由 owner/transition 谓词守卫。 |
 
 ## 关键类
 
@@ -129,7 +131,7 @@ class MutexOwnerEntity(
 
 | 字段 | 描述 |
 |---|---|
-| `version` | 来自数据库的乐观锁版本号。用于并发控制。 |
+| `version` | 来自数据库的状态变更计数器。不用于并发控制决策。 |
 | `currentDbAt` | 数据库服务器的当前时间戳，用于防止应用服务器之间的时钟偏移问题。 |
 
 ### JdbcMutexContendService
@@ -232,7 +234,7 @@ simba:
 | 场景 | 行为 |
 |---|---|
 | 互斥锁行不存在 | 抛出 `NotFoundMutexOwnerException`；使用 `tryInitMutex()` 或 `ensureOwner()` 自动创建 |
-| 并发获取冲突 | 通过 `version` 列进行乐观锁；`UPDATE` 返回 0 受影响行 |
+| 并发获取冲突 | 由 owner/transition 谓词守卫的原子条件 `UPDATE`；失败方 `UPDATE` 影响 0 行 |
 | 竞争期间 SQL 错误 | 以 ERROR 级别记录日志；下次竞争在 `ttl` 周期后调度 |
 | 事务回滚 | `acquireAndGetOwner` 在任何异常时回滚并包装为 `SimbaException` |
 

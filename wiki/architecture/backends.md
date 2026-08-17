@@ -12,8 +12,8 @@ dependencies, and operational complexity.
 
 ## JDBC Backend
 
-The JDBC backend uses a MySQL table (`simba_mutex`) with optimistic locking via a `version`
-column. Contention is driven by polling through a `ScheduledThreadPoolExecutor`.
+The JDBC backend uses a MySQL table (`simba_mutex`) with atomic conditional `UPDATE`s guarded by
+owner/transition predicates. Contention is driven by polling through a `ScheduledThreadPoolExecutor`.
 
 ### Schema
 
@@ -40,16 +40,16 @@ erDiagram
         bigint ttl_at "Epoch millis: TTL expiry"
         bigint transition_at "Epoch millis: transition window end"
         char owner_id "Contender ID of current owner"
-        int version "Optimistic lock version counter"
+        int version "State change counter"
     }
 ```
 
 The `MutexOwnerEntity` class ([`JdbcMutexOwnerRepository.kt`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/MutexOwnerRepository.kt))
-extends `MutexOwner` with a `version` field for optimistic locking and a `currentDbAt`
+extends `MutexOwner` with a `version` state-change counter and a `currentDbAt`
 field that captures the database server's current timestamp, preventing clock skew issues
 between application nodes.
 
-### Atomic Acquire (Optimistic Locking)
+### Atomic Acquire (Conditional Update)
 
 The `SQL_ACQUIRE` query in
 [`JdbcMutexOwnerRepository`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexOwnerRepository.kt#L43)
@@ -421,7 +421,7 @@ flowchart LR
 
 | Feature | JDBC | Redis | Zookeeper |
 |---|---|---|---|
-| **Acquisition mechanism** | `UPDATE ... WHERE` with optimistic locking | `SET NX PX` atomic Lua script | Curator `LeaderLatch` (ephemeral sequential nodes) |
+| **Acquisition mechanism** | `UPDATE ... WHERE` guarded by owner/transition predicates | `SET NX PX` atomic Lua script | Curator `LeaderLatch` (ephemeral sequential nodes) |
 | **Notification** | Polling via `ScheduledThreadPoolExecutor` | Pub/Sub instant notification | ZNode watches (built into Curator) |
 | **Failure detection** | TTL expiry (polling interval) | Key TTL expiry + Pub/Sub | Ephemeral node deletion on session loss |
 | **Latency** | Polling interval (typically ttl-based) | Sub-millisecond (Pub/Sub push) | Session timeout (typically 5-30s) |

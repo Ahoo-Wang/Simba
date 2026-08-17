@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS simba_mutex (
 );
 ```
 
-The `version` column enables optimistic locking for concurrent acquisition attempts. [`JdbcMutexOwnerRepository`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexOwnerRepository.kt) uses `UPDATE ... WHERE version = ?` to ensure only one contender succeeds per cycle.
+Concurrent acquisition attempts are serialized by an atomic conditional `UPDATE` guarded by owner/transition predicates. [`JdbcMutexOwnerRepository`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexOwnerRepository.kt) performs `UPDATE ... WHERE mutex = ? AND (transition_at < now OR (owner_id = ? AND transition_at > now))`; the InnoDB row lock plus predicate re-evaluation ensure only one contender succeeds per cycle. The `version` column is a change counter — incremented on every state change, never compared.
 
 ### Test Class
 
@@ -114,7 +114,7 @@ autonumber
     C->>CS: start()
     CS->>CS: startContend() -> schedule(initialDelay)
     CS->>DB: acquireAndGetOwner(mutex, contenderId, ttl, transition)
-    DB->>DB: UPDATE WHERE version matches (optimistic lock)
+    DB->>DB: UPDATE guarded by owner/transition predicates
     DB-->>CS: MutexOwner (current state)
     CS->>CS: notifyOwner(mutexOwner)
     CS->>CS: nextDelay = contendPeriod.ensureNextDelay()
