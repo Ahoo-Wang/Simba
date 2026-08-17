@@ -141,7 +141,12 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
                     "ensureOwner - initMutex:[$mutex]."
                 }
                 initMutex(connection, mutex)
-            } catch (sqlIntegrityConstraintViolationException: SQLException) {
+            } catch (sqlIntegrityConstraintViolationException: SQLIntegrityConstraintViolationException) {
+                /*
+                 * Only the unique-key race of concurrent initialization is tolerable;
+                 * any other SQLException must propagate instead of being masked
+                 * by the trailing getOwner's own failure.
+                 */
                 log.warn(sqlIntegrityConstraintViolationException) {
                     sqlIntegrityConstraintViolationException.message
                 }

@@ -158,6 +158,8 @@ class AbstractMutexRetrievalServiceTest {
             val contender = ConcurrentCountingContender("m", "c1-$attempt")
             val service = FakeMutexContendService(contender, BarrierPairExecutor())
             val selfOwner = MutexOwner(contender.contenderId, 0, Long.MAX_VALUE, Long.MAX_VALUE)
+            // notifications are only meaningful while the service is active
+            service.start()
 
             val first = service.publishOwner(selfOwner)
             val second = service.publishOwner(selfOwner)
@@ -169,6 +171,23 @@ class AbstractMutexRetrievalServiceTest {
                 contender.acquiredCount.get(),
                 equalTo(1)
             )
+            service.stop()
         }
+    }
+
+    @Test
+    fun `publishOwner after stop must be ignored`() {
+        val contender = FakeMutexContender("m", "c1")
+        val service = FakeMutexContendService(contender)
+        service.start()
+        service.stop()
+        assertThat(service.status, equalTo(MutexRetrievalService.Status.INITIAL))
+
+        // a late source (in-flight contend task, late callback) submitting after stop
+        // must not revive ownership or fire contender callbacks
+        service.publishOwner(MutexOwner("c1", 0, 100, 200)).join()
+
+        assertThat(service.mutexState, equalTo(MutexState.NONE))
+        assertThat(contender.acquired.size, equalTo(0))
     }
 }
