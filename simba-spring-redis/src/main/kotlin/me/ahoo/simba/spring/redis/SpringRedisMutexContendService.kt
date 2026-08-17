@@ -58,6 +58,10 @@ class SpringRedisMutexContendService(
         private val SCRIPT_GUARD = RedisScript.of(GUARD_RESOURCE, String::class.java)
     }
 
+    init {
+        validateRedisDurations(ttl, transition)
+    }
+
     private val keys: List<String> = listOf("{${contender.mutex}}")
     private val mutexKey: String = "${Simba.SIMBA}:${keys.single()}"
 

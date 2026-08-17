@@ -42,4 +42,17 @@ internal class SimbaSpringRedisAutoConfigurationTest {
                     .hasSingleBean(MutexContendServiceFactory::class.java)
             }
     }
+
+    @Test
+    fun contextFailsFastWithInvalidTtl() {
+        contextRunner
+            .withPropertyValues("simba.redis.ttl=0ms")
+            .withUserConfiguration(
+                DataRedisAutoConfiguration::class.java,
+                SimbaSpringRedisAutoConfiguration::class.java
+            )
+            .run {
+                assertThat(it).hasFailed()
+            }
+    }
 }

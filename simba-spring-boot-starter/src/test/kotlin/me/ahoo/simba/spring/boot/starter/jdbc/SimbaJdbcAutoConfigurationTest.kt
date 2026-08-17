@@ -65,6 +65,17 @@ internal class SimbaJdbcAutoConfigurationTest {
     }
 
     @Test
+    fun contextFailsFastWithInvalidTtl() {
+        contextRunner
+            .withBean(DataSource::class.java, { mockk() })
+            .withPropertyValues("simba.jdbc.ttl=0ms")
+            .withUserConfiguration(SimbaJdbcAutoConfiguration::class.java)
+            .run {
+                assertThat(it).hasFailed()
+            }
+    }
+
+    @Test
     fun contextLoadsWithDisable() {
         contextRunner
             .withBean(DataSource::class.java, { mockk() })

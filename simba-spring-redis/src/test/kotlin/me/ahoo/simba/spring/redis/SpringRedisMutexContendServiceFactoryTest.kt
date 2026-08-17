@@ -15,11 +15,23 @@ package me.ahoo.simba.spring.redis
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.equalTo
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
+import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.listener.RedisMessageListenerContainer
 import java.time.Duration
 import java.util.concurrent.Executors
 
 class SpringRedisMutexContendServiceFactoryTest {
+    @Test
+    fun `factory rejects invalid lease durations`() {
+        assertThrows<IllegalArgumentException> { newFactory(Duration.ZERO, Duration.ZERO) }
+        assertThrows<IllegalArgumentException> { newFactory(Duration.ofNanos(1), Duration.ZERO) }
+        assertThrows<IllegalArgumentException> { newFactory(Duration.ofMillis(1), Duration.ofMillis(-1)) }
+        assertThrows<IllegalArgumentException> {
+            newFactory(Duration.ofMillis(Long.MAX_VALUE), Duration.ofMillis(1))
+        }
+    }
+
     @Test
     fun `close shuts down the scheduled executor service`() {
         val scheduledExecutorService = Executors.newScheduledThreadPool(1)
@@ -34,5 +46,15 @@ class SpringRedisMutexContendServiceFactoryTest {
         factory.close()
 
         assertThat(scheduledExecutorService.isShutdown, equalTo(true))
+    }
+
+    private fun newFactory(ttl: Duration, transition: Duration): SpringRedisMutexContendServiceFactory {
+        return SpringRedisMutexContendServiceFactory(
+            ttl = ttl,
+            transition = transition,
+            redisTemplate = StringRedisTemplate(),
+            listenerContainer = RedisMessageListenerContainer(),
+            scheduledExecutorService = Executors.newSingleThreadScheduledExecutor().also { it.shutdown() }
+        )
     }
 }

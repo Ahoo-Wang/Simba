@@ -31,6 +31,9 @@ class JdbcMutexContendServiceFactory(
     private val ttl: Duration,
     private val transition: Duration
 ) : MutexContendServiceFactory {
+    init {
+        validateJdbcDurations(initialDelay, ttl, transition)
+    }
 
     override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
         return JdbcMutexContendService(
