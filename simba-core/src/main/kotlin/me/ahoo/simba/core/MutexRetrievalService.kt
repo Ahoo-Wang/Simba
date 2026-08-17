@@ -41,7 +41,7 @@ interface MutexRetrievalService : AutoCloseable {
      * @return boolean
      */
     fun hasOwner(): Boolean {
-        return afterOwner !== MutexOwner.NONE
+        return afterOwner.hasOwner()
     }
 
     val running: Boolean

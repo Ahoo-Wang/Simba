@@ -140,7 +140,7 @@ class AbstractMutexRetrievalServiceTest {
         val contender = FakeMutexContender("m", "c1")
         val service = FakeMutexContendService(contender)
         service.start()
-        service.publishOwner(MutexOwner("c1", 0, 100, 200)).join()
+        service.publishOwner(MutexOwner("c1", 0, Long.MAX_VALUE, Long.MAX_VALUE)).join()
         assertThat(service.hasOwner(), equalTo(true))
 
         service.stop()
@@ -211,7 +211,7 @@ class AbstractMutexRetrievalServiceTest {
         val executor = ManualExecutor()
         val service = FakeMutexContendService(contender, executor)
         service.start()
-        val acquisition = service.publishOwner(MutexOwner("c1", 0, 100, 200))
+        val acquisition = service.publishOwner(MutexOwner("c1", 0, Long.MAX_VALUE, Long.MAX_VALUE))
         executor.runAll()
         acquisition.join()
         assertThat(service.hasOwner(), equalTo(true))
