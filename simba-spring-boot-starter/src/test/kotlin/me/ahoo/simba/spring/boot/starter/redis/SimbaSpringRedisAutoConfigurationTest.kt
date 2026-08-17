@@ -12,11 +12,13 @@
  */
 package me.ahoo.simba.spring.boot.starter.redis
 
+import io.mockk.mockk
 import me.ahoo.simba.core.MutexContendServiceFactory
 import org.assertj.core.api.AssertionsForInterfaceTypes.assertThat
 import org.junit.jupiter.api.Test
 import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
+import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.listener.RedisMessageListenerContainer
 
 /**
@@ -40,6 +42,19 @@ internal class SimbaSpringRedisAutoConfigurationTest {
                     .hasSingleBean(RedisProperties::class.java)
                     .hasSingleBean(RedisMessageListenerContainer::class.java)
                     .hasSingleBean(MutexContendServiceFactory::class.java)
+            }
+    }
+
+    @Test
+    fun contextWithoutListenerContainerSkipsFactoryBean() {
+        contextRunner
+            .withBean(StringRedisTemplate::class.java, { mockk(relaxed = true) })
+            .withUserConfiguration(SimbaSpringRedisAutoConfiguration::class.java)
+            .run {
+                assertThat(it)
+                    .hasSingleBean(SimbaSpringRedisAutoConfiguration::class.java)
+                    .doesNotHaveBean(RedisMessageListenerContainer::class.java)
+                    .doesNotHaveBean(MutexContendServiceFactory::class.java)
             }
     }
 }

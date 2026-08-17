@@ -78,4 +78,16 @@ internal class SimbaJdbcAutoConfigurationTest {
                     .doesNotHaveBean(MutexContendServiceFactory::class.java)
             }
     }
+
+    @Test
+    fun contextWithoutDataSourceSkipsJdbcBeans() {
+        contextRunner
+            .withUserConfiguration(SimbaJdbcAutoConfiguration::class.java)
+            .run {
+                assertThat(it)
+                    .hasSingleBean(SimbaJdbcAutoConfiguration::class.java)
+                    .doesNotHaveBean(MutexOwnerRepository::class.java)
+                    .doesNotHaveBean(MutexContendServiceFactory::class.java)
+            }
+    }
 }

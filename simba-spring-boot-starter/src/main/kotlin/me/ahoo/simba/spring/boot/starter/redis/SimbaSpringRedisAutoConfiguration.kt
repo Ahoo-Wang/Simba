@@ -52,8 +52,8 @@ class SimbaSpringRedisAutoConfiguration(private val redisProperties: RedisProper
     }
 
     @Bean(destroyMethod = "close")
-    @ConditionalOnMissingBean
-    @ConditionalOnBean(StringRedisTemplate::class)
+    @ConditionalOnMissingBean(MutexContendServiceFactory::class)
+    @ConditionalOnBean(StringRedisTemplate::class, RedisMessageListenerContainer::class)
     fun redisMutexContendServiceFactory(
         redisTemplate: StringRedisTemplate,
         listenerContainer: RedisMessageListenerContainer
