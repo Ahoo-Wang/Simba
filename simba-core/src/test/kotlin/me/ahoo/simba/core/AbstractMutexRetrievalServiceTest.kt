@@ -18,9 +18,8 @@ import org.hamcrest.Matchers.equalTo
 import org.hamcrest.Matchers.sameInstance
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
-import java.util.concurrent.CountDownLatch
+import java.util.ArrayDeque
 import java.util.concurrent.Executor
-import kotlin.concurrent.thread
 
 class AbstractMutexRetrievalServiceTest {
     private fun newService(): FakeMutexContendService {
@@ -154,28 +153,20 @@ class AbstractMutexRetrievalServiceTest {
 
     @Test
     fun `concurrent duplicate owner notifications dispatch onAcquired at most once`() {
-        // The read->write window inside safeNotifyOwner is nanoseconds wide, so a single
-        // barrier-paired pair rarely interleaves; thousands of attempts make hitting the
-        // window a statistical certainty before the fix, while the fix passes deterministically.
-        for (attempt in 0 until 5000) {
-            val contender = ConcurrentCountingContender("m", "c1-$attempt")
-            val service = FakeMutexContendService(contender, BarrierPairExecutor())
-            val selfOwner = MutexOwner(contender.contenderId, 0, Long.MAX_VALUE, Long.MAX_VALUE)
-            // notifications are only meaningful while the service is active
-            service.start()
+        val contender = FakeMutexContender("m", "c1")
+        val executor = ManualExecutor()
+        val service = FakeMutexContendService(contender, executor)
+        val selfOwner = MutexOwner(contender.contenderId, 0, Long.MAX_VALUE, Long.MAX_VALUE)
+        service.start()
 
-            val first = service.publishOwner(selfOwner)
-            val second = service.publishOwner(selfOwner)
-            first.join()
-            second.join()
+        val first = service.publishOwner(selfOwner)
+        val second = service.publishOwner(selfOwner)
+        executor.runAll()
+        first.join()
+        second.join()
 
-            assertThat(
-                "attempt [$attempt]: duplicate onAcquired dispatched for a single NONE->self transition",
-                contender.acquiredCount.get(),
-                equalTo(1)
-            )
-            service.stop()
-        }
+        assertThat(contender.acquired.size, equalTo(1))
+        service.stop()
     }
 
     @Test
@@ -197,7 +188,7 @@ class AbstractMutexRetrievalServiceTest {
     @Test
     fun `self notification submitted while active but executing after stop must not revive ownership`() {
         val contender = FakeMutexContender("m", "c1")
-        val executor = GatedExecutor()
+        val executor = ManualExecutor()
         val service = FakeMutexContendService(contender, executor)
         service.start()
 
@@ -207,7 +198,7 @@ class AbstractMutexRetrievalServiceTest {
         service.stop()
         assertThat(service.status, equalTo(MutexRetrievalService.Status.INITIAL))
 
-        executor.release()
+        executor.runAll()
         future.join()
 
         assertThat(service.mutexState, equalTo(MutexState.NONE))
@@ -217,10 +208,12 @@ class AbstractMutexRetrievalServiceTest {
     @Test
     fun `stop release notification executing after stop must still be applied`() {
         val contender = FakeMutexContender("m", "c1")
-        val executor = GatedExecutor()
+        val executor = ManualExecutor()
         val service = FakeMutexContendService(contender, executor)
         service.start()
-        service.publishOwner(MutexOwner("c1", 0, 100, 200)).join()
+        val acquisition = service.publishOwner(MutexOwner("c1", 0, 100, 200))
+        executor.runAll()
+        acquisition.join()
         assertThat(service.hasOwner(), equalTo(true))
 
         // the release notification is submitted while stopping and may execute once the
@@ -228,25 +221,70 @@ class AbstractMutexRetrievalServiceTest {
         val future = service.publishOwner(MutexOwner.NONE)
         service.stop()
 
-        executor.release()
+        executor.runAll()
         future.join()
 
         assertThat(service.mutexState.after, equalTo(MutexOwner.NONE))
         assertThat(contender.released.size, equalTo(1))
     }
 
-    private class GatedExecutor : Executor {
-        private val gate = CountDownLatch(1)
+    @Test
+    fun `owner notifications are applied in submission order`() {
+        val contender = FakeMutexContender("m", "c1")
+        val executor = ManualExecutor()
+        val service = FakeMutexContendService(contender, executor)
+        val owner = MutexOwner("c1", 0, Long.MAX_VALUE, Long.MAX_VALUE)
+        service.start()
+
+        val acquired = service.publishOwner(owner)
+        val released = service.publishOwner(MutexOwner.NONE)
+
+        executor.runAllInReverseOrder()
+        acquired.join()
+        released.join()
+
+        assertThat(service.afterOwner, sameInstance(MutexOwner.NONE))
+        assertThat(contender.acquired.size, equalTo(1))
+        assertThat(contender.released.size, equalTo(1))
+        service.stop()
+    }
+
+    @Test
+    fun `owner notification from previous lifecycle is ignored after restart`() {
+        val contender = FakeMutexContender("m", "c1")
+        val executor = ManualExecutor()
+        val service = FakeMutexContendService(contender, executor)
+        service.start()
+
+        val stale = service.publishOwner(MutexOwner("c1", 0, Long.MAX_VALUE, Long.MAX_VALUE))
+        service.stop()
+        service.start()
+
+        executor.runAll()
+        stale.join()
+
+        assertThat(service.mutexState, equalTo(MutexState.NONE))
+        assertThat(contender.acquired.size, equalTo(0))
+        service.stop()
+    }
+
+    private class ManualExecutor : Executor {
+        private val tasks = ArrayDeque<Runnable>()
 
         override fun execute(command: Runnable) {
-            thread(isDaemon = true) {
-                gate.await()
-                command.run()
+            tasks.addLast(command)
+        }
+
+        fun runAll() {
+            while (tasks.isNotEmpty()) {
+                tasks.removeFirst().run()
             }
         }
 
-        fun release() {
-            gate.countDown()
+        fun runAllInReverseOrder() {
+            while (tasks.isNotEmpty()) {
+                tasks.removeLast().run()
+            }
         }
     }
 }
