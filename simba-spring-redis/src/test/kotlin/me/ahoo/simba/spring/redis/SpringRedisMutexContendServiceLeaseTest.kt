@@ -159,6 +159,67 @@ class SpringRedisMutexContendServiceLeaseTest {
         }
     }
 
+    @Test
+    fun `acquisition completing after stop is released remotely`() {
+        val firstInvoked = CountDownLatch(1)
+        val unblockFirst = CountDownLatch(1)
+        val compensated = CountDownLatch(1)
+        val releaseCalls = AtomicInteger()
+        val contender = object : AbstractMutexContender("stopped-acquire", "lease-owner") {}
+        val redisTemplate = mockk<StringRedisTemplate>(relaxed = true)
+        every {
+            redisTemplate.execute(
+                match<RedisScript<String>> { it.resultType == String::class.java },
+                any<List<String>>(),
+                *anyVararg()
+            )
+        } answers {
+            firstInvoked.countDown()
+            while (unblockFirst.count > 0) {
+                try {
+                    unblockFirst.await()
+                } catch (_: InterruptedException) {
+                }
+            }
+            "${contender.contenderId}@@${Long.MAX_VALUE}"
+        }
+        every {
+            redisTemplate.execute(
+                match<RedisScript<Boolean>> { it.resultType == Boolean::class.java },
+                any<List<String>>(),
+                *anyVararg()
+            )
+        } answers {
+            if (releaseCalls.incrementAndGet() == 2) {
+                compensated.countDown()
+            }
+            true
+        }
+        val scheduler = ScheduledThreadPoolExecutor(1)
+        val service = SpringRedisMutexContendService(
+            contender,
+            Runnable::run,
+            Duration.ofSeconds(1),
+            Duration.ofSeconds(1),
+            redisTemplate,
+            mockk<RedisMessageListenerContainer>(relaxed = true),
+            scheduler
+        )
+
+        try {
+            service.start()
+            assertThat("Redis acquire should be in flight", firstInvoked.await(1, TimeUnit.SECONDS))
+            service.stop()
+            unblockFirst.countDown()
+
+            assertThat("late acquisition should be compensated", compensated.await(1, TimeUnit.SECONDS))
+            assertThat(releaseCalls.get(), equalTo(2))
+        } finally {
+            unblockFirst.countDown()
+            scheduler.shutdownNow()
+        }
+    }
+
     private class CompletionTrackingScheduler : ScheduledThreadPoolExecutor(2) {
         val completed = CountDownLatch(2)
 
