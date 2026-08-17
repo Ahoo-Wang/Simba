@@ -25,11 +25,29 @@ abstract class AbstractMutexContender(
 ) : MutexContender {
     companion object {
         private val log = KotlinLogging.logger {}
+
+        /**
+         * Aligned with the strictest backend schema (simba_jdbc: `mutex varchar(66)`, `owner_id varchar(128)`).
+         */
+        const val MAX_MUTEX_LENGTH = 66
+        const val MAX_CONTENDER_ID_LENGTH = 128
+
+        /**
+         * Owner-event / acquire-result wire delimiter: a contenderId containing it breaks the redis protocol parsing.
+         */
+        const val CONTENDER_ID_DELIMITER = "@@"
     }
 
     init {
         require(mutex.isNotBlank()) { "mutex must not be blank!" }
+        require(mutex.length <= MAX_MUTEX_LENGTH) { "mutex must not exceed $MAX_MUTEX_LENGTH characters!" }
         require(contenderId.isNotBlank()) { "contenderId must not be blank!" }
+        require(contenderId.length <= MAX_CONTENDER_ID_LENGTH) {
+            "contenderId must not exceed $MAX_CONTENDER_ID_LENGTH characters!"
+        }
+        require(!contenderId.contains(CONTENDER_ID_DELIMITER)) {
+            "contenderId must not contain [$CONTENDER_ID_DELIMITER]!"
+        }
     }
 
     override fun onAcquired(mutexState: MutexState) {
