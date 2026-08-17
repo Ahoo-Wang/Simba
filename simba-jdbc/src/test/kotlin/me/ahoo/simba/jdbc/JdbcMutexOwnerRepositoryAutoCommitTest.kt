@@ -15,9 +15,6 @@ package me.ahoo.simba.jdbc
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.equalTo
 import org.junit.jupiter.api.Test
-import java.lang.reflect.InvocationHandler
-import java.lang.reflect.Method
-import java.lang.reflect.Proxy
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
@@ -38,7 +35,7 @@ class JdbcMutexOwnerRepositoryAutoCommitTest {
         val autoCommit = AtomicBoolean(true)
         val now = System.currentTimeMillis()
         val repository = JdbcMutexOwnerRepository(
-            proxy(DataSource::class.java) { method, _ ->
+            jdbcProxy(DataSource::class.java) { method, _ ->
                 if (method.name == "getConnection") recordingConnection(autoCommit, now) else null
             }
         )
@@ -56,7 +53,7 @@ class JdbcMutexOwnerRepositoryAutoCommitTest {
 
     private fun recordingConnection(autoCommit: AtomicBoolean, now: Long): Connection {
         val statement = recordingStatement(now)
-        return proxy(Connection::class.java) { method, args ->
+        return jdbcProxy(Connection::class.java) { method, args ->
             when (method.name) {
                 "getAutoCommit" -> autoCommit.get()
                 "setAutoCommit" -> {
@@ -72,7 +69,7 @@ class JdbcMutexOwnerRepositoryAutoCommitTest {
 
     private fun recordingStatement(now: Long): PreparedStatement {
         val resultSet = ownerResultSet(now)
-        return proxy(PreparedStatement::class.java) { method, _ ->
+        return jdbcProxy(PreparedStatement::class.java) { method, _ ->
             when (method.name) {
                 "executeUpdate" -> 0 // not acquired
                 "executeQuery" -> resultSet
@@ -83,7 +80,7 @@ class JdbcMutexOwnerRepositoryAutoCommitTest {
 
     private fun ownerResultSet(now: Long): ResultSet {
         // getLong is called with distinct column indexes, so the handler keys on the args
-        return proxy(ResultSet::class.java) { method, args ->
+        return jdbcProxy(ResultSet::class.java) { method, args ->
             when (method.name) {
                 "next" -> true
                 "getLong" -> when (args?.get(0)) {
@@ -97,13 +94,5 @@ class JdbcMutexOwnerRepositoryAutoCommitTest {
                 else -> null
             }
         }
-    }
-
-    private fun <T : Any> proxy(iface: Class<T>, handler: (Method, Array<Any?>?) -> Any?): T {
-        return Proxy.newProxyInstance(
-            iface.classLoader,
-            arrayOf(iface),
-            InvocationHandler { _, method, args -> handler(method, args) }
-        ) as T
     }
 }

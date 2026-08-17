@@ -17,9 +17,6 @@ import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.sameInstance
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
-import java.lang.reflect.InvocationHandler
-import java.lang.reflect.Method
-import java.lang.reflect.Proxy
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.SQLException
@@ -52,7 +49,7 @@ class JdbcMutexOwnerRepositoryExceptionTest {
     fun `acquireAndGetOwner wraps null-message connection failure as SimbaException keeping the cause`() {
         val boom = SQLException() // message is null by construction
         val repository = JdbcMutexOwnerRepository(
-            proxy(DataSource::class.java) { method, _ ->
+            jdbcProxy(DataSource::class.java) { method, _ ->
                 if (method.name == "getConnection") throw boom
                 null
             }
@@ -66,27 +63,19 @@ class JdbcMutexOwnerRepositoryExceptionTest {
     }
 
     private fun dataSourceFailingStatementsWith(boom: Throwable): DataSource {
-        val statement = proxy(PreparedStatement::class.java) { method, _ ->
+        val statement = jdbcProxy(PreparedStatement::class.java) { method, _ ->
             if (method.name == "executeUpdate") throw boom
             null
         }
-        val connection = proxy(Connection::class.java) { method, _ ->
+        val connection = jdbcProxy(Connection::class.java) { method, _ ->
             when (method.name) {
                 "prepareStatement" -> statement
                 "getAutoCommit" -> true
                 else -> null
             }
         }
-        return proxy(DataSource::class.java) { method, _ ->
+        return jdbcProxy(DataSource::class.java) { method, _ ->
             if (method.name == "getConnection") connection else null
         }
-    }
-
-    private fun <T : Any> proxy(iface: Class<T>, handler: (Method, Array<Any?>?) -> Any?): T {
-        return Proxy.newProxyInstance(
-            iface.classLoader,
-            arrayOf(iface),
-            InvocationHandler { _, method, args -> handler(method, args) }
-        ) as T
     }
 }
