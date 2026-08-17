@@ -14,6 +14,7 @@ package me.ahoo.simba.spring.redis
 
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import me.ahoo.simba.core.AbstractMutexContender
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.equalTo
@@ -32,6 +33,35 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class SpringRedisMutexContendServiceSchedulingTest {
+    @Test
+    fun `guard renews ttl plus transition`() {
+        val contender = object : AbstractMutexContender("guard-lease", "guard-owner") {}
+        val redisTemplate = mockk<StringRedisTemplate>(relaxed = true)
+        every {
+            redisTemplate.execute(
+                match<RedisScript<String>> { it.resultType == String::class.java },
+                any<List<String>>(),
+                *anyVararg()
+            )
+        } returns "${contender.contenderId}@@15000"
+        val scheduler = ManualScheduledExecutor()
+        val service = newService(contender, redisTemplate, scheduler)
+
+        service.start()
+        scheduler.run(0)
+        scheduler.run(1)
+
+        verify(exactly = 2) {
+            redisTemplate.execute(
+                match<RedisScript<String>> { it.resultType == String::class.java },
+                listOf("{guard-lease}"),
+                contender.contenderId,
+                "15000"
+            )
+        }
+        scheduler.shutdownNow()
+    }
+
     @Test
     fun `released event replaces the pending retry`() {
         val contender = object : AbstractMutexContender("released", "released-owner") {}
