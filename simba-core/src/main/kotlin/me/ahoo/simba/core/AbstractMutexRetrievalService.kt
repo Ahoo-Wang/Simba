@@ -112,14 +112,21 @@ abstract class AbstractMutexRetrievalService protected constructor(
                     }
                     return
                 }
-                val newState = MutexState(afterOwner, newOwner)
+                val previousState = mutexState
+                val newState = MutexState(previousState.after, newOwner)
                 mutexState = newState
-                retriever.notifyOwner(newState)
+                try {
+                    retriever.notifyOwner(newState)
+                } catch (throwable: Throwable) {
+                    mutexState = previousState
+                    throw throwable
+                }
             }
         } catch (throwable: Throwable) {
             log.error(throwable) {
                 "safeNotifyOwner error - mutex:[$retriever] - newOwner:[$newOwner]"
             }
+            throw throwable
         }
     }
 

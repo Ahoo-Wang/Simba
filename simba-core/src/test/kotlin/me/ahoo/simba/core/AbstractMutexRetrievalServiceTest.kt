@@ -19,6 +19,7 @@ import org.hamcrest.Matchers.sameInstance
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.util.ArrayDeque
+import java.util.concurrent.CompletionException
 import java.util.concurrent.Executor
 
 class AbstractMutexRetrievalServiceTest {
@@ -110,20 +111,25 @@ class AbstractMutexRetrievalServiceTest {
     }
 
     @Test
-    fun `publishOwner swallows retriever exception and keeps mutexState`() {
+    fun `publishOwner rolls back state so a failed callback can retry`() {
         val contender = FakeMutexContender("m", "c1")
         contender.throwOnNotify = IllegalStateException("notify-boom")
         val service = FakeMutexContendService(contender)
         service.start()
 
         val newOwner = MutexOwner("c1", 0, 100, 200)
-        // Should not throw despite retriever.notifyOwner throwing
+        val error = assertThrows<CompletionException> {
+            service.publishOwner(newOwner).join()
+        }
+
+        assertThat(error.cause?.message, equalTo("notify-boom"))
+        assertThat(service.mutexState, equalTo(MutexState.NONE))
+
+        contender.throwOnNotify = null
         service.publishOwner(newOwner).join()
 
-        // mutexState was assigned BEFORE the throw (order-of-assignment contract)
         assertThat(service.afterOwner, sameInstance(newOwner))
-        // no exception escaped the CompletableFuture
-        assertThat(contender.acquired.size, equalTo(0))
+        assertThat(contender.acquired.size, equalTo(1))
         service.stop()
     }
 
