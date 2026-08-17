@@ -103,6 +103,9 @@ class JdbcMutexContendService(
             log.error(throwable) {
                 "safeHandleContend - mutex:[$mutex] contenderId:[$contenderId] - failed:[${throwable.message}]."
             }
+            if (status.isActive && generation == lifecycleGeneration.get() && isOwner) {
+                notifyOwner(MutexOwner.NONE)
+            }
             nextSchedule(ttl.toMillis(), generation)
         }
     }
