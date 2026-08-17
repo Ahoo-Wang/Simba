@@ -57,11 +57,14 @@ class SimbaLocker(
 
     @Throws(Exception::class)
     override fun close() {
-        contendService.stop()
+        if (contendService.running) {
+            contendService.stop()
+        }
+        OWNER.set(this, null)
     }
 
     override fun acquire() {
-        if (OWNER.compareAndSet(this, null, Thread.currentThread())) {
+        acquireOwned {
             contendService.start()
             var interrupted = false
             /*
@@ -79,14 +82,12 @@ class SimbaLocker(
             if (interrupted) {
                 Thread.currentThread().interrupt()
             }
-        } else {
-            throw IllegalMonitorStateException("Thread[${OWNER.get(this)}] already owns this lock[$mutex].")
         }
     }
 
     @Throws(TimeoutException::class)
     override fun acquire(timeout: Duration) {
-        if (OWNER.compareAndSet(this, null, Thread.currentThread())) {
+        acquireOwned {
             contendService.start()
             val deadline = System.nanoTime() + timeout.toNanos()
             var interrupted = false
@@ -108,13 +109,35 @@ class SimbaLocker(
                     "Could not acquire [$contenderId]@mutex:[$mutex] within timeout of ${timeout.toMillis()}ms"
                 )
             }
-        } else {
-            throw IllegalMonitorStateException("Thread[${OWNER.get(this)}] already owns this lock[$mutex].")
         }
     }
 
     override fun onAcquired(mutexState: MutexState) {
         super.onAcquired(mutexState)
         LockSupport.unpark(OWNER[this])
+    }
+
+    private inline fun acquireOwned(acquire: () -> Unit) {
+        if (!OWNER.compareAndSet(this, null, Thread.currentThread())) {
+            throw IllegalMonitorStateException("Thread[${OWNER.get(this)}] already owns this lock[$mutex].")
+        }
+        try {
+            acquire()
+        } catch (error: Throwable) {
+            cleanupFailedAcquire(error)
+        }
+    }
+
+    private fun cleanupFailedAcquire(error: Throwable): Nothing {
+        try {
+            if (contendService.running) {
+                contendService.stop()
+            }
+        } catch (cleanupError: Throwable) {
+            error.addSuppressed(cleanupError)
+        } finally {
+            OWNER.compareAndSet(this, Thread.currentThread(), null)
+        }
+        throw error
     }
 }
