@@ -43,53 +43,95 @@ class JdbcMutexContendService(
 
     private var executorService: ScheduledThreadPoolExecutor? = null
     private val contendPeriod: ContendPeriod = ContendPeriod(contenderId)
+    private val lifecycleLock = Any()
+    private var lifecycleGeneration = 0L
+    private var activeGeneration: Long? = null
 
     @Volatile
     private var contendScheduledFuture: ScheduledFuture<*>? = null
 
+    @Suppress("TooGenericExceptionCaught")
     override fun startContend() {
-        executorService =
-            ScheduledThreadPoolExecutor(1, defaultFactory("JdbcSimba_${mutex}_$contenderId"))
-        nextSchedule(initialDelay.toMillis())
+        synchronized(lifecycleLock) {
+            val executor = ScheduledThreadPoolExecutor(1, defaultFactory("JdbcSimba_${mutex}_$contenderId"))
+            val generation = ++lifecycleGeneration
+            activeGeneration = generation
+            executorService = executor
+            try {
+                nextSchedule(initialDelay.toMillis(), generation)
+            } catch (error: Throwable) {
+                activeGeneration = null
+                executor.shutdown()
+                throw error
+            }
+        }
     }
 
-    private fun nextSchedule(nextDelay: Long) {
-        log.debug {
-            "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] - nextDelay:[$nextDelay]."
-        }
-        if (!status.isActive) {
-            /*
-             * A contend task can still be in flight when stop() shuts the executor down
-             * (JDBC calls are not interruptible); scheduling on from that path would throw
-             * RejectedExecutionException that nobody observes.
-             */
-            log.warn {
-                "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] is not active[$status]."
+    private fun nextSchedule(nextDelay: Long, generation: Long) {
+        synchronized(lifecycleLock) {
+            log.debug {
+                "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] - nextDelay:[$nextDelay]."
             }
-            return
+            if (!status.isActive || generation != activeGeneration) {
+                /*
+                 * A contend task can still be in flight when stop() shuts the executor down
+                 * (JDBC calls are not interruptible); scheduling on from that path would throw
+                 * RejectedExecutionException that nobody observes.
+                 */
+                log.warn {
+                    "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] is not active[$status]."
+                }
+                return
+            }
+            contendScheduledFuture =
+                executorService!!.schedule({ safeHandleContend(generation) }, nextDelay, TimeUnit.MILLISECONDS)
         }
-        contendScheduledFuture = executorService!!.schedule({ safeHandleContend() }, nextDelay, TimeUnit.MILLISECONDS)
     }
 
     override fun stopContend() {
-        contendScheduledFuture?.cancel(true)
-        executorService?.shutdown()
-        notifyOwner(MutexOwner.NONE)
-        mutexOwnerRepository.release(mutex, contenderId)
+        synchronized(lifecycleLock) {
+            activeGeneration = null
+            contendScheduledFuture?.cancel(true)
+            executorService?.shutdown()
+            notifyOwner(MutexOwner.NONE)
+            mutexOwnerRepository.release(mutex, contenderId)
+        }
     }
 
     @Suppress("TooGenericExceptionCaught")
-    private fun safeHandleContend() {
+    private fun safeHandleContend(generation: Long) {
         try {
             val mutexOwner = contend()
+            if (!ensureActiveLifecycle(generation, mutexOwner)) {
+                return
+            }
             notifyOwner(mutexOwner)
             val nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
-            nextSchedule(nextDelay)
+            nextSchedule(nextDelay, generation)
         } catch (throwable: Throwable) {
             log.error(throwable) {
                 "safeHandleContend - mutex:[$mutex] contenderId:[$contenderId] - failed:[${throwable.message}]."
             }
-            nextSchedule(ttl.toMillis())
+            nextSchedule(ttl.toMillis(), generation)
+        }
+    }
+
+    private fun ensureActiveLifecycle(generation: Long, mutexOwner: MutexOwner): Boolean {
+        return synchronized(lifecycleLock) {
+            val currentGeneration = activeGeneration
+            if (status.isActive && generation == currentGeneration) {
+                return@synchronized true
+            }
+            /*
+             * A restarted lifecycle reuses contenderId and adopts a late acquisition;
+             * releasing it here would also release the restarted lifecycle's lease.
+             */
+            if (mutexOwner.isOwner(contenderId) &&
+                (currentGeneration == null || generation == currentGeneration)
+            ) {
+                mutexOwnerRepository.release(mutex, contenderId)
+            }
+            false
         }
     }
 

@@ -17,6 +17,7 @@ import me.ahoo.simba.core.MutexState
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.equalTo
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
@@ -24,6 +25,7 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Unit test for the stop/in-flight-task race. No database required:
@@ -39,44 +41,8 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class JdbcMutexContendServiceStopTest {
     @Test
-    fun `contend task completing after stop must not attempt to reschedule`() {
-        val invoked = CountDownLatch(1)
-        val inFlight = CountDownLatch(1)
-        val acquireCount = AtomicInteger()
-        val repository = object : MutexOwnerRepository {
-            override fun initMutex(mutex: String) = true
-            override fun tryInitMutex(mutex: String) = true
-
-            override fun getOwner(mutex: String): MutexOwnerEntity {
-                throw NotFoundMutexOwnerException("not expected in this test")
-            }
-
-            override fun acquire(mutex: String, contenderId: String, ttl: Long, transition: Long) = false
-
-            override fun acquireAndGetOwner(
-                mutex: String,
-                contenderId: String,
-                ttl: Long,
-                transition: Long
-            ): MutexOwnerEntity {
-                acquireCount.incrementAndGet()
-                invoked.countDown()
-                // interrupt-insensitive wait, like a JDBC call in flight
-                while (inFlight.count > 0) {
-                    try {
-                        inFlight.await()
-                    } catch (_: InterruptedException) {
-                    }
-                }
-                return MutexOwnerEntity(mutex, contenderId, 0, Long.MAX_VALUE, Long.MAX_VALUE)
-            }
-
-            override fun release(mutex: String, contenderId: String) = true
-
-            override fun ensureOwner(mutex: String): MutexOwnerEntity {
-                throw NotFoundMutexOwnerException("not expected in this test")
-            }
-        }
+    fun `contend task completing after stop compensates acquisition without rescheduling`() {
+        val repository = BlockingMutexOwnerRepository()
         val contender = object : AbstractMutexContender("m") {
             override fun onAcquired(mutexState: MutexState) = Unit
             override fun onReleased(mutexState: MutexState) = Unit
@@ -97,13 +63,14 @@ class JdbcMutexContendServiceStopTest {
         executorField.isAccessible = true
         executorField.set(contendService, recordingExecutor)
 
-        assertThat("contend task should reach the repository", invoked.await(5, TimeUnit.SECONDS))
+        assertThat("contend task should reach the repository", repository.firstInvoked.await(5, TimeUnit.SECONDS))
 
         contendService.stop()
         // stop shut the recording executor down; the in-flight task is still blocked
         assertThat(recordingExecutor.scheduleAttemptsWhenShutdown.get(), equalTo(0))
 
-        inFlight.countDown()
+        repository.unblockFirst.countDown()
+        assertThat("in-flight acquire should complete", repository.firstCompleted.await(2, TimeUnit.SECONDS))
 
         // the in-flight task finishes now: any (buggy) rescheduling attempt lands on the
         // shut-down recording executor within milliseconds
@@ -118,7 +85,148 @@ class JdbcMutexContendServiceStopTest {
             recordingExecutor.scheduleAttemptsWhenShutdown.get(),
             equalTo(0)
         )
-        assertThat("no further contention should run after stop", acquireCount.get(), equalTo(1))
+        assertThat("no further contention should run after stop", repository.acquireCount.get(), equalTo(1))
+        assertThat(
+            "an acquisition completing after stop must be compensated",
+            repository.compensatingRelease.await(1, TimeUnit.SECONDS),
+            equalTo(true)
+        )
+        assertThat(repository.ownerId.get(), equalTo(""))
+    }
+
+    @Test
+    fun `stale acquisition does not release restarted lifecycle ownership`() {
+        val repository = BlockingMutexOwnerRepository()
+        val contender = object : AbstractMutexContender("m") {
+            override fun onAcquired(mutexState: MutexState) = Unit
+            override fun onReleased(mutexState: MutexState) = Unit
+        }
+        val contendService = JdbcMutexContendService(
+            contender,
+            Executor { it.run() },
+            repository,
+            Duration.ZERO,
+            Duration.ofSeconds(10),
+            Duration.ofSeconds(6)
+        )
+
+        contendService.start()
+        assertThat("first acquire should be in flight", repository.firstInvoked.await(2, TimeUnit.SECONDS))
+        val oldExecutor = executorOf(contendService)
+
+        contendService.stop()
+        contendService.start()
+        assertThat("restarted lifecycle should acquire", repository.secondCompleted.await(2, TimeUnit.SECONDS))
+
+        repository.unblockFirst.countDown()
+        assertThat("stale task should finish", oldExecutor.awaitTermination(2, TimeUnit.SECONDS))
+
+        assertThat(repository.releaseAttempts.get(), equalTo(1))
+        assertThat(repository.ownerId.get(), equalTo(contender.contenderId))
+        contendService.stop()
+    }
+
+    @Test
+    fun `restart failure rolls back lifecycle so stale acquisition is compensated`() {
+        val repository = BlockingMutexOwnerRepository()
+        val contender = object : AbstractMutexContender("m") {
+            override fun onAcquired(mutexState: MutexState) = Unit
+            override fun onReleased(mutexState: MutexState) = Unit
+        }
+        val contendService = JdbcMutexContendService(
+            contender,
+            Executor { it.run() },
+            repository,
+            Duration.ZERO,
+            Duration.ofSeconds(10),
+            Duration.ofSeconds(6)
+        )
+
+        contendService.start()
+        assertThat("first acquire should be in flight", repository.firstInvoked.await(2, TimeUnit.SECONDS))
+        val oldExecutor = executorOf(contendService)
+        contendService.stop()
+
+        setInitialDelay(contendService, Duration.ofSeconds(Long.MAX_VALUE))
+        assertThrows<ArithmeticException> { contendService.start() }
+        val failedExecutor = executorOf(contendService)
+
+        repository.unblockFirst.countDown()
+        assertThat("stale task should finish", oldExecutor.awaitTermination(2, TimeUnit.SECONDS))
+
+        assertThat(failedExecutor.isShutdown, equalTo(true))
+        assertThat(repository.compensatingRelease.await(1, TimeUnit.SECONDS), equalTo(true))
+        assertThat(repository.ownerId.get(), equalTo(""))
+    }
+
+    private fun executorOf(contendService: JdbcMutexContendService): ScheduledThreadPoolExecutor {
+        val executorField = JdbcMutexContendService::class.java.getDeclaredField("executorService")
+        executorField.isAccessible = true
+        return executorField.get(contendService) as ScheduledThreadPoolExecutor
+    }
+
+    private fun setInitialDelay(contendService: JdbcMutexContendService, initialDelay: Duration) {
+        val initialDelayField = JdbcMutexContendService::class.java.getDeclaredField("initialDelay")
+        initialDelayField.isAccessible = true
+        initialDelayField.set(contendService, initialDelay)
+    }
+
+    private class BlockingMutexOwnerRepository : MutexOwnerRepository {
+        val firstInvoked = CountDownLatch(1)
+        val unblockFirst = CountDownLatch(1)
+        val firstCompleted = CountDownLatch(1)
+        val secondCompleted = CountDownLatch(1)
+        val compensatingRelease = CountDownLatch(1)
+        val acquireCount = AtomicInteger()
+        val releaseAttempts = AtomicInteger()
+        val ownerId = AtomicReference("")
+
+        override fun initMutex(mutex: String) = true
+        override fun tryInitMutex(mutex: String) = true
+
+        override fun getOwner(mutex: String): MutexOwnerEntity {
+            throw NotFoundMutexOwnerException("not expected in this test")
+        }
+
+        override fun acquire(mutex: String, contenderId: String, ttl: Long, transition: Long) = false
+
+        override fun acquireAndGetOwner(
+            mutex: String,
+            contenderId: String,
+            ttl: Long,
+            transition: Long
+        ): MutexOwnerEntity {
+            val attempt = acquireCount.incrementAndGet()
+            if (attempt == 1) {
+                firstInvoked.countDown()
+                while (unblockFirst.count > 0) {
+                    try {
+                        unblockFirst.await()
+                    } catch (_: InterruptedException) {
+                    }
+                }
+            }
+            ownerId.set(contenderId)
+            if (attempt == 1) {
+                firstCompleted.countDown()
+            } else if (attempt == 2) {
+                secondCompleted.countDown()
+            }
+            return MutexOwnerEntity(mutex, contenderId, 0, Long.MAX_VALUE, Long.MAX_VALUE)
+        }
+
+        override fun release(mutex: String, contenderId: String): Boolean {
+            releaseAttempts.incrementAndGet()
+            val released = ownerId.compareAndSet(contenderId, "")
+            if (released) {
+                compensatingRelease.countDown()
+            }
+            return released
+        }
+
+        override fun ensureOwner(mutex: String): MutexOwnerEntity {
+            throw NotFoundMutexOwnerException("not expected in this test")
+        }
     }
 
     private class RecordingScheduledExecutor : ScheduledThreadPoolExecutor(1) {
