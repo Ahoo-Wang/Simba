@@ -36,6 +36,9 @@ class JdbcMutexContendServiceFactoryTest {
         assertThrows<IllegalArgumentException> {
             newFactory(Duration.ZERO, Duration.ofMillis(Long.MAX_VALUE), Duration.ofMillis(1))
         }
+        assertThrows<IllegalArgumentException> {
+            newFactory(Duration.ofSeconds(Long.MAX_VALUE), Duration.ofMillis(1), Duration.ZERO)
+        }
     }
 
     private fun newFactory(

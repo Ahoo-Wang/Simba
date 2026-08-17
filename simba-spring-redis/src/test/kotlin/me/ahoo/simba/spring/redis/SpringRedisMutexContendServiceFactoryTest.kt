@@ -30,6 +30,7 @@ class SpringRedisMutexContendServiceFactoryTest {
         assertThrows<IllegalArgumentException> {
             newFactory(Duration.ofMillis(Long.MAX_VALUE), Duration.ofMillis(1))
         }
+        assertThrows<IllegalArgumentException> { newFactory(Duration.ofSeconds(Long.MAX_VALUE), Duration.ZERO) }
     }
 
     @Test
