@@ -74,7 +74,19 @@ abstract class AbstractMutexRetrievalService protected constructor(
 
     protected abstract fun startRetrieval()
     protected abstract fun stopRetrieval()
+
     protected fun notifyOwner(newOwner: MutexOwner): CompletableFuture<Void> {
+        /*
+         * Notifications submitted at INITIAL (e.g. an in-flight contend task or a late
+         * backend callback finishing after stop) must not revive ownership. STOPPING is
+         * deliberately allowed: every backend submits its release notification while stopping.
+         */
+        if (Status.INITIAL == status) {
+            log.warn {
+                "notifyOwner - ignore - mutex:[${retriever.mutex}] - newOwner:[$newOwner] is not active[$status]."
+            }
+            return CompletableFuture.completedFuture(null)
+        }
         return CompletableFuture.runAsync({ safeNotifyOwner(newOwner) }, handleExecutor)
     }
 
