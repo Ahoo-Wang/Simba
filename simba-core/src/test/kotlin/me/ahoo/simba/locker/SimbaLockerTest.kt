@@ -42,12 +42,14 @@ private class ControllableContendService(
 ) : AbstractMutexContendService(contender, SameThreadExecutor) {
     var startFailure: Throwable? = null
     var stopFailure: Throwable? = null
+    var stopInterrupted: Boolean? = null
 
     override fun startContend() {
         startFailure?.let { throw it }
     }
 
     override fun stopContend() {
+        stopInterrupted = Thread.currentThread().isInterrupted
         stopFailure?.let { throw it }
     }
 
@@ -128,6 +130,24 @@ class SimbaLockerTest {
         }
 
         assertThat(error.suppressed.single(), sameInstance(cleanupFailure))
+    }
+
+    @Test
+    fun `interrupted timeout cleans up before restoring interrupt status`() {
+        val factory = ControllableFactory()
+        val locker = SimbaLocker("m", factory)
+        Thread.currentThread().interrupt()
+
+        try {
+            assertThrows<TimeoutException> {
+                locker.acquire(Duration.ZERO)
+            }
+
+            assertThat(factory.service!!.stopInterrupted, equalTo(false))
+            assertThat(Thread.currentThread().isInterrupted, equalTo(true))
+        } finally {
+            Thread.interrupted()
+        }
     }
 
     @Test

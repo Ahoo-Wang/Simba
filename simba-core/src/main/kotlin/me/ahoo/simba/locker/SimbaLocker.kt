@@ -127,10 +127,15 @@ class SimbaLocker(
         try {
             acquire()
         } catch (error: Throwable) {
+            val interrupted = Thread.interrupted()
             try {
                 close()
             } catch (cleanupError: Throwable) {
                 error.addSuppressed(cleanupError)
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt()
+                }
             }
             throw error
         }
