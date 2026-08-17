@@ -191,7 +191,12 @@ class SpringRedisMutexContendService(
     }
 
     private fun guard(generation: Long): MutexOwner {
-        val message = redisTemplate.execute(SCRIPT_GUARD, keys, contenderId, ttl.toMillis().toString())
+        val message = redisTemplate.execute(
+            SCRIPT_GUARD,
+            keys,
+            contenderId,
+            (ttl.toMillis() + transition.toMillis()).toString()
+        )
         log.debug {
             "guard - mutex:[$mutex] contenderId:[$contenderId] - message:[$message]."
         }
