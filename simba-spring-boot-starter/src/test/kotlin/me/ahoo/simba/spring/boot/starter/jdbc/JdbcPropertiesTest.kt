@@ -12,7 +12,6 @@
  */
 package me.ahoo.simba.spring.boot.starter.jdbc
 
-import me.ahoo.simba.spring.boot.starter.redis.RedisProperties
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.equalTo
 import org.junit.jupiter.api.Test
@@ -36,7 +35,7 @@ internal class JdbcPropertiesTest {
 
     @Test
     fun setEnabled() {
-        val properties = RedisProperties(false)
+        val properties = JdbcProperties(enabled = false)
         assertThat(properties.enabled, equalTo(false))
     }
 
