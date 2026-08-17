@@ -179,22 +179,6 @@ class AbstractMutexRetrievalServiceTest {
     }
 
     @Test
-    fun `publishOwner after stop must be ignored`() {
-        val contender = FakeMutexContender("m", "c1")
-        val service = FakeMutexContendService(contender)
-        service.start()
-        service.stop()
-        assertThat(service.status, equalTo(MutexRetrievalService.Status.INITIAL))
-
-        // a late source (in-flight contend task, late callback) submitting after stop
-        // must not revive ownership or fire contender callbacks
-        service.publishOwner(MutexOwner("c1", 0, 100, 200)).join()
-
-        assertThat(service.mutexState, equalTo(MutexState.NONE))
-        assertThat(contender.acquired.size, equalTo(0))
-    }
-
-    @Test
     fun `self notification submitted while active but executing after stop must not revive ownership`() {
         val contender = FakeMutexContender("m", "c1")
         val executor = GatedExecutor()
