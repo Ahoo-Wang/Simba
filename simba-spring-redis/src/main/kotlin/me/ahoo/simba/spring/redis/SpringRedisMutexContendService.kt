@@ -122,11 +122,28 @@ class SpringRedisMutexContendService(
             return
         }
         scheduleFuture = scheduledExecutorService.schedule<MutexOwner>({
-            if (isOwner) {
-                return@schedule guard()
-            }
-            acquire()
+            safeContend()
         }, nextDelay, TimeUnit.MILLISECONDS)
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun safeContend(): MutexOwner {
+        return try {
+            if (isOwner) {
+                guard()
+            } else {
+                acquire()
+            }
+        } catch (throwable: Throwable) {
+            log.error(throwable) {
+                "safeContend - mutex:[$mutex] contenderId:[$contenderId] error."
+            }
+            if (isOwner) {
+                notifyOwner(MutexOwner.NONE)
+            }
+            nextSchedule(ttl.toMillis())
+            MutexOwner.NONE
+        }
     }
 
     @Suppress("TooGenericExceptionCaught")
