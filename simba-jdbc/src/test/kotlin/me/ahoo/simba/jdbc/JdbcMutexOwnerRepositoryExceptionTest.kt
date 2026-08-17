@@ -71,7 +71,11 @@ class JdbcMutexOwnerRepositoryExceptionTest {
             null
         }
         val connection = proxy(Connection::class.java) { method, _ ->
-            if (method.name == "prepareStatement") statement else null
+            when (method.name) {
+                "prepareStatement" -> statement
+                "getAutoCommit" -> true
+                else -> null
+            }
         }
         return proxy(DataSource::class.java) { method, _ ->
             if (method.name == "getConnection") connection else null

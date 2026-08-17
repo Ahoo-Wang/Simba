@@ -78,6 +78,12 @@ class SpringRedisMutexContendService(
     private val listenTopics: List<ChannelTopic> = listOf(ChannelTopic(mutexChannel), ChannelTopic(contenderChannel))
     private val contendPeriod: ContendPeriod = ContendPeriod(contenderId)
     private val mutexMessageListener: MutexMessageListener = MutexMessageListener()
+
+    /**
+     * Written by the scheduling executor thread and cancelled by the stopping thread;
+     * without volatile visibility the stopper can miss the latest reference and fail to cancel.
+     */
+    @Volatile
     private var scheduleFuture: ScheduledFuture<MutexOwner>? = null
 
     /**

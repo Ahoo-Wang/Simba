@@ -185,31 +185,40 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
     override fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwnerEntity {
         try {
             dataSource.connection.use { connection ->
+                val previousAutoCommit = connection.autoCommit
                 connection.autoCommit = false
-                return try {
-                    var acquired = acquire(connection, mutex, contenderId, ttl, transition)
-                    var mutexOwner = ensureOwner(connection, mutex)
-                    if (!acquired && !mutexOwner.hasOwner()) {
-                        /**
-                         * 没有竞争到领导权 && 当前不存在领导者 ==> 初始化时
-                         */
-                        log.info {
-                            "acquireAndGetOwner - There is no competition for leadership && There is currently no leader [When initializing]. Retry!"
+                try {
+                    return try {
+                        var acquired = acquire(connection, mutex, contenderId, ttl, transition)
+                        var mutexOwner = ensureOwner(connection, mutex)
+                        if (!acquired && !mutexOwner.hasOwner()) {
+                            /**
+                             * 没有竞争到领导权 && 当前不存在领导者 ==> 初始化时
+                             */
+                            log.info {
+                                "acquireAndGetOwner - There is no competition for leadership && There is currently no leader [When initializing]. Retry!"
+                            }
+                            acquired = acquire(connection, mutex, contenderId, ttl, transition)
+                            mutexOwner = ensureOwner(connection, mutex)
                         }
-                        acquired = acquire(connection, mutex, contenderId, ttl, transition)
-                        mutexOwner = ensureOwner(connection, mutex)
+                        check(!(acquired && !mutexOwner.isOwner(contenderId))) {
+                            /**
+                             * 当前竞争者已竞争到领导权 && 最新 mutexOwner 不是当前竞争者
+                             */
+                            "Contender:[$contenderId] has acquired leadership, but MutexOwner status is inconsistent!"
+                        }
+                        connection.commit()
+                        mutexOwner
+                    } catch (throwable: Throwable) {
+                        connection.rollback()
+                        throw SimbaException(throwable)
                     }
-                    check(!(acquired && !mutexOwner.isOwner(contenderId))) {
-                        /**
-                         * 当前竞争者已竞争到领导权 && 最新 mutexOwner 不是当前竞争者
-                         */
-                        "Contender:[$contenderId] has acquired leadership, but MutexOwner status is inconsistent!"
-                    }
-                    connection.commit()
-                    mutexOwner
-                } catch (throwable: Throwable) {
-                    connection.rollback()
-                    throw SimbaException(throwable)
+                } finally {
+                    /*
+                     * Pools that do not reset autoCommit on return would silently roll back
+                     * every later autoCommit-mode statement on the recycled connection.
+                     */
+                    connection.autoCommit = previousAutoCommit
                 }
             }
         } catch (sqlException: SQLException) {
