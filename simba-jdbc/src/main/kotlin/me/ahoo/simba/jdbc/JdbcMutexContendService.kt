@@ -23,6 +23,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Jdbc Mutex Contend Service.
@@ -43,21 +44,23 @@ class JdbcMutexContendService(
 
     private var executorService: ScheduledThreadPoolExecutor? = null
     private val contendPeriod: ContendPeriod = ContendPeriod(contenderId)
+    private val lifecycleGeneration = AtomicLong()
 
     @Volatile
     private var contendScheduledFuture: ScheduledFuture<*>? = null
 
     override fun startContend() {
+        val generation = lifecycleGeneration.incrementAndGet()
         executorService =
             ScheduledThreadPoolExecutor(1, defaultFactory("JdbcSimba_${mutex}_$contenderId"))
-        nextSchedule(initialDelay.toMillis())
+        nextSchedule(initialDelay.toMillis(), generation)
     }
 
-    private fun nextSchedule(nextDelay: Long) {
+    private fun nextSchedule(nextDelay: Long, generation: Long) {
         log.debug {
             "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] - nextDelay:[$nextDelay]."
         }
-        if (!status.isActive) {
+        if (!status.isActive || generation != lifecycleGeneration.get()) {
             /*
              * A contend task can still be in flight when stop() shuts the executor down
              * (JDBC calls are not interruptible); scheduling on from that path would throw
@@ -68,10 +71,15 @@ class JdbcMutexContendService(
             }
             return
         }
-        contendScheduledFuture = executorService!!.schedule({ safeHandleContend() }, nextDelay, TimeUnit.MILLISECONDS)
+        contendScheduledFuture = executorService!!.schedule(
+            { safeHandleContend(generation) },
+            nextDelay,
+            TimeUnit.MILLISECONDS
+        )
     }
 
     override fun stopContend() {
+        lifecycleGeneration.incrementAndGet()
         contendScheduledFuture?.cancel(true)
         executorService?.shutdown()
         notifyOwner(MutexOwner.NONE)
@@ -79,17 +87,23 @@ class JdbcMutexContendService(
     }
 
     @Suppress("TooGenericExceptionCaught")
-    private fun safeHandleContend() {
+    private fun safeHandleContend(generation: Long) {
         try {
             val mutexOwner = contend()
+            if (!status.isActive || generation != lifecycleGeneration.get()) {
+                if (mutexOwner.isOwner(contenderId)) {
+                    mutexOwnerRepository.release(mutex, contenderId)
+                }
+                return
+            }
             notifyOwner(mutexOwner)
             val nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
-            nextSchedule(nextDelay)
+            nextSchedule(nextDelay, generation)
         } catch (throwable: Throwable) {
             log.error(throwable) {
                 "safeHandleContend - mutex:[$mutex] contenderId:[$contenderId] - failed:[${throwable.message}]."
             }
-            nextSchedule(ttl.toMillis())
+            nextSchedule(ttl.toMillis(), generation)
         }
     }
 

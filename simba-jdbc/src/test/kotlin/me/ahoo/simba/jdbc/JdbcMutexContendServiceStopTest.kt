@@ -24,6 +24,7 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Unit test for the stop/in-flight-task race. No database required:
@@ -39,10 +40,13 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class JdbcMutexContendServiceStopTest {
     @Test
-    fun `contend task completing after stop must not attempt to reschedule`() {
+    fun `contend task completing after stop compensates acquisition without rescheduling`() {
         val invoked = CountDownLatch(1)
         val inFlight = CountDownLatch(1)
+        val completed = CountDownLatch(1)
+        val compensatingRelease = CountDownLatch(1)
         val acquireCount = AtomicInteger()
+        val ownerId = AtomicReference("")
         val repository = object : MutexOwnerRepository {
             override fun initMutex(mutex: String) = true
             override fun tryInitMutex(mutex: String) = true
@@ -68,10 +72,18 @@ class JdbcMutexContendServiceStopTest {
                     } catch (_: InterruptedException) {
                     }
                 }
+                ownerId.set(contenderId)
+                completed.countDown()
                 return MutexOwnerEntity(mutex, contenderId, 0, Long.MAX_VALUE, Long.MAX_VALUE)
             }
 
-            override fun release(mutex: String, contenderId: String) = true
+            override fun release(mutex: String, contenderId: String): Boolean {
+                val released = ownerId.compareAndSet(contenderId, "")
+                if (released) {
+                    compensatingRelease.countDown()
+                }
+                return released
+            }
 
             override fun ensureOwner(mutex: String): MutexOwnerEntity {
                 throw NotFoundMutexOwnerException("not expected in this test")
@@ -104,6 +116,7 @@ class JdbcMutexContendServiceStopTest {
         assertThat(recordingExecutor.scheduleAttemptsWhenShutdown.get(), equalTo(0))
 
         inFlight.countDown()
+        assertThat("in-flight acquire should complete", completed.await(2, TimeUnit.SECONDS))
 
         // the in-flight task finishes now: any (buggy) rescheduling attempt lands on the
         // shut-down recording executor within milliseconds
@@ -119,6 +132,12 @@ class JdbcMutexContendServiceStopTest {
             equalTo(0)
         )
         assertThat("no further contention should run after stop", acquireCount.get(), equalTo(1))
+        assertThat(
+            "an acquisition completing after stop must be compensated",
+            compensatingRelease.await(1, TimeUnit.SECONDS),
+            equalTo(true)
+        )
+        assertThat(ownerId.get(), equalTo(""))
     }
 
     private class RecordingScheduledExecutor : ScheduledThreadPoolExecutor(1) {
