@@ -39,6 +39,10 @@ class SpringRedisMutexContendServiceFactory(
     private val handleExecutor: Executor = ForkJoinPool.commonPool(),
     private val scheduledExecutorService: ScheduledExecutorService = Executors.newScheduledThreadPool(1)
 ) : MutexContendServiceFactory, AutoCloseable {
+    init {
+        validateRedisDurations(ttl, transition)
+    }
+
     override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
         return SpringRedisMutexContendService(
             mutexContender,

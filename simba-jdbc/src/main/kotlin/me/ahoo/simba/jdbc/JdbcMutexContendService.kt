@@ -41,6 +41,10 @@ class JdbcMutexContendService(
         private val log = KotlinLogging.logger {}
     }
 
+    init {
+        validateJdbcDurations(initialDelay, ttl, transition)
+    }
+
     private var executorService: ScheduledThreadPoolExecutor? = null
     private val contendPeriod: ContendPeriod = ContendPeriod(contenderId)
     private val lifecycleLock = Any()
