@@ -229,6 +229,26 @@ class AbstractMutexRetrievalServiceTest {
     }
 
     @Test
+    fun `stop release notification is preserved across restart`() {
+        val contender = FakeMutexContender("m", "c1")
+        val executor = ManualExecutor()
+        val service = FakeMutexContendService(contender, executor)
+        service.start()
+        val acquisition = service.publishOwner(MutexOwner("c1", 0, 100, 200))
+        executor.runAll()
+        acquisition.join()
+
+        val release = service.publishOwner(MutexOwner.NONE)
+        service.stop()
+        service.start()
+        executor.runAll()
+        release.join()
+
+        assertThat(contender.released.size, equalTo(1))
+        service.stop()
+    }
+
+    @Test
     fun `owner notifications are applied in submission order`() {
         val contender = FakeMutexContender("m", "c1")
         val executor = ManualExecutor()

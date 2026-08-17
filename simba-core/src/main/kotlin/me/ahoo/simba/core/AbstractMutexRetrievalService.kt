@@ -135,6 +135,7 @@ abstract class AbstractMutexRetrievalService protected constructor(
         try {
             stopRetrieval()
         } finally {
+            safeNotifyOwner(MutexOwner.NONE, lifecycleGeneration.get())
             STATUS.set(this, Status.INITIAL)
         }
     }
