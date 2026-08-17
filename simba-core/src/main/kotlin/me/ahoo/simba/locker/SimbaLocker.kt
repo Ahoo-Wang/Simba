@@ -63,7 +63,22 @@ class SimbaLocker(
     override fun acquire() {
         if (OWNER.compareAndSet(this, null, Thread.currentThread())) {
             contendService.start()
-            LockSupport.park(this)
+            var interrupted = false
+            /*
+             * park can also return spuriously or on interruption;
+             * only acquiring ownership ends the wait. Interruption does not cancel
+             * the acquire (j.u.c convention): the flag is consumed for parking and
+             * restored on exit.
+             */
+            while (!contendService.isOwner) {
+                LockSupport.park(this)
+                if (Thread.interrupted()) {
+                    interrupted = true
+                }
+            }
+            if (interrupted) {
+                Thread.currentThread().interrupt()
+            }
         } else {
             throw IllegalMonitorStateException("Thread[${OWNER.get(this)}] already owns this lock[$mutex].")
         }
@@ -73,7 +88,21 @@ class SimbaLocker(
     override fun acquire(timeout: Duration) {
         if (OWNER.compareAndSet(this, null, Thread.currentThread())) {
             contendService.start()
-            LockSupport.parkNanos(this, timeout.toNanos())
+            val deadline = System.nanoTime() + timeout.toNanos()
+            var interrupted = false
+            while (!contendService.isOwner) {
+                val remaining = deadline - System.nanoTime()
+                if (remaining <= 0) {
+                    break
+                }
+                LockSupport.parkNanos(this, remaining)
+                if (Thread.interrupted()) {
+                    interrupted = true
+                }
+            }
+            if (interrupted) {
+                Thread.currentThread().interrupt()
+            }
             if (!contendService.isOwner) {
                 throw TimeoutException(
                     "Could not acquire [$contenderId]@mutex:[$mutex] within timeout of ${timeout.toMillis()}ms"

@@ -26,6 +26,9 @@ import java.util.concurrent.ScheduledExecutorService
 /**
  * Spring Redis Mutex Contend Service Factory .
  *
+ * The factory owns its [scheduledExecutorService] lifecycle: closing it shuts the executor
+ * down, so callers sharing an executor across factories should pass a dedicated one.
+ *
  * @author ahoo wang
  */
 class SpringRedisMutexContendServiceFactory(
@@ -35,7 +38,7 @@ class SpringRedisMutexContendServiceFactory(
     private val listenerContainer: RedisMessageListenerContainer,
     private val handleExecutor: Executor = ForkJoinPool.commonPool(),
     private val scheduledExecutorService: ScheduledExecutorService = Executors.newScheduledThreadPool(1)
-) : MutexContendServiceFactory {
+) : MutexContendServiceFactory, AutoCloseable {
     override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
         return SpringRedisMutexContendService(
             mutexContender,
@@ -46,5 +49,9 @@ class SpringRedisMutexContendServiceFactory(
             listenerContainer,
             scheduledExecutorService
         )
+    }
+
+    override fun close() {
+        scheduledExecutorService.shutdown()
     }
 }

@@ -48,6 +48,14 @@ class ZookeeperMutexContendService(
     }
 
     override fun isLeader() {
+        if (!status.isActive) {
+            /*
+             * A late callback delivered after stop (INITIAL), or racing with stop (STOPPING),
+             * must not revive ownership: notLeader() is still allowed during STOPPING because
+             * CloseMode.NOTIFY_LEADER delivers the release notification while stopping.
+             */
+            return
+        }
         notifyOwner(MutexOwner(contenderId))
     }
 
