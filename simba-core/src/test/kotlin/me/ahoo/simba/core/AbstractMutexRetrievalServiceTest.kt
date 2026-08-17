@@ -18,6 +18,9 @@ import org.hamcrest.Matchers.equalTo
 import org.hamcrest.Matchers.sameInstance
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import kotlin.concurrent.thread
 
 class AbstractMutexRetrievalServiceTest {
     private fun newService(): FakeMutexContendService {
@@ -189,5 +192,61 @@ class AbstractMutexRetrievalServiceTest {
 
         assertThat(service.mutexState, equalTo(MutexState.NONE))
         assertThat(contender.acquired.size, equalTo(0))
+    }
+
+    @Test
+    fun `self notification submitted while active but executing after stop must not revive ownership`() {
+        val contender = FakeMutexContender("m", "c1")
+        val executor = GatedExecutor()
+        val service = FakeMutexContendService(contender, executor)
+        service.start()
+
+        // submitted while RUNNING, but the dispatch happens only after stop() completed:
+        // a multi-threaded handleExecutor may execute it after the stop notification
+        val future = service.publishOwner(MutexOwner("c1", 0, 100, 200))
+        service.stop()
+        assertThat(service.status, equalTo(MutexRetrievalService.Status.INITIAL))
+
+        executor.release()
+        future.join()
+
+        assertThat(service.mutexState, equalTo(MutexState.NONE))
+        assertThat(contender.acquired.size, equalTo(0))
+    }
+
+    @Test
+    fun `stop release notification executing after stop must still be applied`() {
+        val contender = FakeMutexContender("m", "c1")
+        val executor = GatedExecutor()
+        val service = FakeMutexContendService(contender, executor)
+        service.start()
+        service.publishOwner(MutexOwner("c1", 0, 100, 200)).join()
+        assertThat(service.hasOwner(), equalTo(true))
+
+        // the release notification is submitted while stopping and may execute once the
+        // service is fully stopped (INITIAL) — it must still be applied
+        val future = service.publishOwner(MutexOwner.NONE)
+        service.stop()
+
+        executor.release()
+        future.join()
+
+        assertThat(service.mutexState.after, equalTo(MutexOwner.NONE))
+        assertThat(contender.released.size, equalTo(1))
+    }
+
+    private class GatedExecutor : Executor {
+        private val gate = CountDownLatch(1)
+
+        override fun execute(command: Runnable) {
+            thread(isDaemon = true) {
+                gate.await()
+                command.run()
+            }
+        }
+
+        fun release() {
+            gate.countDown()
+        }
     }
 }
