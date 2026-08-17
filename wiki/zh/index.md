@@ -19,7 +19,7 @@ hero:
 features:
   - icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
     title: 多种后端支持
-    details: "选择最适合你技术栈的存储方案：基于乐观锁的 JDBC/MySQL、基于原子 Lua 脚本和发布/订阅的 Redis，或基于 Apache Curator 的 Zookeeper。"
+    details: "选择最适合你技术栈的存储方案：基于原子条件更新的 JDBC/MySQL、基于原子 Lua 脚本和发布/订阅的 Redis，或基于 Apache Curator 的 Zookeeper。"
   - icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
     title: 领导者选举
     details: "自动化的所有权管理，支持可配置的 TTL 和过渡期。当前领导者在到期前续租；竞争者使用随机抖动等待，避免惊群效应。"

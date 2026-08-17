@@ -278,7 +278,7 @@ flowchart LR
 | Module | Role |
 |---|---|
 | `simba-core` | Core interfaces and abstract implementations |
-| `simba-jdbc` | JDBC/MySQL backend — polling with optimistic locking |
+| `simba-jdbc` | JDBC/MySQL backend — polling with atomic conditional updates |
 | `simba-spring-redis` | Redis backend — Lua scripts + pub/sub notifications |
 | `simba-zookeeper` | Zookeeper backend — Curator LeaderLatch recipe |
 | `simba-spring-boot-starter` | Spring Boot auto-configuration |

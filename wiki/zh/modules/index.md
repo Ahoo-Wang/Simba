@@ -71,7 +71,7 @@ graph TB
 | 模块 | 职责 | 关键类型 | 依赖 |
 |---|---|---|---|
 | **simba-core** | 核心接口、抽象类、值对象 | `MutexContender`、`MutexContendService`、`SimbaLocker`、`AbstractScheduler` | kotlin-logging、cosid-core、guava |
-| **simba-jdbc** | JDBC/MySQL 后端，使用乐观锁 | `JdbcMutexContendService`、`JdbcMutexOwnerRepository` | simba-core、JDBC 驱动 |
+| **simba-jdbc** | JDBC/MySQL 后端，使用原子条件更新 | `JdbcMutexContendService`、`JdbcMutexOwnerRepository` | simba-core、JDBC 驱动 |
 | **simba-spring-redis** | Redis 后端，使用 Lua 脚本和发布/订阅 | `SpringRedisMutexContendService`、Lua 脚本 | simba-core、spring-data-redis |
 | **simba-zookeeper** | Zookeeper 后端，使用 Curator LeaderLatch | `ZookeeperMutexContendService` | simba-core、curator-recipes |
 | **simba-spring-boot-starter** | 所有后端的自动配置 | `SimbaJdbcAutoConfiguration`、`SimbaSpringRedisAutoConfiguration`、`SimbaZookeeperAutoConfiguration` | simba-core + 条件性后端依赖 |
@@ -89,7 +89,7 @@ graph LR
 
         J_REPO["MutexOwnerRepository"]
         J_SCHED["ScheduledThreadPoolExecutor<br>(polling)"]
-        J_DDL["simba_mutex table<br>optimistic locking"]
+        J_DDL["simba_mutex table<br>conditional UPDATE"]
     end
     subgraph sg_88 ["Redis Backend"]
 
@@ -117,7 +117,7 @@ graph LR
 |---|---|---|---|
 | **协调机制** | 使用 `ScheduledThreadPoolExecutor` 轮询 | Lua 脚本 + 发布/订阅 | Curator `LeaderLatch` |
 | **锁存储** | `simba_mutex` 表 | Redis 键（`simba:{mutex}`） | ZNode（`/simba/{mutex}`） |
-| **所有权转移** | 通过 `version` 列进行乐观锁 | 有序集合等待队列 + 发布/订阅通知 | ZK 对 latch 参与者的 watcher |
+| **所有权转移** | 由 owner/transition 谓词守卫的原子条件 `UPDATE` | 有序集合等待队列 + 发布/订阅通知 | ZK 对 latch 参与者的 watcher |
 | **时间源** | MySQL `current_timestamp(3)` | 系统时钟（客户端侧） | ZK 服务器时间 |
 | **外部依赖** | MySQL 实例 | Redis 实例 | ZooKeeper 集群 |
 | **最适合** | 已有关系型数据库基础设施 | 高吞吐量、低延迟 | 强一致性保证 |

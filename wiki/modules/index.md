@@ -71,7 +71,7 @@ graph TB
 | Module | Role | Key Types | Dependencies |
 |---|---|---|---|
 | **simba-core** | Core interfaces, abstract classes, value objects | `MutexContender`, `MutexContendService`, `SimbaLocker`, `AbstractScheduler` | kotlin-logging, cosid-core, guava |
-| **simba-jdbc** | JDBC/MySQL backend with optimistic locking | `JdbcMutexContendService`, `JdbcMutexOwnerRepository` | simba-core, JDBC driver |
+| **simba-jdbc** | JDBC/MySQL backend with atomic conditional updates | `JdbcMutexContendService`, `JdbcMutexOwnerRepository` | simba-core, JDBC driver |
 | **simba-spring-redis** | Redis backend with Lua scripts and pub/sub | `SpringRedisMutexContendService`, Lua scripts | simba-core, spring-data-redis |
 | **simba-zookeeper** | Zookeeper backend using Curator LeaderLatch | `ZookeeperMutexContendService` | simba-core, curator-recipes |
 | **simba-spring-boot-starter** | Auto-configuration for all backends | `SimbaJdbcAutoConfiguration`, `SimbaSpringRedisAutoConfiguration`, `SimbaZookeeperAutoConfiguration` | simba-core + conditional backend deps |
@@ -89,7 +89,7 @@ graph LR
 
         J_REPO["MutexOwnerRepository"]
         J_SCHED["ScheduledThreadPoolExecutor<br>(polling)"]
-        J_DDL["simba_mutex table<br>optimistic locking"]
+        J_DDL["simba_mutex table<br>conditional UPDATE"]
     end
     subgraph sg_30 ["Redis Backend"]
 
@@ -117,7 +117,7 @@ graph LR
 |---|---|---|---|
 | **Coordination mechanism** | Poll with `ScheduledThreadPoolExecutor` | Lua scripts + pub/sub | Curator `LeaderLatch` |
 | **Lock storage** | `simba_mutex` table | Redis key (`simba:{mutex}`) | ZNode (`/simba/{mutex}`) |
-| **Ownership transfer** | Optimistic locking via `version` column | Sorted set wait queue + pub/sub notification | ZK watcher on latch participants |
+| **Ownership transfer** | Atomic conditional `UPDATE` guarded by owner/transition predicates | Sorted set wait queue + pub/sub notification | ZK watcher on latch participants |
 | **Time source** | MySQL `current_timestamp(3)` | System clock (client-side) | ZK server time |
 | **External dependency** | MySQL instance | Redis instance | ZooKeeper ensemble |
 | **Best for** | Existing relational DB infrastructure | High-throughput, low-latency | Strong consistency guarantees |
