@@ -139,6 +139,7 @@ abstract class MutexContendServiceSpec {
     @Test
     open fun multiContend() {
         val count = AtomicInteger(0)
+        val invariantViolation = AtomicReference<AssertionError>()
         val currentOwnerIdRef = AtomicReference<String>()
         val contendServiceList: MutableList<MutexContendService> = ArrayList(10)
         repeat(10) {
@@ -149,18 +150,31 @@ abstract class MutexContendServiceSpec {
                     override fun onAcquired(mutexState: MutexState) {
                         currentOwnerIdRef.set(mutexState.after.ownerId)
                         super.onAcquired(mutexState)
-                        count.incrementAndGet().assert().isEqualTo(1)
+                        val ownerCount = count.incrementAndGet()
+                        if (ownerCount != 1) {
+                            invariantViolation.compareAndSet(
+                                null,
+                                AssertionError("Expected exactly one owner after acquire, but was $ownerCount.")
+                            )
+                        }
                     }
 
                     override fun onReleased(mutexState: MutexState) {
                         super.onReleased(mutexState)
-                        count.decrementAndGet().assert().isZero()
+                        val ownerCount = count.decrementAndGet()
+                        if (ownerCount != 0) {
+                            invariantViolation.compareAndSet(
+                                null,
+                                AssertionError("Expected no owner after release, but was $ownerCount.")
+                            )
+                        }
                     }
                 })
             contendService.start()
             contendServiceList.add(contendService)
         }
         TimeUnit.SECONDS.sleep(30)
+        invariantViolation.get()?.let { throw it }
         count.get().assert().isEqualTo(1)
         val currentOwnerId = currentOwnerIdRef.get()
         for (contendService in contendServiceList) {
