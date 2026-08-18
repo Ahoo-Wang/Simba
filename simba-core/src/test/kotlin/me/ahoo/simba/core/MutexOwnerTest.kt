@@ -13,109 +13,108 @@
 
 package me.ahoo.simba.core
 
-import org.hamcrest.MatcherAssert.assertThat
-import org.hamcrest.Matchers.equalTo
+import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.Test
 
 class MutexOwnerTest {
     @Test
     fun `isOwner returns true when ids match`() {
         val owner = MutexOwner("A", 0, 100, 200)
-        assertThat(owner.isOwner("A"), equalTo(true))
+        owner.isOwner("A").assert().isTrue()
     }
 
     @Test
     fun `isOwner returns false when ids differ`() {
         val owner = MutexOwner("A", 0, 100, 200)
-        assertThat(owner.isOwner("B"), equalTo(false))
+        owner.isOwner("B").assert().isFalse()
     }
 
     @Test
     fun `isInTtl is true when ttlAt greater than currentAt`() {
         val owner = FixedClockOwner("A", ttlAt = 200, transitionAt = 300, fixedCurrentAt = 100)
-        assertThat(owner.isInTtl, equalTo(true))
+        owner.isInTtl.assert().isTrue()
     }
 
     @Test
     fun `isInTtl is false when ttlAt equals currentAt`() {
         val owner = FixedClockOwner("A", ttlAt = 100, transitionAt = 300, fixedCurrentAt = 100)
-        assertThat(owner.isInTtl, equalTo(false))
+        owner.isInTtl.assert().isFalse()
     }
 
     @Test
     fun `isInTtl is false when ttlAt less than currentAt`() {
         val owner = FixedClockOwner("A", ttlAt = 50, transitionAt = 300, fixedCurrentAt = 100)
-        assertThat(owner.isInTtl, equalTo(false))
+        owner.isInTtl.assert().isFalse()
     }
 
     @Test
     fun `isInTtl contenderId is true for owner in ttl`() {
         val owner = FixedClockOwner("A", ttlAt = 200, transitionAt = 300, fixedCurrentAt = 100)
-        assertThat(owner.isInTtl("A"), equalTo(true))
+        owner.isInTtl("A").assert().isTrue()
     }
 
     @Test
     fun `isInTtl contenderId is false for owner expired`() {
         val owner = FixedClockOwner("A", ttlAt = 50, transitionAt = 300, fixedCurrentAt = 100)
-        assertThat(owner.isInTtl("A"), equalTo(false))
+        owner.isInTtl("A").assert().isFalse()
     }
 
     @Test
     fun `isInTtl contenderId is false for non owner even if in ttl`() {
         val owner = FixedClockOwner("A", ttlAt = 200, transitionAt = 300, fixedCurrentAt = 100)
-        assertThat(owner.isInTtl("B"), equalTo(false))
+        owner.isInTtl("B").assert().isFalse()
     }
 
     @Test
     fun `isInTransition is true at equality boundary`() {
         val owner = FixedClockOwner("A", ttlAt = 50, transitionAt = 100, fixedCurrentAt = 100)
-        assertThat(owner.isInTransition, equalTo(true))
+        owner.isInTransition.assert().isTrue()
     }
 
     @Test
     fun `isInTransition is false when transitionAt less than currentAt`() {
         val owner = FixedClockOwner("A", ttlAt = 50, transitionAt = 50, fixedCurrentAt = 100)
-        assertThat(owner.isInTransition, equalTo(false))
+        owner.isInTransition.assert().isFalse()
     }
 
     @Test
     fun `isInTransitionOf is true for owner in transition`() {
         val owner = FixedClockOwner("A", ttlAt = 50, transitionAt = 200, fixedCurrentAt = 100)
-        assertThat(owner.isInTransitionOf("A"), equalTo(true))
+        owner.isInTransitionOf("A").assert().isTrue()
     }
 
     @Test
     fun `isInTransitionOf is false for non owner`() {
         val owner = FixedClockOwner("A", ttlAt = 50, transitionAt = 200, fixedCurrentAt = 100)
-        assertThat(owner.isInTransitionOf("B"), equalTo(false))
+        owner.isInTransitionOf("B").assert().isFalse()
     }
 
     @Test
     fun `hasOwner is true at transition boundary`() {
         val owner = FixedClockOwner("A", ttlAt = 50, transitionAt = 100, fixedCurrentAt = 100)
-        assertThat(owner.hasOwner(), equalTo(true))
+        owner.hasOwner().assert().isTrue()
     }
 
     @Test
     fun `hasOwner is false when transitionAt less than currentAt`() {
         val owner = FixedClockOwner("A", ttlAt = 50, transitionAt = 50, fixedCurrentAt = 100)
-        assertThat(owner.hasOwner(), equalTo(false))
+        owner.hasOwner().assert().isFalse()
     }
 
     @Test
     fun `default args yield inTtl and inTransition true`() {
         val owner = MutexOwner("A")
-        assertThat(owner.isInTtl, equalTo(true))
-        assertThat(owner.isInTransition, equalTo(true))
-        assertThat(owner.hasOwner(), equalTo(true))
+        owner.isInTtl.assert().isTrue()
+        owner.isInTransition.assert().isTrue()
+        owner.hasOwner().assert().isTrue()
     }
 
     @Test
     fun `NONE constant has empty ownerId and is expired`() {
-        assertThat(MutexOwner.NONE.ownerId, equalTo(MutexOwner.NONE_OWNER_ID))
-        assertThat(MutexOwner.NONE_OWNER_ID, equalTo(""))
-        assertThat(MutexOwner.NONE.isInTtl, equalTo(false))
-        assertThat(MutexOwner.NONE.isInTransition, equalTo(false))
-        assertThat(MutexOwner.NONE.hasOwner(), equalTo(false))
+        MutexOwner.NONE.ownerId.assert().isEqualTo(MutexOwner.NONE_OWNER_ID)
+        MutexOwner.NONE_OWNER_ID.assert().isEmpty()
+        MutexOwner.NONE.isInTtl.assert().isFalse()
+        MutexOwner.NONE.isInTransition.assert().isFalse()
+        MutexOwner.NONE.hasOwner().assert().isFalse()
     }
 }

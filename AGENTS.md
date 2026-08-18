@@ -28,7 +28,7 @@ pnpm run fix:mermaid
 
 - Tests use JUnit Platform with Kotlin/JVM and Java 17.
 - Common backend behavior is captured in `simba-test/src/main/kotlin/me/ahoo/simba/test/MutexContendServiceSpec.kt`.
-- Existing tests use Hamcrest assertions (`MatcherAssert.assertThat`, `Matchers.equalTo`) and MockK where mocking is needed.
+- Prefer FluentAssert's `.assert()` extensions for new Kotlin assertions; preserve existing Hamcrest assertions unless the test is already being changed. Use MockK where mocking is needed.
 - Run a single test class with `./gradlew <module>:test --tests fully.qualified.TestClass`.
 - CI runs `simba-core`, then Redis, Zookeeper, and JDBC module checks from `.github/workflows/integration-test.yml`.
 - Redis CI starts a Redis service. JDBC CI starts MySQL and loads `simba-jdbc/src/init-script/init-simba-mysql.sql`.
