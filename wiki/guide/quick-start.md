@@ -15,27 +15,28 @@ This guide walks you through adding Simba to your project, configuring a backend
 
 ## Add Dependencies
 
-Simba is organized as a multi-module library. You need the core module plus exactly one backend module. If you use Spring Boot, the starter handles auto-configuration.
+The examples below target Spring Boot 4.1 and assume its dependency management is enabled. The Simba starter supplies auto-configuration, but each backend still needs its client/infrastructure dependencies. Choose exactly one complete set.
 
 ### Gradle Kotlin DSL
 
 ::: code-group
 
 ```kotlin [JDBC/MySQL]
+implementation("me.ahoo.simba:simba-spring-boot-starter:3.1.0")
 implementation("me.ahoo.simba:simba-jdbc:3.1.0")
+implementation("org.springframework.boot:spring-boot-starter-jdbc")
+runtimeOnly("com.mysql:mysql-connector-j")
 ```
 
 ```kotlin [Redis]
+implementation("me.ahoo.simba:simba-spring-boot-starter:3.1.0")
 implementation("me.ahoo.simba:simba-spring-redis:3.1.0")
+implementation("org.springframework.boot:spring-boot-starter-data-redis")
 ```
 
 ```kotlin [Zookeeper]
-implementation("me.ahoo.simba:simba-zookeeper:3.1.0")
-```
-
-```kotlin [Spring Boot Starter (add one backend)]
 implementation("me.ahoo.simba:simba-spring-boot-starter:3.1.0")
-implementation("me.ahoo.simba:simba-jdbc:3.1.0")  // or simba-spring-redis, or simba-zookeeper
+implementation("me.ahoo.simba:simba-zookeeper:3.1.0")
 ```
 
 :::
@@ -47,31 +48,51 @@ implementation("me.ahoo.simba:simba-jdbc:3.1.0")  // or simba-spring-redis, or s
 ```xml [JDBC/MySQL]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
+    <artifactId>simba-spring-boot-starter</artifactId>
+    <version>3.1.0</version>
+</dependency>
+<dependency>
+    <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-jdbc</artifactId>
     <version>3.1.0</version>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-jdbc</artifactId>
+</dependency>
+<dependency>
+    <groupId>com.mysql</groupId>
+    <artifactId>mysql-connector-j</artifactId>
+    <scope>runtime</scope>
 </dependency>
 ```
 
 ```xml [Redis]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
+    <artifactId>simba-spring-boot-starter</artifactId>
+    <version>3.1.0</version>
+</dependency>
+<dependency>
+    <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-redis</artifactId>
     <version>3.1.0</version>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-redis</artifactId>
 </dependency>
 ```
 
 ```xml [Zookeeper]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
-    <artifactId>simba-zookeeper</artifactId>
+    <artifactId>simba-spring-boot-starter</artifactId>
     <version>3.1.0</version>
 </dependency>
-```
-
-```xml [Spring Boot Starter]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
-    <artifactId>simba-spring-boot-starter</artifactId>
+    <artifactId>simba-zookeeper</artifactId>
     <version>3.1.0</version>
 </dependency>
 ```
@@ -199,20 +220,60 @@ scheduler.stop()
 
 ## Spring Boot Auto-Configuration
 
-With the Spring Boot starter, Simba auto-configures everything. You just set the enabled flag for your chosen backend.
+The starter creates a `MutexContendServiceFactory` only after the selected backend infrastructure is available. Configure the matching `DataSource`, Redis connection, or `CuratorFramework` bean.
 
-**application.yml**
+::: code-group
 
-```yaml
+```yaml [JDBC application.yml]
 simba:
   jdbc:
     enabled: true
     initial-delay: 0s
     ttl: 10s
     transition: 6s
+
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/simba_db
+    username: root
+    password: root
 ```
 
-The auto-configuration creates the `MutexContendServiceFactory` bean for you. Inject it and use it directly:
+```yaml [Redis application.yml]
+simba:
+  redis:
+    enabled: true
+    ttl: 10s
+    transition: 6s
+
+spring:
+  data:
+    redis:
+      url: redis://localhost:6379
+```
+
+```kotlin [Zookeeper Bean]
+import org.apache.curator.framework.CuratorFramework
+import org.apache.curator.framework.CuratorFrameworkFactory
+import org.apache.curator.retry.ExponentialBackoffRetry
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Configuration
+
+@Configuration(proxyBeanMethods = false)
+class ZookeeperConfiguration {
+    @Bean(initMethod = "start", destroyMethod = "close")
+    fun curatorFramework(): CuratorFramework = CuratorFrameworkFactory.newClient(
+        "localhost:2181",
+        ExponentialBackoffRetry(1000, 3)
+    )
+}
+```
+
+:::
+
+For JDBC, also create the `simba_mutex` table with the [MySQL initialization script](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/init-simba-mysql.sql).
+
+After those prerequisites exist, auto-configuration creates the `MutexContendServiceFactory` bean. Inject it and use it directly:
 
 ```kotlin
 import org.springframework.stereotype.Component

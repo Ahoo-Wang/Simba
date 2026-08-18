@@ -15,27 +15,28 @@ description: 几分钟内上手 Simba。添加依赖、选择后端，用几行�
 
 ## 添加依赖
 
-Simba 采用多模块组织。你需要核心模块加上恰好一个后端模块。如果使用 Spring Boot，starter 会处理自动配置。
+以下示例面向 Spring Boot 4.1，并假定已启用其依赖管理。Simba starter 提供自动配置，但每个后端仍需要对应的客户端和基础设施依赖。请选择一套完整组合。
 
 ### Gradle Kotlin DSL
 
 ::: code-group
 
 ```kotlin [JDBC/MySQL]
+implementation("me.ahoo.simba:simba-spring-boot-starter:3.1.0")
 implementation("me.ahoo.simba:simba-jdbc:3.1.0")
+implementation("org.springframework.boot:spring-boot-starter-jdbc")
+runtimeOnly("com.mysql:mysql-connector-j")
 ```
 
 ```kotlin [Redis]
+implementation("me.ahoo.simba:simba-spring-boot-starter:3.1.0")
 implementation("me.ahoo.simba:simba-spring-redis:3.1.0")
+implementation("org.springframework.boot:spring-boot-starter-data-redis")
 ```
 
 ```kotlin [Zookeeper]
-implementation("me.ahoo.simba:simba-zookeeper:3.1.0")
-```
-
-```kotlin [Spring Boot Starter（还需添加一个后端）]
 implementation("me.ahoo.simba:simba-spring-boot-starter:3.1.0")
-implementation("me.ahoo.simba:simba-jdbc:3.1.0")  // 或 simba-spring-redis，或 simba-zookeeper
+implementation("me.ahoo.simba:simba-zookeeper:3.1.0")
 ```
 
 :::
@@ -47,31 +48,51 @@ implementation("me.ahoo.simba:simba-jdbc:3.1.0")  // 或 simba-spring-redis，�
 ```xml [JDBC/MySQL]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
+    <artifactId>simba-spring-boot-starter</artifactId>
+    <version>3.1.0</version>
+</dependency>
+<dependency>
+    <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-jdbc</artifactId>
     <version>3.1.0</version>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-jdbc</artifactId>
+</dependency>
+<dependency>
+    <groupId>com.mysql</groupId>
+    <artifactId>mysql-connector-j</artifactId>
+    <scope>runtime</scope>
 </dependency>
 ```
 
 ```xml [Redis]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
+    <artifactId>simba-spring-boot-starter</artifactId>
+    <version>3.1.0</version>
+</dependency>
+<dependency>
+    <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-redis</artifactId>
     <version>3.1.0</version>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-redis</artifactId>
 </dependency>
 ```
 
 ```xml [Zookeeper]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
-    <artifactId>simba-zookeeper</artifactId>
+    <artifactId>simba-spring-boot-starter</artifactId>
     <version>3.1.0</version>
 </dependency>
-```
-
-```xml [Spring Boot Starter]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
-    <artifactId>simba-spring-boot-starter</artifactId>
+    <artifactId>simba-zookeeper</artifactId>
     <version>3.1.0</version>
 </dependency>
 ```
@@ -199,20 +220,60 @@ scheduler.stop()
 
 ## Spring Boot 自动配置
 
-使用 Spring Boot starter 后，Simba 会自动配置一切。你只需为你选择的后端设置启用标志即可。
+只有在所选后端的基础设施可用后，starter 才会创建 `MutexContendServiceFactory`。请配置对应的 `DataSource`、Redis 连接或 `CuratorFramework` Bean。
 
-**application.yml**
+::: code-group
 
-```yaml
+```yaml [JDBC application.yml]
 simba:
   jdbc:
     enabled: true
     initial-delay: 0s
     ttl: 10s
     transition: 6s
+
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/simba_db
+    username: root
+    password: root
 ```
 
-自动配置会为你创建 `MutexContendServiceFactory` Bean。注入它即可直接使用：
+```yaml [Redis application.yml]
+simba:
+  redis:
+    enabled: true
+    ttl: 10s
+    transition: 6s
+
+spring:
+  data:
+    redis:
+      url: redis://localhost:6379
+```
+
+```kotlin [Zookeeper Bean]
+import org.apache.curator.framework.CuratorFramework
+import org.apache.curator.framework.CuratorFrameworkFactory
+import org.apache.curator.retry.ExponentialBackoffRetry
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Configuration
+
+@Configuration(proxyBeanMethods = false)
+class ZookeeperConfiguration {
+    @Bean(initMethod = "start", destroyMethod = "close")
+    fun curatorFramework(): CuratorFramework = CuratorFrameworkFactory.newClient(
+        "localhost:2181",
+        ExponentialBackoffRetry(1000, 3)
+    )
+}
+```
+
+:::
+
+使用 JDBC 时，还需通过 [MySQL 初始化脚本](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/init-simba-mysql.sql) 创建 `simba_mutex` 表。
+
+满足这些前置条件后，自动配置会创建 `MutexContendServiceFactory` Bean。注入它即可直接使用：
 
 ```kotlin
 import org.springframework.stereotype.Component

@@ -33,6 +33,12 @@ Simba aims to provide easy-to-use and flexible distributed lock services and sup
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 
     <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
     <artifactId>demo</artifactId>
     <properties>
         <simba.version>simbaVersion</simba.version>
@@ -48,6 +54,9 @@ Simba aims to provide easy-to-use and flexible distributed lock services and sup
     
 </project>
 ```
+
+The starter provides Simba auto-configuration only. Add exactly one complete backend dependency set below; the backend infrastructure is still required.
+
 ### application.yaml
 
 ```yaml
@@ -72,6 +81,27 @@ spring:
 
 ``` kotlin
     implementation("me.ahoo.simba:simba-jdbc:${simbaVersion}")
+    implementation("org.springframework.boot:spring-boot-starter-jdbc")
+    runtimeOnly("com.mysql:mysql-connector-j")
+```
+
+> Maven
+
+```xml
+<dependency>
+    <groupId>me.ahoo.simba</groupId>
+    <artifactId>simba-jdbc</artifactId>
+    <version>${simba.version}</version>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-jdbc</artifactId>
+</dependency>
+<dependency>
+    <groupId>com.mysql</groupId>
+    <artifactId>mysql-connector-j</artifactId>
+    <scope>runtime</scope>
+</dependency>
 ```
 
 ```sql
@@ -92,6 +122,21 @@ create table simba_mutex
 
 ``` kotlin
     implementation("me.ahoo.simba:simba-spring-redis:${simbaVersion}")
+    implementation("org.springframework.boot:spring-boot-starter-data-redis")
+```
+
+> Maven
+
+```xml
+<dependency>
+    <groupId>me.ahoo.simba</groupId>
+    <artifactId>simba-spring-redis</artifactId>
+    <version>${simba.version}</version>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-redis</artifactId>
+</dependency>
 ```
 
 ### Optional-3: ZookeeperMutexContendService
@@ -101,6 +146,18 @@ create table simba_mutex
 ``` kotlin
     implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
 ```
+
+> Maven
+
+```xml
+<dependency>
+    <groupId>me.ahoo.simba</groupId>
+    <artifactId>simba-zookeeper</artifactId>
+    <version>${simba.version}</version>
+</dependency>
+```
+
+Also register a managed `CuratorFramework` bean as shown in the [Quick Start](https://simba.ahoo.me/guide/quick-start.html).
 
 ## Examples
 

@@ -33,6 +33,12 @@ Simba 旨在提供易用、灵活的分布式锁服务，支持多种存储后�
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 
     <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
     <artifactId>demo</artifactId>
     <properties>
         <simba.version>simbaVersion</simba.version>
@@ -48,6 +54,9 @@ Simba 旨在提供易用、灵活的分布式锁服务，支持多种存储后�
     
 </project>
 ```
+
+starter 只提供 Simba 自动配置。请从下文选择并添加一套完整的后端依赖；对应的后端基础设施仍然是必需的。
+
 ### application.yaml
 
 ```yaml
@@ -72,6 +81,27 @@ spring:
 
 ``` kotlin
     implementation("me.ahoo.simba:simba-jdbc:${simbaVersion}")
+    implementation("org.springframework.boot:spring-boot-starter-jdbc")
+    runtimeOnly("com.mysql:mysql-connector-j")
+```
+
+> Maven
+
+```xml
+<dependency>
+    <groupId>me.ahoo.simba</groupId>
+    <artifactId>simba-jdbc</artifactId>
+    <version>${simba.version}</version>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-jdbc</artifactId>
+</dependency>
+<dependency>
+    <groupId>com.mysql</groupId>
+    <artifactId>mysql-connector-j</artifactId>
+    <scope>runtime</scope>
+</dependency>
 ```
 
 ```sql
@@ -92,6 +122,21 @@ create table simba_mutex
 
 ``` kotlin
     implementation("me.ahoo.simba:simba-spring-redis:${simbaVersion}")
+    implementation("org.springframework.boot:spring-boot-starter-data-redis")
+```
+
+> Maven
+
+```xml
+<dependency>
+    <groupId>me.ahoo.simba</groupId>
+    <artifactId>simba-spring-redis</artifactId>
+    <version>${simba.version}</version>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-redis</artifactId>
+</dependency>
 ```
 
 ### Optional-3: ZookeeperMutexContendService
@@ -101,6 +146,18 @@ create table simba_mutex
 ``` kotlin
     implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
 ```
+
+> Maven
+
+```xml
+<dependency>
+    <groupId>me.ahoo.simba</groupId>
+    <artifactId>simba-zookeeper</artifactId>
+    <version>${simba.version}</version>
+</dependency>
+```
+
+还需按照[快速开始](https://simba.ahoo.me/zh/guide/quick-start.html)注册一个由 Spring 管理的 `CuratorFramework` Bean。
 
 ## Examples
 
