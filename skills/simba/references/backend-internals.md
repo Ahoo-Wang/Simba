@@ -19,7 +19,7 @@ The sorted set acts as the wait queue. Contenders are notified via Pub/Sub when 
 
 For the current owner to renew (extend TTL):
 1. Checks if the lock is held by this contender (`GET key == contenderId`).
-2. If yes: `SET XX PX ttlMs` to extend the expiry. Returns `contenderId@@ttlMs`.
+2. If yes: `SET XX PX (ttlMs + transitionMs)` to renew the full hard lease. Returns `contenderId@@hardLeaseMs`.
 3. If no: returns the current owner info so the contender knows it lost the lock.
 
 ### mutex_release.lua
