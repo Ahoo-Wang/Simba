@@ -90,18 +90,19 @@ Mock the factory and verify the locker lifecycle:
 import me.ahoo.simba.locker.SimbaLocker
 
 @Test
-fun `locker should acquire and release`() {
+fun `locker should stop running service on close`() {
     val mockService = mockk<MutexContendService>(relaxed = true)
     every { mockFactory.createMutexContendService(any()) } returns mockService
+    every { mockService.running } returns true
 
     val locker = SimbaLocker("test-lock", mockFactory)
-    // acquire() will block, so in unit tests we typically don't call it directly
-    // Instead test the code that uses the locker
     locker.close()
 
     verify { mockService.stop() }
 }
 ```
+
+Stub `running` as true because `close()` calls `stop()` only for an active contend service.
 
 ## TCK — Extending MutexContendServiceSpec
 
