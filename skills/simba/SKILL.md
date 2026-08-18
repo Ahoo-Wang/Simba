@@ -117,6 +117,8 @@ contendService.stop()
 Key points to explain:
 - `mutex` is the logical lock name. All contenders for the same mutex compete for one lock.
 - `contenderId` defaults to `"{counter}:{pid}@{hostAddress}"` via `ContenderIdGenerator.HOST`. Override to use `ContenderIdGenerator.UUID` or a custom ID.
+- For JDBC, keep `mutex` at most 66 characters and `contenderId` at most 128 characters to fit the schema.
+- For Redis, never include the `@@` wire delimiter in a custom `contenderId`; owner-event parsing requires exactly two fields.
 - `onAcquired` / `onReleased` are called asynchronously on the `handleExecutor`. Don't block these callbacks.
 - The service must be started with `start()` and stopped with `stop()` when done.
 
