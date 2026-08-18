@@ -161,6 +161,7 @@ Use when: the application needs a periodic task that should run on exactly one i
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.schedule.AbstractScheduler
 import me.ahoo.simba.schedule.ScheduleConfig
+import java.time.Duration
 
 class MyScheduler(mutexContendServiceFactory: MutexContendServiceFactory) :
     AbstractScheduler(mutex = "my-scheduled-task", mutexContendServiceFactory) {
@@ -190,6 +191,9 @@ For Spring Boot, implement `SmartLifecycle` to auto-start/stop:
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.schedule.AbstractScheduler
 import me.ahoo.simba.schedule.ScheduleConfig
+import org.springframework.context.SmartLifecycle
+import org.springframework.stereotype.Service
+import java.time.Duration
 
 @Service
 class MyScheduler(mutexContendServiceFactory: MutexContendServiceFactory) :
@@ -199,6 +203,7 @@ class MyScheduler(mutexContendServiceFactory: MutexContendServiceFactory) :
     override val config = ScheduleConfig.delay(Duration.ZERO, Duration.ofSeconds(30))
     override val worker = "my-scheduler"
     override fun work() { /* ... */ }
+    override fun isRunning(): Boolean = running
 }
 ```
 
