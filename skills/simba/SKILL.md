@@ -119,7 +119,7 @@ Key points to explain:
 - `contenderId` defaults to `"{counter}:{pid}@{hostAddress}"` via `ContenderIdGenerator.HOST`. Override to use `ContenderIdGenerator.UUID` or a custom ID.
 - For JDBC, keep `mutex` at most 66 characters and `contenderId` at most 128 characters to fit the schema.
 - For Redis, never include the `@@` wire delimiter in a custom `contenderId`; owner-event parsing requires exactly two fields.
-- `onAcquired` / `onReleased` are called asynchronously on the `handleExecutor`. Don't block these callbacks.
+- `onAcquired` / `onReleased` notifications are serialized. Normal notifications use the configured `handleExecutor`; JDBC/Redis defaults and Spring Boot auto-configuration use `ForkJoinPool.commonPool()`, while a direct executor may run them on the caller thread. When stopping an owned service, `onReleased` may run on the executor or the `stop()` caller, and `stop()` waits for it to complete. Keep callbacks short and do not rely on thread affinity.
 - The service must be started with `start()` and stopped with `stop()` when done.
 
 ### Pattern 2: SimbaLocker (RAII-style blocking lock)
@@ -271,7 +271,7 @@ For tests, use the `simba-testing` skill. In short:
 ## Common Pitfalls
 
 1. **Forgetting to stop the service**: Always call `stop()` or `close()` — otherwise the contender keeps polling/subscribing and may hold the lock.
-2. **Blocking callbacks**: `onAcquired`/`onReleased` run on a shared executor. Long-running work in these callbacks will delay other contenders' notifications.
+2. **Blocking callbacks**: Long-running callbacks delay later notifications for that service. Queued callbacks occupy a shared worker with the default executor or block the producer with a direct executor; release callbacks can delay `stop()` regardless of which thread executes them.
 3. **Multiple backends enabled**: The result depends on condition evaluation and inferred bean return types; a backend may silently win or multiple factories may be registered. Enable exactly one backend unless ambiguity is intentional.
 4. **Clock skew with JDBC**: The JDBC backend uses DB server time (`currentDbAt`) to avoid clock skew across application nodes. Ensure all nodes point to the same DB.
 5. **Redis release vs expiration**: Explicit release wakes the oldest queued contender through its personal Pub/Sub channel. Natural key expiration publishes nothing; contenders retry on their existing schedule around hard expiry.
