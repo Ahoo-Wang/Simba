@@ -237,7 +237,7 @@ simba:
     enabled: true                  # enable Zookeeper backend (default: true)
 ```
 
-Prefer one backend capability and one enabled backend per application. If multiple backend modules are on the classpath and enabled, Spring can expose multiple `MutexContendServiceFactory` beans; use `@Primary` or `@Qualifier` only when that ambiguity is intentional.
+Enable exactly one backend per application. The auto-configurations define no supported cross-backend precedence: with multiple backend modules, one factory may silently back off or Spring may expose multiple `MutexContendServiceFactory` beans. Disable unused backends instead of relying on evaluation order; use `@Primary` or `@Qualifier` only when multiple factories are intentional.
 
 ### TTL and Transition Tuning
 
@@ -270,7 +270,7 @@ For tests, use the `simba-testing` skill. In short:
 
 1. **Forgetting to stop the service**: Always call `stop()` or `close()` — otherwise the contender keeps polling/subscribing and may hold the lock.
 2. **Blocking callbacks**: `onAcquired`/`onReleased` run on a shared executor. Long-running work in these callbacks will delay other contenders' notifications.
-3. **Multiple backends enabled**: If both Redis and JDBC are on the classpath without explicit disambiguation, Spring will fail to autowire `MutexContendServiceFactory`.
+3. **Multiple backends enabled**: The result depends on condition evaluation and inferred bean return types; a backend may silently win or multiple factories may be registered. Enable exactly one backend unless ambiguity is intentional.
 4. **Clock skew with JDBC**: The JDBC backend uses DB server time (`currentDbAt`) to avoid clock skew across application nodes. Ensure all nodes point to the same DB.
 5. **Redis release vs expiration**: Explicit release wakes the oldest queued contender through its personal Pub/Sub channel. Natural key expiration publishes nothing; contenders retry on their existing schedule around hard expiry.
 6. **Zookeeper path conflicts**: The Zookeeper backend creates paths at `/simba/{mutex}`. Don't use the same mutex name for unrelated locks.
