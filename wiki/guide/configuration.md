@@ -158,8 +158,12 @@ val factory = SpringRedisMutexContendServiceFactory(
 ```kotlin
 import me.ahoo.simba.zookeeper.ZookeeperMutexContendServiceFactory
 import org.apache.curator.framework.CuratorFramework
+import java.util.concurrent.ForkJoinPool
 
-val factory = ZookeeperMutexContendServiceFactory(curatorClient)
+val factory = ZookeeperMutexContendServiceFactory(
+    handleExecutor = ForkJoinPool.commonPool(),
+    curatorFramework = curatorClient
+)
 ```
 
 The Zookeeper backend delegates lease management to Curator, so no timing parameters are needed.
