@@ -24,20 +24,29 @@ application {
     mainClass.set("me.ahoo.simba.example.ExampleApp")
 }
 
+val exampleBackend = providers.gradleProperty("exampleBackend").orElse("redis").get()
+
 dependencies {
     implementation(platform(project(":simba-dependencies")))
     annotationProcessor(platform(project(":simba-dependencies")))
     implementation("org.slf4j:slf4j-api")
 
-//    implementation("com.mysql:mysql-connector-j")
-//    implementation(project(":simba-jdbc"))
-//    implementation("org.springframework.boot:spring-boot-starter-jdbc")
+    when (exampleBackend) {
+        "jdbc" -> {
+            implementation(project(":simba-jdbc"))
+            implementation("org.springframework.boot:spring-boot-starter-jdbc")
+            runtimeOnly("com.mysql:mysql-connector-j")
+        }
+        "redis" -> {
+            implementation(project(":simba-spring-redis"))
+            implementation("org.springframework.boot:spring-boot-starter-data-redis")
+        }
+        "zookeeper" -> implementation(project(":simba-zookeeper"))
+        else -> error("Unsupported exampleBackend '$exampleBackend'. Expected jdbc, redis, or zookeeper.")
+    }
 
-    implementation(project(":simba-spring-redis"))
-    implementation("org.springframework.boot:spring-boot-starter-data-redis")
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")
-//    implementation(project(":simba-zookeeper"))
     implementation(project(":simba-spring-boot-starter"))
     testImplementation("org.junit.jupiter:junit-jupiter-api")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
