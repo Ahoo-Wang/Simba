@@ -34,7 +34,7 @@ Decision heuristic: If the project has Redis, use Redis. If it has Zookeeper/Cur
 Import the Simba BOM first so every module resolves to the same released version. The Spring examples assume Spring Boot 4.1 dependency management is enabled.
 
 ```kotlin
-implementation(platform("me.ahoo.simba:simba-bom:3.1.1"))
+implementation(platform("me.ahoo.simba:simba-bom:3.1.2"))
 ```
 
 Use a Gradle feature capability from `simba-spring-boot-starter` so the application pulls only one backend.
