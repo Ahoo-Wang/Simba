@@ -98,9 +98,11 @@ configure(libraryProjects) {
     dependencies {
         api(platform(dependenciesProject))
         testImplementation(platform(rootProject.libs.junit.bom))
+        testImplementation(platform(rootProject.libs.fluent.assert.bom))
         implementation("com.google.guava:guava")
         implementation("org.slf4j:slf4j-api")
         testImplementation("ch.qos.logback:logback-classic")
+        testImplementation("me.ahoo.test:fluent-assert-core")
         testImplementation("org.junit.jupiter:junit-jupiter-api")
         testImplementation("org.junit.jupiter:junit-jupiter-params")
         testImplementation("org.hamcrest:hamcrest")

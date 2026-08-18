@@ -20,8 +20,7 @@ import me.ahoo.simba.core.MutexOwner
 import me.ahoo.simba.core.MutexState
 import me.ahoo.simba.schedule.AbstractScheduler
 import me.ahoo.simba.schedule.ScheduleConfig
-import org.hamcrest.MatcherAssert.assertThat
-import org.hamcrest.Matchers.equalTo
+import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
 import java.time.Duration
@@ -62,10 +61,10 @@ abstract class MutexContendServiceSpec {
         })
         contendService.start()
         acquiredFuture.join()
-        assertThat(contendService.isOwner, equalTo(true))
+        contendService.isOwner.assert().isTrue()
         contendService.stop()
         releasedFuture.join()
-        assertThat(contendService.isOwner, equalTo(false))
+        contendService.isOwner.assert().isFalse()
     }
 
     @Test
@@ -97,16 +96,16 @@ abstract class MutexContendServiceSpec {
         })
         contendService.start()
         acquiredFuture.join()
-        assertThat(contendService.isOwner, equalTo(true))
+        contendService.isOwner.assert().isTrue()
         contendService.stop()
         releasedFuture.join()
-        assertThat(contendService.isOwner, equalTo(false))
+        contendService.isOwner.assert().isFalse()
         contendService.start()
         acquiredFuture2.join()
-        assertThat(contendService.isOwner, equalTo(true))
+        contendService.isOwner.assert().isTrue()
         contendService.stop()
         releasedFuture2.join()
-        assertThat(contendService.isOwner, equalTo(false))
+        contendService.isOwner.assert().isFalse()
     }
 
     @Test
@@ -128,13 +127,13 @@ abstract class MutexContendServiceSpec {
         })
         contendService.start()
         acquiredFuture.join()
-        assertThat(contendService.isOwner, equalTo(true))
+        contendService.isOwner.assert().isTrue()
         TimeUnit.SECONDS.sleep(3)
-        assertThat(contendService.afterOwner.ownerId, equalTo(contendService.contender.contenderId))
-        assertThat(contendService.isOwner, equalTo(true))
+        contendService.afterOwner.ownerId.assert().isEqualTo(contendService.contender.contenderId)
+        contendService.isOwner.assert().isTrue()
         contendService.stop()
         releasedFuture.join()
-        assertThat(contendService.isOwner, equalTo(false))
+        contendService.isOwner.assert().isFalse()
     }
 
     @Test
@@ -150,27 +149,27 @@ abstract class MutexContendServiceSpec {
                     override fun onAcquired(mutexState: MutexState) {
                         currentOwnerIdRef.set(mutexState.after.ownerId)
                         super.onAcquired(mutexState)
-                        assertThat(count.incrementAndGet(), equalTo(1))
+                        count.incrementAndGet().assert().isEqualTo(1)
                     }
 
                     override fun onReleased(mutexState: MutexState) {
                         super.onReleased(mutexState)
-                        assertThat(count.decrementAndGet(), equalTo(0))
+                        count.decrementAndGet().assert().isZero()
                     }
                 })
             contendService.start()
             contendServiceList.add(contendService)
         }
         TimeUnit.SECONDS.sleep(30)
-        assertThat(count.get(), equalTo(1))
+        count.get().assert().isEqualTo(1)
         val currentOwnerId = currentOwnerIdRef.get()
         for (contendService in contendServiceList) {
             if (contendService.afterOwner.ownerId.isNotBlank()) {
-                assertThat(contendService.afterOwner.ownerId, equalTo(currentOwnerId))
+                contendService.afterOwner.ownerId.assert().isEqualTo(currentOwnerId)
             }
         }
         val ownerCount = contendServiceList.count { it.contenderId == currentOwnerId }
-        assertThat(ownerCount, equalTo(1))
+        ownerCount.assert().isEqualTo(1)
     }
 
     @Test
@@ -188,11 +187,11 @@ abstract class MutexContendServiceSpec {
                 countDownLatch.countDown()
             }
         }
-        assertThat(testScheduler.running, equalTo(false))
+        testScheduler.running.assert().isFalse()
         testScheduler.start()
-        assertThat(testScheduler.running, equalTo(true))
-        assertThat(countDownLatch.await(5, TimeUnit.SECONDS), equalTo(true))
+        testScheduler.running.assert().isTrue()
+        countDownLatch.await(5, TimeUnit.SECONDS).assert().isTrue()
         testScheduler.stop()
-        assertThat(testScheduler.running, equalTo(false))
+        testScheduler.running.assert().isFalse()
     }
 }
