@@ -21,7 +21,7 @@ Before writing a test, decide:
 
 ## Unit Tests with MockK
 
-For application code that injects `MutexContendServiceFactory`, mock it:
+For application code that injects `MutexContendServiceFactory`, call the component under test and mock only the factory seam:
 
 ```kotlin
 import io.mockk.every
@@ -33,7 +33,7 @@ import me.ahoo.simba.core.MutexContender
 import me.ahoo.simba.core.MutexOwner
 import me.ahoo.simba.core.MutexState
 
-class MyServiceTest {
+class MyComponentTest {
     private val mockFactory = mockk<MutexContendServiceFactory>()
     private val mockService = mockk<MutexContendService>(relaxed = true)
 
@@ -44,11 +44,10 @@ class MyServiceTest {
 
     @Test
     fun `should start contend service`() {
-        val contender = MyContender()
-        val service = mockFactory.createMutexContendService(contender)
-        service.start()
+        val myComponent = MyComponent(mockFactory)
+        myComponent.start()
 
-        verify { service.start() }
+        verify(exactly = 1) { mockService.start() }
     }
 }
 ```
