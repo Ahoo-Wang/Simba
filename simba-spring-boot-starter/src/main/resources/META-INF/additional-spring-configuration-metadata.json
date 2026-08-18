@@ -1,0 +1,67 @@
+{
+  "properties": [
+    {
+      "name": "simba.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether Simba auto-configuration is enabled.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled",
+      "defaultValue": true
+    },
+    {
+      "name": "simba.jdbc.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the JDBC backend is enabled.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.jdbc.JdbcProperties",
+      "defaultValue": true
+    },
+    {
+      "name": "simba.jdbc.initial-delay",
+      "type": "java.time.Duration",
+      "description": "Delay before the first JDBC contention attempt.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.jdbc.JdbcProperties",
+      "defaultValue": "0s"
+    },
+    {
+      "name": "simba.jdbc.ttl",
+      "type": "java.time.Duration",
+      "description": "Time-to-live of a JDBC owner lease.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.jdbc.JdbcProperties",
+      "defaultValue": "10s"
+    },
+    {
+      "name": "simba.jdbc.transition",
+      "type": "java.time.Duration",
+      "description": "Grace period for preferential JDBC owner renewal.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.jdbc.JdbcProperties",
+      "defaultValue": "6s"
+    },
+    {
+      "name": "simba.redis.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the Redis backend is enabled.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.redis.RedisProperties",
+      "defaultValue": true
+    },
+    {
+      "name": "simba.redis.ttl",
+      "type": "java.time.Duration",
+      "description": "Time-to-live of a Redis owner lease.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.redis.RedisProperties",
+      "defaultValue": "10s"
+    },
+    {
+      "name": "simba.redis.transition",
+      "type": "java.time.Duration",
+      "description": "Grace period for preferential Redis owner renewal.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.redis.RedisProperties",
+      "defaultValue": "6s"
+    },
+    {
+      "name": "simba.zookeeper.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the Zookeeper backend is enabled.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.zookeeper.ZookeeperProperties",
+      "defaultValue": true
+    }
+  ]
+}

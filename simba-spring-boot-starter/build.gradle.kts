@@ -14,6 +14,17 @@ plugins {
     alias(libs.plugins.kotlin.spring)
     kotlin("kapt")
 }
+kapt {
+    arguments {
+        arg(
+            "org.springframework.boot.configurationprocessor.additionalMetadataLocations",
+            file("src/main/resources").absolutePath
+        )
+    }
+}
+tasks.matching { it.name == "kaptKotlin" }.configureEach {
+    inputs.file("src/main/resources/META-INF/additional-spring-configuration-metadata.json")
+}
 java {
     registerFeature("springRedisSupport") {
         usingSourceSet(sourceSets[SourceSet.MAIN_SOURCE_SET_NAME])
