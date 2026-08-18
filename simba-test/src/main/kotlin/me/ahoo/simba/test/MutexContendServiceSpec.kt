@@ -137,11 +137,13 @@ abstract class MutexContendServiceSpec {
     }
 
     @Test
+    @Suppress("TooGenericExceptionCaught", "ThrowsCount")
     open fun multiContend() {
         val count = AtomicInteger(0)
         val invariantViolation = AtomicReference<AssertionError>()
         val currentOwnerIdRef = AtomicReference<String>()
         val contendServiceList: MutableList<MutexContendService> = ArrayList(10)
+        var testFailure: Throwable? = null
         try {
             repeat(10) {
                 val contendService =
@@ -185,11 +187,24 @@ abstract class MutexContendServiceSpec {
             }
             val ownerCount = contendServiceList.count { it.contenderId == currentOwnerId }
             ownerCount.assert().isEqualTo(1)
-        } finally {
-            contendServiceList.asReversed().forEach {
-                if (it.running) it.stop()
+        } catch (error: Throwable) {
+            testFailure = error
+        }
+        var cleanupFailure: Throwable? = null
+        for (contendService in contendServiceList.asReversed()) {
+            try {
+                if (contendService.running) contendService.stop()
+            } catch (error: Throwable) {
+                if (cleanupFailure == null) {
+                    cleanupFailure = error
+                } else {
+                    cleanupFailure.addSuppressed(error)
+                }
             }
         }
+        cleanupFailure?.let { cleanupError -> testFailure?.addSuppressed(cleanupError) }
+        testFailure?.let { throw it }
+        cleanupFailure?.let { throw it }
     }
 
     @Test
