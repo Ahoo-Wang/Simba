@@ -15,7 +15,7 @@ Simba testing has three layers:
 Choose the simplest layer that gives confidence. Most application code only needs unit tests with mocks. Backend implementors need TCK + integration tests.
 
 Before writing a test, decide:
-- **Application behavior**: mock `MutexContendServiceFactory`, capture the contender, and trigger callbacks directly.
+- **Application behavior**: mock `MutexContendServiceFactory`, capture the contender, and pass ownership changes to `notifyOwner`.
 - **Backend implementation**: extend `MutexContendServiceSpec` and run against the real backend.
 - **Scheduler behavior**: verify leadership gating separately from the business logic in `work()`.
 
@@ -54,7 +54,7 @@ class MyComponentTest {
 
 ### Simulating Leadership Changes
 
-To test code that reacts to `onAcquired`/`onReleased`, capture the contender and invoke callbacks directly:
+To test code that reacts to `onAcquired`/`onReleased`, capture the contender and pass states through its real `notifyOwner` dispatch:
 
 ```kotlin
 @Test
@@ -67,15 +67,15 @@ fun `should react to leadership change`() {
     myComponent.start()
 
     // Simulate acquiring leadership
-    val mutexState = MutexState(MutexOwner.NONE, MutexOwner("test-contender"))
-    contenderSlot.captured.onAcquired(mutexState)
+    val contender = contenderSlot.captured
+    val owner = MutexOwner(contender.contenderId)
+    contender.notifyOwner(MutexState(MutexOwner.NONE, owner))
 
     // Assert your component's behavior
     myComponent.isLeader.assert().isTrue()
 
     // Simulate losing leadership
-    val releasedState = MutexState(MutexOwner("test-contender"), MutexOwner.NONE)
-    contenderSlot.captured.onReleased(releasedState)
+    contender.notifyOwner(MutexState(owner, MutexOwner.NONE))
 
     myComponent.isLeader.assert().isFalse()
 }
@@ -175,17 +175,18 @@ fun `scheduler should run work only when leader`() {
 
     scheduler.start()
     val contender = contenderSlot.captured
+    val owner = MutexOwner(contender.contenderId)
     try {
         outsideLeadershipWork.await(200, TimeUnit.MILLISECONDS).assert().isFalse()
         leader.set(true)
-        contender.onAcquired(MutexState(MutexOwner.NONE, MutexOwner(contender.contenderId)))
+        contender.notifyOwner(MutexState(MutexOwner.NONE, owner))
         leaderWork.await(5, TimeUnit.SECONDS).assert().isTrue()
-        contender.onReleased(MutexState(MutexOwner(contender.contenderId), MutexOwner.NONE))
+        contender.notifyOwner(MutexState(owner, MutexOwner.NONE))
         leader.set(false)
         outsideLeadershipWork.await(200, TimeUnit.MILLISECONDS).assert().isFalse()
     } finally {
         if (leader.getAndSet(false)) {
-            contender.onReleased(MutexState(MutexOwner(contender.contenderId), MutexOwner.NONE))
+            contender.notifyOwner(MutexState(owner, MutexOwner.NONE))
         }
         scheduler.stop()
     }
