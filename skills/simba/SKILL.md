@@ -128,6 +128,7 @@ Use when: the developer needs a simple "acquire lock, do work, release" pattern 
 
 ```kotlin
 import me.ahoo.simba.locker.SimbaLocker
+import java.time.Duration
 
 SimbaLocker("my-lock", mutexContendServiceFactory).use { locker ->
     locker.acquire(Duration.ofSeconds(5))  // throws TimeoutException if lock not acquired
@@ -139,6 +140,7 @@ SimbaLocker("my-lock", mutexContendServiceFactory).use { locker ->
 Or with explicit try/finally:
 ```kotlin
 import me.ahoo.simba.locker.SimbaLocker
+import java.time.Duration
 
 val locker = SimbaLocker("my-lock", mutexContendServiceFactory)
 try {
