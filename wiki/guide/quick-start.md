@@ -22,21 +22,21 @@ The examples below target Spring Boot 4.1 and assume its dependency management i
 ::: code-group
 
 ```kotlin [JDBC/MySQL]
-implementation("me.ahoo.simba:simba-spring-boot-starter:3.1.0")
-implementation("me.ahoo.simba:simba-jdbc:3.1.0")
+implementation("me.ahoo.simba:simba-spring-boot-starter:3.1.1")
+implementation("me.ahoo.simba:simba-jdbc:3.1.1")
 implementation("org.springframework.boot:spring-boot-starter-jdbc")
 runtimeOnly("com.mysql:mysql-connector-j")
 ```
 
 ```kotlin [Redis]
-implementation("me.ahoo.simba:simba-spring-boot-starter:3.1.0")
-implementation("me.ahoo.simba:simba-spring-redis:3.1.0")
+implementation("me.ahoo.simba:simba-spring-boot-starter:3.1.1")
+implementation("me.ahoo.simba:simba-spring-redis:3.1.1")
 implementation("org.springframework.boot:spring-boot-starter-data-redis")
 ```
 
 ```kotlin [Zookeeper]
-implementation("me.ahoo.simba:simba-spring-boot-starter:3.1.0")
-implementation("me.ahoo.simba:simba-zookeeper:3.1.0")
+implementation("me.ahoo.simba:simba-spring-boot-starter:3.1.1")
+implementation("me.ahoo.simba:simba-zookeeper:3.1.1")
 ```
 
 :::
@@ -49,12 +49,12 @@ implementation("me.ahoo.simba:simba-zookeeper:3.1.0")
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
-    <version>3.1.0</version>
+    <version>3.1.1</version>
 </dependency>
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-jdbc</artifactId>
-    <version>3.1.0</version>
+    <version>3.1.1</version>
 </dependency>
 <dependency>
     <groupId>org.springframework.boot</groupId>
@@ -71,12 +71,12 @@ implementation("me.ahoo.simba:simba-zookeeper:3.1.0")
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
-    <version>3.1.0</version>
+    <version>3.1.1</version>
 </dependency>
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-redis</artifactId>
-    <version>3.1.0</version>
+    <version>3.1.1</version>
 </dependency>
 <dependency>
     <groupId>org.springframework.boot</groupId>
@@ -88,12 +88,12 @@ implementation("me.ahoo.simba:simba-zookeeper:3.1.0")
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
-    <version>3.1.0</version>
+    <version>3.1.1</version>
 </dependency>
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-zookeeper</artifactId>
-    <version>3.1.0</version>
+    <version>3.1.1</version>
 </dependency>
 ```
 
