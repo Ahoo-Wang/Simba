@@ -271,7 +271,7 @@ class ZookeeperConfiguration {
 
 :::
 
-For JDBC, also create the `simba_mutex` table with the [MySQL initialization script](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/init-simba-mysql.sql).
+For JDBC, also create the `simba_mutex` table with [`simba-jdbc/src/init-script/init-simba-mysql.sql:17`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/init-simba-mysql.sql#L17).
 
 After those prerequisites exist, auto-configuration creates the `MutexContendServiceFactory` bean. Inject it and use it directly:
 
