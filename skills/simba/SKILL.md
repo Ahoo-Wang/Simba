@@ -272,5 +272,5 @@ For tests, use the `simba-testing` skill. In short:
 2. **Blocking callbacks**: `onAcquired`/`onReleased` run on a shared executor. Long-running work in these callbacks will delay other contenders' notifications.
 3. **Multiple backends enabled**: If both Redis and JDBC are on the classpath without explicit disambiguation, Spring will fail to autowire `MutexContendServiceFactory`.
 4. **Clock skew with JDBC**: The JDBC backend uses DB server time (`currentDbAt`) to avoid clock skew across application nodes. Ensure all nodes point to the same DB.
-5. **Redis key expiration**: If the Redis key expires (process crash), the transition period gives the old owner a chance to reclaim. After transition, the next contender in the sorted-set queue is notified via Pub/Sub.
+5. **Redis release vs expiration**: Explicit release wakes the oldest queued contender through its personal Pub/Sub channel. Natural key expiration publishes nothing; contenders retry on their existing schedule around hard expiry.
 6. **Zookeeper path conflicts**: The Zookeeper backend creates paths at `/simba/{mutex}`. Don't use the same mutex name for unrelated locks.
