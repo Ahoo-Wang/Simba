@@ -139,11 +139,29 @@ Do not silently add Testcontainers to this repository's tests. If CI isolation i
 Test that scheduled work runs only on the leader:
 
 ```kotlin
+import io.mockk.capture
+import io.mockk.every
+import io.mockk.mockk
+import io.mockk.slot
+import me.ahoo.simba.core.MutexContendService
+import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.core.MutexContender
+import me.ahoo.simba.core.MutexOwner
+import me.ahoo.simba.core.MutexState
 import me.ahoo.simba.schedule.AbstractScheduler
 import me.ahoo.simba.schedule.ScheduleConfig
+import me.ahoo.test.asserts.assert
+import org.junit.jupiter.api.Test
+import java.time.Duration
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @Test
 fun `scheduler should run work only when leader`() {
+    val contenderSlot = slot<MutexContender>()
+    val mockService = mockk<MutexContendService>(relaxed = true)
+    val mockFactory = mockk<MutexContendServiceFactory>()
+    every { mockFactory.createMutexContendService(capture(contenderSlot)) } returns mockService
     val workLatch = CountDownLatch(1)
     val scheduler = object : AbstractScheduler("test-scheduler", mockFactory) {
         override val config = ScheduleConfig.delay(Duration.ZERO, Duration.ofMillis(100))
@@ -154,11 +172,14 @@ fun `scheduler should run work only when leader`() {
     }
 
     scheduler.start()
-    // Simulate acquiring leadership by triggering the contender
-    // ...
-
-    workLatch.await(5, TimeUnit.SECONDS).assert().isTrue()
-    scheduler.stop()
+    val contender = contenderSlot.captured
+    try {
+        contender.onAcquired(MutexState(MutexOwner.NONE, MutexOwner(contender.contenderId)))
+        workLatch.await(5, TimeUnit.SECONDS).assert().isTrue()
+    } finally {
+        contender.onReleased(MutexState(MutexOwner(contender.contenderId), MutexOwner.NONE))
+        scheduler.stop()
+    }
 }
 ```
 
