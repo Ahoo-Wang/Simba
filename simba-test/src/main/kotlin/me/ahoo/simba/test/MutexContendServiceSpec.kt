@@ -137,53 +137,74 @@ abstract class MutexContendServiceSpec {
     }
 
     @Test
+    @Suppress("TooGenericExceptionCaught", "ThrowsCount")
     open fun multiContend() {
         val count = AtomicInteger(0)
         val invariantViolation = AtomicReference<AssertionError>()
         val currentOwnerIdRef = AtomicReference<String>()
         val contendServiceList: MutableList<MutexContendService> = ArrayList(10)
-        repeat(10) {
-            val contendService =
-                mutexContendServiceFactory.createMutexContendService(object : AbstractMutexContender(
-                    MULTI_CONTEND_MUTEX
-                ) {
-                    override fun onAcquired(mutexState: MutexState) {
-                        currentOwnerIdRef.set(mutexState.after.ownerId)
-                        super.onAcquired(mutexState)
-                        val ownerCount = count.incrementAndGet()
-                        if (ownerCount != 1) {
-                            invariantViolation.compareAndSet(
-                                null,
-                                AssertionError("Expected exactly one owner after acquire, but was $ownerCount.")
-                            )
+        var testFailure: Throwable? = null
+        try {
+            repeat(10) {
+                val contendService =
+                    mutexContendServiceFactory.createMutexContendService(object : AbstractMutexContender(
+                        MULTI_CONTEND_MUTEX
+                    ) {
+                        override fun onAcquired(mutexState: MutexState) {
+                            currentOwnerIdRef.set(mutexState.after.ownerId)
+                            super.onAcquired(mutexState)
+                            val ownerCount = count.incrementAndGet()
+                            if (ownerCount != 1) {
+                                invariantViolation.compareAndSet(
+                                    null,
+                                    AssertionError("Expected exactly one owner after acquire, but was $ownerCount.")
+                                )
+                            }
                         }
-                    }
 
-                    override fun onReleased(mutexState: MutexState) {
-                        super.onReleased(mutexState)
-                        val ownerCount = count.decrementAndGet()
-                        if (ownerCount != 0) {
-                            invariantViolation.compareAndSet(
-                                null,
-                                AssertionError("Expected no owner after release, but was $ownerCount.")
-                            )
+                        override fun onReleased(mutexState: MutexState) {
+                            super.onReleased(mutexState)
+                            val ownerCount = count.decrementAndGet()
+                            if (ownerCount != 0) {
+                                invariantViolation.compareAndSet(
+                                    null,
+                                    AssertionError("Expected no owner after release, but was $ownerCount.")
+                                )
+                            }
                         }
-                    }
-                })
-            contendService.start()
-            contendServiceList.add(contendService)
+                    })
+                contendService.start()
+                contendServiceList.add(contendService)
+            }
+            TimeUnit.SECONDS.sleep(30)
+            invariantViolation.get()?.let { throw it }
+            count.get().assert().isEqualTo(1)
+            val currentOwnerId = currentOwnerIdRef.get()
+            for (contendService in contendServiceList) {
+                if (contendService.afterOwner.ownerId.isNotBlank()) {
+                    contendService.afterOwner.ownerId.assert().isEqualTo(currentOwnerId)
+                }
+            }
+            val ownerCount = contendServiceList.count { it.contenderId == currentOwnerId }
+            ownerCount.assert().isEqualTo(1)
+        } catch (error: Throwable) {
+            testFailure = error
         }
-        TimeUnit.SECONDS.sleep(30)
-        invariantViolation.get()?.let { throw it }
-        count.get().assert().isEqualTo(1)
-        val currentOwnerId = currentOwnerIdRef.get()
-        for (contendService in contendServiceList) {
-            if (contendService.afterOwner.ownerId.isNotBlank()) {
-                contendService.afterOwner.ownerId.assert().isEqualTo(currentOwnerId)
+        var cleanupFailure: Throwable? = null
+        for (contendService in contendServiceList.asReversed()) {
+            try {
+                if (contendService.running) contendService.stop()
+            } catch (error: Throwable) {
+                if (cleanupFailure == null) {
+                    cleanupFailure = error
+                } else {
+                    cleanupFailure.addSuppressed(error)
+                }
             }
         }
-        val ownerCount = contendServiceList.count { it.contenderId == currentOwnerId }
-        ownerCount.assert().isEqualTo(1)
+        cleanupFailure?.let { cleanupError -> testFailure?.addSuppressed(cleanupError) }
+        testFailure?.let { throw it }
+        cleanupFailure?.let { throw it }
     }
 
     @Test
