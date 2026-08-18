@@ -29,7 +29,7 @@ dependencies {
     annotationProcessor(platform(project(":simba-dependencies")))
     implementation("org.slf4j:slf4j-api")
 
-//    implementation("mysql:mysql-connector-java")
+//    implementation("com.mysql:mysql-connector-j")
 //    implementation(project(":simba-jdbc"))
 //    implementation("org.springframework.boot:spring-boot-starter-jdbc")
 
