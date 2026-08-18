@@ -20,7 +20,25 @@ permissions:
   contents: read
 
 jobs:
+  verify-release-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Verify release tag matches project version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          release_version="${RELEASE_TAG#v}"
+          project_version="$(sed -n 's/^version=//p' gradle.properties)"
+          if [ -z "$project_version" ] || [ "$release_version" != "$project_version" ]; then
+            echo "::error::Release tag '$RELEASE_TAG' does not match project version '$project_version'."
+            exit 1
+          fi
+
   github-deploy:
+    needs: verify-release-version
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -45,6 +63,7 @@ jobs:
           SIGNING_SECRETKEY: ${{ secrets.SIGNING_SECRETKEY }}
           SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
   central-deploy:
+    needs: verify-release-version
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
