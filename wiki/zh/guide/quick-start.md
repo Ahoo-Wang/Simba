@@ -271,7 +271,7 @@ class ZookeeperConfiguration {
 
 :::
 
-使用 JDBC 时，还需通过 [MySQL 初始化脚本](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/init-simba-mysql.sql) 创建 `simba_mutex` 表。
+使用 JDBC 时，还需通过 [`simba-jdbc/src/init-script/init-simba-mysql.sql:17`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/init-simba-mysql.sql#L17) 创建 `simba_mutex` 表。
 
 满足这些前置条件后，自动配置会创建 `MutexContendServiceFactory` Bean。注入它即可直接使用：
 
