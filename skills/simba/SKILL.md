@@ -31,7 +31,13 @@ Decision heuristic: If the project has Redis, use Redis. If it has Zookeeper/Cur
 
 ## Gradle Dependencies
 
-The project uses Gradle feature capabilities in `simba-spring-boot-starter` so consumers only pull the backend they need.
+Import the Simba BOM first so every module resolves to the same released version. The Spring examples assume Spring Boot 4.1 dependency management is enabled.
+
+```kotlin
+implementation(platform("me.ahoo.simba:simba-bom:3.1.1"))
+```
+
+Use a Gradle feature capability from `simba-spring-boot-starter` so the application pulls only one backend.
 
 For **Redis**:
 ```kotlin
@@ -49,6 +55,8 @@ implementation("me.ahoo.simba:simba-spring-boot-starter") {
         requireCapability("me.ahoo.simba:jdbc-support")
     }
 }
+implementation("org.springframework.boot:spring-boot-starter-jdbc")
+runtimeOnly("com.mysql:mysql-connector-j")
 ```
 
 For **Zookeeper**:
@@ -60,7 +68,9 @@ implementation("me.ahoo.simba:simba-spring-boot-starter") {
 }
 ```
 
-For non-Spring projects, depend on the backend module directly:
+The Zookeeper setup must also provide and start a `CuratorFramework` bean.
+
+For non-Spring projects, keep the BOM and depend on one backend module directly:
 ```kotlin
 implementation("me.ahoo.simba:simba-spring-redis")
 // or
@@ -68,6 +78,8 @@ implementation("me.ahoo.simba:simba-jdbc")
 // or
 implementation("me.ahoo.simba:simba-zookeeper")
 ```
+
+Configure the backend client manually: a `DataSource` and driver for JDBC, Spring Data Redis infrastructure for Redis, or `CuratorFramework` for Zookeeper.
 
 ## Three Usage Patterns
 
