@@ -13,6 +13,7 @@
 
 package me.ahoo.simba.example;
 
+import jakarta.annotation.PreDestroy;
 import me.ahoo.simba.core.MutexContendService;
 import me.ahoo.simba.core.MutexContendServiceFactory;
 import me.ahoo.simba.locker.SimbaLocker;
@@ -44,6 +45,7 @@ public class ExampleApp implements CommandLineRunner {
     
     @Autowired
     private MutexContendServiceFactory mutexContendServiceFactory;
+    private MutexContendService contendService;
     
     /**
      * Callback used to run the bean.
@@ -53,8 +55,15 @@ public class ExampleApp implements CommandLineRunner {
      */
     @Override
     public void run(String... args) throws Exception {
-        MutexContendService contendService = mutexContendServiceFactory.createMutexContendService(new ExampleContender());
+        contendService = mutexContendServiceFactory.createMutexContendService(new ExampleContender());
         contendService.start();
+    }
+
+    @PreDestroy
+    public void stopContendService() {
+        if (contendService != null) {
+            contendService.stop();
+        }
     }
     
     @Scheduled(initialDelay = 1000, fixedDelay = 1000)

@@ -40,6 +40,7 @@ dependencies {
 //    implementation(project(":simba-zookeeper"))
     implementation(project(":simba-spring-boot-starter"))
     testImplementation("org.junit.jupiter:junit-jupiter-api")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }

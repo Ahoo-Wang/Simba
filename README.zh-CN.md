@@ -123,6 +123,11 @@ create table simba_mutex
             }
         });
         contendService.start();
+        try {
+            // 使用互斥保护的服务。
+        } finally {
+            contendService.stop();
+        }
 ```
 
 ### SimbaLocker
