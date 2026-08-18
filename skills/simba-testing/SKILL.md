@@ -155,6 +155,7 @@ import org.junit.jupiter.api.Test
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 @Test
 fun `scheduler should run work only when leader`() {
@@ -162,22 +163,31 @@ fun `scheduler should run work only when leader`() {
     val mockService = mockk<MutexContendService>(relaxed = true)
     val mockFactory = mockk<MutexContendServiceFactory>()
     every { mockFactory.createMutexContendService(capture(contenderSlot)) } returns mockService
-    val workLatch = CountDownLatch(1)
+    val leader = AtomicBoolean(false)
+    val leaderWork = CountDownLatch(1)
+    val outsideLeadershipWork = CountDownLatch(1)
     val scheduler = object : AbstractScheduler("test-scheduler", mockFactory) {
         override val config = ScheduleConfig.delay(Duration.ZERO, Duration.ofMillis(100))
         override val worker = "test"
         override fun work() {
-            workLatch.countDown()
+            if (leader.get()) leaderWork.countDown() else outsideLeadershipWork.countDown()
         }
     }
 
     scheduler.start()
     val contender = contenderSlot.captured
     try {
+        outsideLeadershipWork.await(200, TimeUnit.MILLISECONDS).assert().isFalse()
+        leader.set(true)
         contender.onAcquired(MutexState(MutexOwner.NONE, MutexOwner(contender.contenderId)))
-        workLatch.await(5, TimeUnit.SECONDS).assert().isTrue()
-    } finally {
+        leaderWork.await(5, TimeUnit.SECONDS).assert().isTrue()
         contender.onReleased(MutexState(MutexOwner(contender.contenderId), MutexOwner.NONE))
+        leader.set(false)
+        outsideLeadershipWork.await(200, TimeUnit.MILLISECONDS).assert().isFalse()
+    } finally {
+        if (leader.getAndSet(false)) {
+            contender.onReleased(MutexState(MutexOwner(contender.contenderId), MutexOwner.NONE))
+        }
         scheduler.stop()
     }
 }
