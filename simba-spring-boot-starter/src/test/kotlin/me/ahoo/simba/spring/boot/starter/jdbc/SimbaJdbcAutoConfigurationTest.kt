@@ -57,9 +57,10 @@ internal class SimbaJdbcAutoConfigurationTest {
                     .hasSingleBean(MutexContendServiceFactory::class.java)
                     .getBean(JdbcProperties::class.java)
                     .extracting { properties ->
-                        assertThat(properties.initialDelay).isEqualTo(Duration.ofSeconds(10))
-                        assertThat(properties.ttl).isEqualTo(Duration.ofSeconds(20))
-                        assertThat(properties.transition).isEqualTo(Duration.ofSeconds(30))
+                        val jdbcProperties = requireNotNull(properties)
+                        assertThat(jdbcProperties.initialDelay).isEqualTo(Duration.ofSeconds(10))
+                        assertThat(jdbcProperties.ttl).isEqualTo(Duration.ofSeconds(20))
+                        assertThat(jdbcProperties.transition).isEqualTo(Duration.ofSeconds(30))
                     }
             }
     }
