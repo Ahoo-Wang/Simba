@@ -190,7 +190,7 @@ stateDiagram-v2
         Contending --> Waiting : onReleased()
         Owner --> Renewing : guard()
         Renewing --> Owner : renewal succeeds
-        Renewing --> Waiting : renewal fails
+        Renewing --> Waiting : lease ends without renewal
         Waiting --> Contending : timer fires
     }
 ```

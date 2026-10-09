@@ -54,7 +54,11 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
   only `NONE` may be applied.
 - A late acquisition finishing after `stop()` must be released remotely, but not if a restarted lifecycle with
   the same `contenderId` is now active (that would release the new lease). `LeaseContendService.adopt` owns this.
-- A failed renew/contend revokes local ownership (`NONE`) and retries after `ttl`.
+- Local lease guard (`LeaseContendService`): each successful acquire/renew arms a watchdog at `transitionAt`,
+  measured from when the call was sent; it revokes local ownership if no renewal succeeds by then, even while
+  a backend call hangs. A failed renew keeps ownership while the lease is valid and retries with a halving
+  backoff (min 100 ms); otherwise it revokes and retries after `ttl`. With `transition = 0` ownership can flap.
+- The starter sets `JdbcMutexOwnerRepository.queryTimeout` to `simba.jdbc.ttl`.
 - `close()` is idempotent (stops only when `RUNNING`); `stop()` still throws when not `RUNNING`.
 
 ### Threading

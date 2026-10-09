@@ -209,7 +209,7 @@ repeat(5) { runWorker(it) }
 |---|---|
 | 线程已拥有此 `SimbaLocker` 实例 | `acquire()` 抛出 `IllegalMonitorStateException` |
 | 超时到期前未获取到锁 | `acquire(timeout)` 抛出 `TimeoutException` |
-| 竞争期间后端错误 | 内部记录日志；竞争循环在 TTL 周期后重试 |
+| 竞争期间后端错误 | 内部记录日志；持有者在租约有效期内保持锁并退避重试，租约结束时失去锁；非持有者在 TTL 后重试 |
 | 非所有者调用 `close()` | 对竞争服务执行 `stop()`；多次调用安全 |
 
 ## 并发注意事项
