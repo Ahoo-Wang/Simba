@@ -1,70 +1,35 @@
 # AGENTS.md — Simba Wiki
 
-## Build & Run Commands
+VitePress site for Simba. Root rules in `../AGENTS.md` also apply.
 
-| Command | Description |
-|---------|-------------|
-| `pnpm install` | Install dependencies |
-| `pnpm run dev` | Start VitePress dev server |
-| `pnpm run build` | Build static site |
-| `pnpm run preview` | Preview built site |
-| `pnpm run fix:mermaid` | Validate and fix Mermaid syntax |
+## Commands
 
-## Project Structure
-
+```bash
+pnpm install
+pnpm run dev          # Dev server
+pnpm run build        # Build; run before committing
+pnpm run preview      # Preview the build
+pnpm run fix:mermaid  # Validate and fix Mermaid syntax; run after editing diagrams
 ```
-wiki/
-├── .vitepress/
-│   ├── config/          # VitePress configuration
-│   │   ├── index.ts     # Main config (locales, search)
-│   │   ├── en.ts        # English locale (nav, sidebar)
-│   │   └── zh.ts        # Chinese locale (nav, sidebar)
-│   └── theme/
-│       ├── index.ts     # Theme setup (mermaid-renderer)
-│       └── custom.css   # Custom CSS (brand colors, mermaid)
-├── scripts/
-│   └── fix-mermaid.mjs  # Mermaid syntax validator/fixer
-├── public/
-│   └── logo.svg         # Site favicon/logo
-├── index.md             # English home page
-├── guide/               # Getting Started (EN)
-├── architecture/        # Architecture (EN)
-├── api/                 # API Reference (EN)
-├── modules/             # Modules (EN)
-├── testing/             # Testing (EN)
-├── onboarding/          # Onboarding guides (EN)
-├── zh/                  # Chinese translations
-│   ├── index.md         # Chinese home page
-│   ├── guide/           # Getting Started (ZH)
-│   ├── architecture/    # Architecture (ZH)
-│   ├── api/             # API Reference (ZH)
-│   ├── modules/         # Modules (ZH)
-│   ├── testing/         # Testing (ZH)
-│   └── onboarding/      # Onboarding guides (ZH)
-├── llms.txt             # LLM-friendly summary
-└── llms-full.txt        # Full content for LLMs
-```
+
+## Layout
+
+- English pages live at the root (`guide/`, `architecture/`, `api/`, `modules/`, `testing/`, `onboarding/`);
+  Chinese pages mirror the same paths under `zh/`. Every page change is made in both languages.
+- Navigation and sidebars: `.vitepress/config/en.ts` and `zh.ts`; site config: `.vitepress/config/index.ts`.
+- `llms.txt` (page index) and `llms-full.txt` (full content) are maintained by hand: update them when pages are
+  added, renamed, removed, or their substance changes.
 
 ## Content Conventions
 
-- **Frontmatter**: Every `.md` file must have `title` and `description` in YAML frontmatter
-- **Mermaid diagrams**: Use dark-mode colors (`#2d333b` fills, `#6d5dfc` borders, `#e6edf3` text)
-- **Mermaid breaks**: Use `<br>` not `<br/>` (Vue compiler compatibility)
-- **Sequence diagrams**: Always include `autonumber`
-- **Citations**: Use `[file_path:line](https://github.com/Ahoo-Wang/Simba/blob/main/file_path#Lline)`
-- **Bilingual**: English in root dirs, Chinese in `zh/` mirroring the same structure
-- **Technical terms**: Keep class names, method names, config keys in English even in Chinese pages
-
-## Documentation
-
-- `llms.txt` — LLM-friendly project summary with wiki links
-- `llms-full.txt` — Full page content for LLM context
+- Every page has `title` and `description` frontmatter.
+- Keep class names, method names, and config keys in English in Chinese pages.
+- Citations: `[file_path:line](https://github.com/Ahoo-Wang/Simba/blob/main/file_path#Lline)`. Line anchors
+  drift; when code changes move cited lines, fix the citations in both languages.
+- Mermaid: dark-mode colors (`#2d333b` fills, `#6d5dfc` borders, `#e6edf3` text), `<br>` not `<br/>`
+  (Vue compiler), and `autonumber` in sequence diagrams.
 
 ## Boundaries
 
-- ✅ Add new pages following the existing structure
-- ✅ Run `pnpm run fix:mermaid` after editing Mermaid diagrams
-- ✅ Run `pnpm run build` to verify before committing
-- ⚠️ Ask before modifying `.vitepress/config/` files
-- 🚫 Do not delete generated pages without discussion
-- 🚫 Do not modify theme without testing
+- **Ask first:** changing `.vitepress/config/` (navigation) or the theme.
+- **Never:** delete pages without discussion.
