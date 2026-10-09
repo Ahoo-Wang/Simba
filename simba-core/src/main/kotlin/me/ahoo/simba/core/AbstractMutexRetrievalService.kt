@@ -56,6 +56,12 @@ abstract class AbstractMutexRetrievalService protected constructor(
     private val notifyExecutor = MoreExecutors.newSequentialExecutor(handleExecutor)
     private val lifecycleGeneration = AtomicLong()
 
+    /**
+     * Generation of the current lifecycle, incremented by every [start].
+     */
+    protected val currentGeneration: Long
+        get() = lifecycleGeneration.get()
+
     protected fun resetOwner() {
         mutexState = MutexState.NONE
     }

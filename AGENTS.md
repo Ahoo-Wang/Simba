@@ -43,6 +43,8 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
 - Redis: `simba:{mutex}` with `PX = ttl + transition`; acquire is `SET NX`, renew (guard) is `SET XX` by the
   owner only; release deletes the key and publishes `released` to the earliest queued contender.
 - Zookeeper: Curator `LeaderLatch` at `/simba/{mutex}`; ttl/transition do not apply (`ttlAt = transitionAt = MAX`).
+- JDBC and Redis share the polling loop in `LeaseContendService`; a backend only implements `MutexLeaseStore`
+  (one atomic call, no scheduling or notification). `LeaseConfig` is the single place for duration validation.
 
 ### Lifecycle
 - `Status`: `INITIAL → STARTING → RUNNING → STOPPING → INITIAL`. A failed `start()` returns to `INITIAL`;
@@ -51,7 +53,7 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
 - Each `start()` begins a new generation. Notifications from an older generation are dropped; while inactive,
   only `NONE` may be applied.
 - A late acquisition finishing after `stop()` must be released remotely, but not if a restarted lifecycle with
-  the same `contenderId` is now active (that would release the new lease).
+  the same `contenderId` is now active (that would release the new lease). `LeaseContendService.adopt` owns this.
 - A failed renew/contend revokes local ownership (`NONE`) and retries after `ttl`.
 - `close()` is idempotent (stops only when `RUNNING`); `stop()` still throws when not `RUNNING`.
 
@@ -59,8 +61,10 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
 - Owner notifications run asynchronously on a sequential executor over `handleExecutor`
   (starter default: `ForkJoinPool.commonPool()`). Callbacks are invoked while holding the internal notify lock:
   `onAcquired` / `onReleased` must not block, and must not add locks that `start()` / `stop()` contend on.
-- JDBC creates one single-thread scheduler per service start. Redis shares the factory-owned
-  `ScheduledExecutorService` across all mutexes; closing the factory shuts it down.
+- `LeaseContendService` splits a trigger `ScheduledExecutorService` (never blocks) from an `ioExecutor` running
+  `MutexLeaseStore` calls, with at most one call in flight per service and lifecycle. JDBC and Redis factories own
+  shared executors from `ContendExecutors` (daemon, idle threads reclaimed) and shut them down on `close()`.
+  A directly constructed service defaults to its own idle-reclaimed scheduler and runs I/O on the trigger thread.
 - `SimbaLocker` is owned by one thread at a time; interruption does not cancel `acquire()` (the flag is restored).
 - `AbstractScheduler` lazily creates its worker executor on acquire, cancels work with interrupt on release,
   and shuts the executor down on `stop()`.
@@ -72,17 +76,19 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
   the local wall clock.
 
 ### Wire contracts (compatibility-sensitive; nodes of different versions may run together)
-- Redis key and channel names are built in both Kotlin and Lua: `simba:{mutex}`, `simba:{mutex}:{contenderId}`,
-  queue `simba:{mutex}:contender`. Script results and messages use the `@@` delimiter.
+- Redis key and channel names are built in both Kotlin (`RedisMutexKeys`) and Lua: `simba:{mutex}`,
+  `simba:{mutex}:{contenderId}`, queue `simba:{mutex}:contender`. Script results and messages use the `@@` delimiter.
 - JDBC schema: `simba_mutex(mutex, acquired_at, ttl_at, transition_at, owner_id varchar(128), version)`; the SQL is
   MySQL-specific.
 
 ## Change Playbooks
 
-- **Backend contention logic:** extend `MutexContendServiceSpec` in the backend tests; add focused regression
-  tests for the exact race (stop vs in-flight contend, restart, renew failure).
-- **Redis Lua / naming:** change `SpringRedisMutexContendService`, `AcquireResult` / `OwnerEvent` and all three
-  scripts together; keep mixed-version nodes working or document the upgrade order.
+- **Contention loop:** change `LeaseContendService` and cover the race deterministically in
+  `LeaseContendServiceTest` (manual scheduler and I/O executor, no threads or sleeps).
+- **New polling backend:** implement `MutexLeaseStore` plus a factory; extend `MutexContendServiceSpec`.
+  Do not re-implement scheduling or generation checks in the backend.
+- **Redis Lua / naming:** change `RedisMutexKeys`, `SpringRedisMutexLeaseStore`, `AcquireResult` / `OwnerEvent`
+  and all three scripts together; keep mixed-version nodes working or document the upgrade order.
 - **JDBC SQL / schema:** only compatible widening without asking; update the init script, README/wiki schema
   snippets, and consider DB time vs JVM time.
 - **Starter:** each backend activates on `simba.enabled` and `simba.<backend>.enabled` (both default `true`) plus

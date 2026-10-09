@@ -12,151 +12,36 @@
  */
 package me.ahoo.simba.jdbc
 
-import io.github.oshai.kotlinlogging.KotlinLogging
-import me.ahoo.simba.core.AbstractMutexContendService
-import me.ahoo.simba.core.ContendPeriod
+import me.ahoo.simba.core.ContendExecutors
+import me.ahoo.simba.core.LeaseConfig
+import me.ahoo.simba.core.LeaseContendService
 import me.ahoo.simba.core.MutexContender
-import me.ahoo.simba.core.MutexOwner
-import me.ahoo.simba.util.Threads.defaultFactory
 import java.time.Duration
 import java.util.concurrent.Executor
-import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.ScheduledThreadPoolExecutor
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.ScheduledExecutorService
 
 /**
  * Jdbc Mutex Contend Service.
  *
+ * Without an explicit [scheduler], the service uses its own single daemon thread that is reclaimed when idle.
+ *
  * @author ahoo wang
  */
-class JdbcMutexContendService(
+class JdbcMutexContendService @JvmOverloads constructor(
     mutexContender: MutexContender,
     handleExecutor: Executor,
-    private val mutexOwnerRepository: MutexOwnerRepository,
-    private val initialDelay: Duration,
-    private val ttl: Duration,
-    private val transition: Duration
-) : AbstractMutexContendService(mutexContender, handleExecutor) {
-    companion object {
-        private val log = KotlinLogging.logger {}
-    }
-
-    init {
-        validateJdbcDurations(initialDelay, ttl, transition)
-    }
-
-    private var executorService: ScheduledThreadPoolExecutor? = null
-    private val contendPeriod: ContendPeriod = ContendPeriod(contenderId)
-    private val lifecycleLock = Any()
-    private var lifecycleGeneration = 0L
-    private var activeGeneration: Long? = null
-
-    @Volatile
-    private var contendScheduledFuture: ScheduledFuture<*>? = null
-
-    @Suppress("TooGenericExceptionCaught")
-    override fun startContend() {
-        synchronized(lifecycleLock) {
-            val executor = ScheduledThreadPoolExecutor(1, defaultFactory("JdbcSimba_${mutex}_$contenderId"))
-            val generation = ++lifecycleGeneration
-            activeGeneration = generation
-            executorService = executor
-            try {
-                nextSchedule(initialDelay.toMillis(), generation)
-            } catch (error: Throwable) {
-                activeGeneration = null
-                executor.shutdown()
-                throw error
-            }
-        }
-    }
-
-    private fun nextSchedule(nextDelay: Long, generation: Long) {
-        synchronized(lifecycleLock) {
-            log.debug {
-                "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] - nextDelay:[$nextDelay]."
-            }
-            if (!status.isActive || generation != activeGeneration) {
-                /*
-                 * A contend task can still be in flight when stop() shuts the executor down
-                 * (JDBC calls are not interruptible); scheduling on from that path would throw
-                 * RejectedExecutionException that nobody observes.
-                 */
-                log.warn {
-                    "nextSchedule - mutex:[$mutex] contenderId:[$contenderId] is not active[$status]."
-                }
-                return
-            }
-            contendScheduledFuture =
-                executorService!!.schedule({ safeHandleContend(generation) }, nextDelay, TimeUnit.MILLISECONDS)
-        }
-    }
-
-    override fun stopContend() {
-        synchronized(lifecycleLock) {
-            activeGeneration = null
-            contendScheduledFuture?.cancel(true)
-            executorService?.shutdown()
-            notifyOwner(MutexOwner.NONE)
-            mutexOwnerRepository.release(mutex, contenderId)
-        }
-    }
-
-    @Suppress("TooGenericExceptionCaught")
-    private fun safeHandleContend(generation: Long) {
-        try {
-            val mutexOwner = contend()
-            if (!ensureActiveLifecycle(generation, mutexOwner)) {
-                return
-            }
-            notifyOwner(mutexOwner)
-            val nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
-            nextSchedule(nextDelay, generation)
-        } catch (throwable: Throwable) {
-            log.error(throwable) {
-                "safeHandleContend - mutex:[$mutex] contenderId:[$contenderId] - failed:[${throwable.message}]."
-            }
-            revokeOwnerOnFailure(generation)
-            nextSchedule(ttl.toMillis(), generation)
-        }
-    }
-
-    private fun revokeOwnerOnFailure(generation: Long) {
-        synchronized(lifecycleLock) {
-            if (status.isActive && generation == activeGeneration && isOwner) {
-                notifyOwner(MutexOwner.NONE)
-            }
-        }
-    }
-
-    private fun ensureActiveLifecycle(generation: Long, mutexOwner: MutexOwner): Boolean {
-        return synchronized(lifecycleLock) {
-            val currentGeneration = activeGeneration
-            if (status.isActive && generation == currentGeneration) {
-                return@synchronized true
-            }
-            /*
-             * A restarted lifecycle reuses contenderId and adopts a late acquisition;
-             * releasing it here would also release the restarted lifecycle's lease.
-             */
-            if (mutexOwner.isOwner(contenderId) &&
-                (currentGeneration == null || generation == currentGeneration)
-            ) {
-                mutexOwnerRepository.release(mutex, contenderId)
-            }
-            false
-        }
-    }
-
-    /**
-     * 服务实例竞争领导权.
-     */
-    private fun contend(): MutexOwner {
-        val mutexOwner =
-            mutexOwnerRepository.acquireAndGetOwner(mutex, contenderId, ttl.toMillis(), transition.toMillis())
-        log.debug {
-            "contend - mutex:[$mutex] contenderId:[$contenderId] - succeeded:[${mutexOwner.isOwner(contenderId)}]."
-        }
-        return mutexOwner
-    }
-}
+    mutexOwnerRepository: MutexOwnerRepository,
+    initialDelay: Duration,
+    ttl: Duration,
+    transition: Duration,
+    scheduler: ScheduledExecutorService =
+        ContendExecutors.newScheduler("JdbcSimba_${mutexContender.mutex}_${mutexContender.contenderId}"),
+    ioExecutor: Executor = Executor { it.run() }
+) : LeaseContendService(
+    contender = mutexContender,
+    handleExecutor = handleExecutor,
+    leaseStore = JdbcMutexLeaseStore(mutexOwnerRepository),
+    leaseConfig = LeaseConfig(ttl, transition, initialDelay),
+    scheduler = scheduler,
+    ioExecutor = ioExecutor
+)

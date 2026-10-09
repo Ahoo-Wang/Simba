@@ -26,6 +26,7 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer
 import java.time.Duration
 import java.util.concurrent.Callable
 import java.util.concurrent.Delayed
+import java.util.concurrent.Executors
 import java.util.concurrent.FutureTask
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
@@ -153,12 +154,8 @@ class SpringRedisMutexContendServiceSchedulingTest {
     private class ManualScheduledExecutor : ScheduledThreadPoolExecutor(1) {
         private val tasks = mutableListOf<ManualScheduledFuture<*>>()
 
-        override fun <V : Any?> schedule(
-            callable: Callable<V>,
-            delay: Long,
-            unit: TimeUnit
-        ): ScheduledFuture<V> {
-            return ManualScheduledFuture(callable).also { tasks += it }
+        override fun schedule(command: Runnable, delay: Long, unit: TimeUnit): ScheduledFuture<*> {
+            return ManualScheduledFuture(Executors.callable(command)).also { tasks += it }
         }
 
         fun run(index: Int) {

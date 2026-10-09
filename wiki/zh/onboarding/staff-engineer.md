@@ -461,7 +461,7 @@ TCK 方法（共享抽象测试类，按后端具体测试）相比 mock 后端�
 
 ### 连接池大小（JDBC）
 
-每个 `JdbcMutexContendService` 实例创建一个单线程的 `ScheduledThreadPoolExecutor`。实际数据库连接来自 `DataSource`（通常是 HikariCP）。有 N 个应用实例和每个实例 M 个互斥锁时，连接池需要至少 M 个活跃连接（每个竞争周期一个）。HikariCP 的默认池大小（10）通常足以应对中等数量的互斥锁。
+由 `JdbcMutexContendServiceFactory` 创建的服务共享一个触发线程和一个 I/O 执行器（空闲线程会被回收）；每个服务同一时刻最多只有一个数据库调用在执行。实际数据库连接来自 `DataSource`（通常是 HikariCP）。有 N 个应用实例和每个实例 M 个互斥锁时，连接池最多需要 M 个活跃连接（每个进行中的竞争一个）。HikariCP 的默认池大小（10）通常足以应对中等数量的互斥锁。
 
 ### Redis 内存使用
 

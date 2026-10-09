@@ -110,19 +110,26 @@ WHERE mutex = ? AND owner_id = ?
 
 ### 服务生命周期
 
-[`JdbcMutexContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendService.kt) 创建一个单线程的 `ScheduledThreadPoolExecutor`，并调度周期性的 `safeHandleContend()` 调用。每次调用执行 `acquire()`，通知检索器，并根据 `ContendPeriod.ensureNextDelay()` 调度下一次尝试。
+[`JdbcMutexContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendService.kt) 是基于 `JdbcMutexLeaseStore` 的轻量 [`LeaseContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/LeaseContendService.kt)：每次竞争（获取或续期）都映射为 `MutexOwnerRepository.acquireAndGetOwner()`。引擎负责循环：竞争、通知持有者，并根据 `ContendPeriod.ensureNextDelay()` 调度下一次尝试。
 
 ```kotlin
-// JdbcMutexContendService — simplified contention loop
-private fun safeHandleContend() {
-    val mutexOwner = contend()                // acquireAndGetOwner()
-    notifyOwner(mutexOwner)                   // async notification
-    val nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
-    nextSchedule(nextDelay)                   // schedule next attempt
+// LeaseContendService — 简化的竞争循环
+private fun contend(generation: Long) {
+    var nextDelay = leaseConfig.ttlMillis                 // 失败时 ttl 后重试
+    try {
+        val mutexOwner = leaseStore.contend(mutex, contenderId, isOwner, leaseConfig)
+        if (adopt(generation, mutexOwner)) {             // 通知，或释放过期生命周期的获取
+            nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
+        }
+    } catch (throwable: Throwable) {
+        revokeOnFailure(generation)                      // 撤销本地持有
+    } finally {
+        complete(generation, nextDelay)                  // 调度下一次尝试
+    }
 }
 ```
 
-出错时，服务会在 `ttl` 毫秒后重试（[第 81 行](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendService.kt#L81)）。
+由 `JdbcMutexContendServiceFactory` 创建的服务共享一个触发调度器和一个执行数据库调用的 I/O 执行器；工厂持有二者，并在 `close()` 时关闭。
 
 ## Redis 后端
 

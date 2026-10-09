@@ -461,7 +461,7 @@ The default is HOST. The choice affects debugging (HOST is easier to trace) and 
 
 ### Connection Pool Sizing (JDBC)
 
-Each `JdbcMutexContendService` instance creates a `ScheduledThreadPoolExecutor` with 1 thread. The actual database connections come from the `DataSource` (typically HikariCP). With N application instances and M mutexes per instance, the connection pool needs at least M active connections (one per contention cycle). HikariCP's default pool size (10) is usually sufficient for moderate mutex counts.
+Services created by `JdbcMutexContendServiceFactory` share one trigger thread and an I/O executor whose idle threads are reclaimed; each service keeps at most one database call in flight. The actual database connections come from the `DataSource` (typically HikariCP). With N application instances and M mutexes per instance, the connection pool needs up to M active connections (one per in-flight contention). HikariCP's default pool size (10) is usually sufficient for moderate mutex counts.
 
 ### Redis Memory Usage
 
