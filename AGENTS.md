@@ -53,7 +53,7 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
 - A late acquisition finishing after `stop()` must be released remotely, but not if a restarted lifecycle with
   the same `contenderId` is now active (that would release the new lease).
 - A failed renew/contend revokes local ownership (`NONE`) and retries after `ttl`.
-- `close()` delegates to `stop()` and currently throws when not `RUNNING`; guard with `running` when needed.
+- `close()` is idempotent (stops only when `RUNNING`); `stop()` still throws when not `RUNNING`.
 
 ### Threading
 - Owner notifications run asynchronously on a sequential executor over `handleExecutor`

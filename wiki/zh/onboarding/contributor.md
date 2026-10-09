@@ -55,10 +55,11 @@ Simba 使用 Java 的 `AtomicReferenceFieldUpdater` 实现无锁状态转换。�
 
 ```kotlin
 @Volatile
-override var status = Status.INITIAL
+final override var status = Status.INITIAL
+    private set
 
 companion object {
-    val STATUS: AtomicReferenceFieldUpdater<...> =
+    private val STATUS: AtomicReferenceFieldUpdater<...> =
         AtomicReferenceFieldUpdater.newUpdater(...)
 }
 ```
