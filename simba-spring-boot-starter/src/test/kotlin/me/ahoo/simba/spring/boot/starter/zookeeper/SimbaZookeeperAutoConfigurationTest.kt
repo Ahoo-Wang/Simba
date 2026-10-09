@@ -39,4 +39,17 @@ internal class SimbaZookeeperAutoConfigurationTest {
                     .hasSingleBean(MutexContendServiceFactory::class.java)
             }
     }
+
+    @Test
+    fun backsOffWhenUserDefinesMutexContendServiceFactory() {
+        val userFactory = mockk<MutexContendServiceFactory>()
+        contextRunner
+            .withBean(CuratorFramework::class.java, { mockk() })
+            .withBean(MutexContendServiceFactory::class.java, { userFactory })
+            .withUserConfiguration(SimbaZookeeperAutoConfiguration::class.java)
+            .run {
+                assertThat(it).hasSingleBean(MutexContendServiceFactory::class.java)
+                assertThat(it.getBean(MutexContendServiceFactory::class.java)).isSameAs(userFactory)
+            }
+    }
 }
