@@ -6,4 +6,4 @@ allowBuilds:
 # mermaid 11 pins katex ^0.16 (fixed in 0.18.2). Remove an entry when no dependent resolves a vulnerable version.
 overrides:
   "vite@<6.4.3": ^6.4.4
-  "katex@<0.18.2": ^0.18.2
+  "katex@<0.18.2": ^0.19.0
