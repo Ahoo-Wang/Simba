@@ -12,6 +12,7 @@
  */
 package me.ahoo.simba.zookeeper
 
+import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexContender
@@ -23,12 +24,13 @@ import java.util.concurrent.Executor
  *
  * @author ahoo wang
  */
-class ZookeeperMutexContendServiceFactory(
+class ZookeeperMutexContendServiceFactory @JvmOverloads constructor(
     private val handleExecutor: Executor,
-    private val curatorFramework: CuratorFramework
+    private val curatorFramework: CuratorFramework,
+    private val observer: ContendObserver = ContendObserver.NOOP
 ) : MutexContendServiceFactory {
 
     override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
-        return ZookeeperMutexContendService(mutexContender, handleExecutor, curatorFramework)
+        return ZookeeperMutexContendService(mutexContender, handleExecutor, curatorFramework, observer)
     }
 }

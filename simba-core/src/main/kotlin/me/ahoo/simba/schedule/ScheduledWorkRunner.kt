@@ -13,6 +13,10 @@
 package me.ahoo.simba.schedule
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import me.ahoo.simba.core.AbstractMutexContendService
+import me.ahoo.simba.core.ContendObserver
+import me.ahoo.simba.core.MutexContendService
+import me.ahoo.simba.core.WorkOutcome
 import me.ahoo.simba.util.Threads.defaultFactory
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
@@ -27,10 +31,18 @@ internal class ScheduledWorkRunner(
     private val mutex: String,
     private val config: () -> ScheduleConfig,
     private val worker: () -> String,
+    private val observer: () -> ContendObserver,
     private val work: () -> Unit
 ) {
     companion object {
         private val log = KotlinLogging.logger {}
+
+        /**
+         * The observer of the contend service the scheduler runs on, so work events go where contention events go.
+         */
+        fun observerOf(contendService: MutexContendService): ContendObserver {
+            return (contendService as? AbstractMutexContendService)?.observer ?: ContendObserver.NOOP
+        }
     }
 
     @Volatile
@@ -69,14 +81,23 @@ internal class ScheduledWorkRunner(
 
     @Suppress("TooGenericExceptionCaught")
     private fun safeWork() {
-        try {
+        val startedAtNanos = System.nanoTime()
+        val outcome = try {
             work()
+            WorkOutcome.SUCCESS
         } catch (interrupted: InterruptedException) {
             // Expected when leadership is lost or the scheduler stops: the run was cancelled, not failed.
             Thread.currentThread().interrupt()
             log.info { "work - mutex:[$mutex] - interrupted:[${interrupted.message}]." }
+            WorkOutcome.INTERRUPTED
         } catch (throwable: Throwable) {
             log.error(throwable) { "work - mutex:[$mutex] - failed:[${throwable.message}]." }
+            WorkOutcome.FAILED
+        }
+        try {
+            observer().onWork(mutex, System.nanoTime() - startedAtNanos, outcome)
+        } catch (error: Throwable) {
+            log.warn(error) { "work - mutex:[$mutex] - observer failed." }
         }
     }
 }

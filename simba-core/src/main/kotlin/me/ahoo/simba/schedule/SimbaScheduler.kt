@@ -57,7 +57,12 @@ class SimbaScheduler(
             get() = this@SimbaScheduler.fencingToken
     }
 
-    private val runner = ScheduledWorkRunner(mutex, { config }, { worker }) { work.work(context) }
+    private val runner = ScheduledWorkRunner(
+        mutex,
+        { config },
+        { worker },
+        { ScheduledWorkRunner.observerOf(contendService) }
+    ) { work.work(context) }
 
     private val contendService: MutexContendService =
         contendServiceFactory.createMutexContendService(

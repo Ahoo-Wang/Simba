@@ -14,6 +14,7 @@ package me.ahoo.simba.zookeeper
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.core.AbstractMutexContendService
+import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContender
 import me.ahoo.simba.core.MutexOwner
 import org.apache.curator.framework.CuratorFramework
@@ -27,11 +28,12 @@ import java.util.concurrent.Executor
  *
  * @author ahoo wang
  */
-class ZookeeperMutexContendService(
+class ZookeeperMutexContendService @JvmOverloads constructor(
     contender: MutexContender,
     handleExecutor: Executor,
-    private val curatorFramework: CuratorFramework
-) : AbstractMutexContendService(contender, handleExecutor), LeaderLatchListener {
+    private val curatorFramework: CuratorFramework,
+    observer: ContendObserver = ContendObserver.NOOP
+) : AbstractMutexContendService(contender, handleExecutor, observer), LeaderLatchListener {
 
     @Volatile
     private var leaderLatch: LeaderLatch? = null

@@ -12,6 +12,7 @@
  */
 package me.ahoo.simba.core
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import java.util.concurrent.Executor
 
 /**
@@ -21,12 +22,22 @@ import java.util.concurrent.Executor
  */
 abstract class AbstractMutexContendService(
     override val contender: MutexContender,
-    handleExecutor: Executor
+    handleExecutor: Executor,
+    /**
+     * Receives this service's contention events; see [ContendObserver].
+     */
+    val observer: ContendObserver
 ) : AbstractMutexRetrievalService(
     contender,
     handleExecutor
 ),
     MutexContendService {
+    companion object {
+        private val log = KotlinLogging.logger {}
+    }
+
+    constructor(contender: MutexContender, handleExecutor: Executor) :
+        this(contender, handleExecutor, ContendObserver.NOOP)
 
     override fun startRetrieval() {
         resetOwner()
@@ -35,6 +46,27 @@ abstract class AbstractMutexContendService(
 
     override fun stopRetrieval() {
         stopContend()
+    }
+
+    override fun onStateApplied(mutexState: MutexState) {
+        if (mutexState.isAcquired(contenderId)) {
+            observe { onAcquired(mutex) }
+        }
+        if (mutexState.isReleased(contenderId)) {
+            observe { onReleased(mutex) }
+        }
+    }
+
+    /**
+     * Reports to [observer]; an observer failure is logged and never affects contention.
+     */
+    @Suppress("TooGenericExceptionCaught")
+    protected fun observe(event: ContendObserver.() -> Unit) {
+        try {
+            observer.event()
+        } catch (error: Throwable) {
+            log.warn(error) { "observe - mutex:[$mutex] contenderId:[$contenderId] - observer failed." }
+        }
     }
 
     protected abstract fun startContend()

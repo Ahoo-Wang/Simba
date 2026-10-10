@@ -14,6 +14,8 @@
 package me.ahoo.simba.test
 
 import me.ahoo.simba.core.AbstractMutexContender
+import me.ahoo.simba.core.ContendObserver
+import me.ahoo.simba.core.ContendOutcome
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexOwner
@@ -22,11 +24,13 @@ import me.ahoo.simba.schedule.AbstractScheduler
 import me.ahoo.simba.schedule.ScheduleConfig
 import me.ahoo.simba.schedule.SimbaScheduler
 import me.ahoo.test.asserts.assert
+import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -40,9 +44,20 @@ abstract class MutexContendServiceSpec {
         const val MULTI_CONTEND_MUTEX = "multiContend"
         const val SCHEDULE_MUTEX = "schedule"
         const val SIMBA_SCHEDULER_MUTEX = "simbaScheduler"
+        const val OBSERVER_MUTEX = "observer"
     }
 
     abstract val mutexContendServiceFactory: MutexContendServiceFactory
+
+    /**
+     * A factory of this backend reporting to [observer]; `null` skips [observer].
+     */
+    open fun createObservedFactory(observer: ContendObserver): MutexContendServiceFactory? = null
+
+    /**
+     * Whether the backend reports [ContendObserver.onContend] (lease backends do; Zookeeper does not).
+     */
+    open val reportsContention: Boolean = true
 
     @Test
     open fun start() {
@@ -250,5 +265,49 @@ abstract class MutexContendServiceSpec {
         scheduler.isLeader.assert().isTrue()
         scheduler.stop()
         scheduler.running.assert().isFalse()
+    }
+
+    @Test
+    open fun observer() {
+        val events = LinkedBlockingQueue<String>()
+        val observer = object : ContendObserver {
+            override fun onContend(mutex: String, renew: Boolean, durationNanos: Long, outcome: ContendOutcome) {
+                events.add("contend:$outcome")
+            }
+
+            override fun onAcquired(mutex: String) {
+                events.add("acquired:$mutex")
+            }
+
+            override fun onReleased(mutex: String) {
+                events.add("released:$mutex")
+            }
+        }
+        val factory = createObservedFactory(observer)
+        Assumptions.assumeTrue(factory != null, "backend test does not provide an observed factory")
+        try {
+            val acquired = CountDownLatch(1)
+            val contender = object : AbstractMutexContender(OBSERVER_MUTEX) {
+                override fun onAcquired(mutexState: MutexState) {
+                    acquired.countDown()
+                }
+            }
+            val contendService = factory!!.createMutexContendService(contender)
+            contendService.start()
+            // A failure detector, not a performance bound (see schedule()).
+            acquired.await(30, TimeUnit.SECONDS).assert().isTrue()
+            contendService.stop()
+
+            val recorded = events.toList()
+            recorded.filter { !it.startsWith("contend:") }.assert()
+                .containsExactly("acquired:$OBSERVER_MUTEX", "released:$OBSERVER_MUTEX")
+            if (reportsContention) {
+                recorded.assert().contains("contend:${ContendOutcome.OWNER}")
+            } else {
+                recorded.none { it.startsWith("contend:") }.assert().isTrue()
+            }
+        } finally {
+            (factory as? AutoCloseable)?.close()
+        }
     }
 }

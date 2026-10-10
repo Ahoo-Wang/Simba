@@ -13,6 +13,7 @@
 package me.ahoo.simba.spring.redis
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.LeaseConfig
 import me.ahoo.simba.core.LeaseContendService
 import me.ahoo.simba.core.MutexContender
@@ -45,14 +46,16 @@ class SpringRedisMutexContendService @JvmOverloads constructor(
     redisTemplate: StringRedisTemplate,
     private val listenerContainer: RedisMessageListenerContainer,
     scheduledExecutorService: ScheduledExecutorService,
-    ioExecutor: Executor = Executor { it.run() }
+    ioExecutor: Executor = Executor { it.run() },
+    observer: ContendObserver = ContendObserver.NOOP
 ) : LeaseContendService(
     contender = contender,
     handleExecutor = handleExecutor,
     leaseStore = SpringRedisMutexLeaseStore(redisTemplate),
     leaseConfig = LeaseConfig(ttl, transition),
     scheduler = scheduledExecutorService,
-    ioExecutor = ioExecutor
+    ioExecutor = ioExecutor,
+    observer = observer
 ) {
     companion object {
         private val log = KotlinLogging.logger {}

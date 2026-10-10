@@ -13,6 +13,7 @@
 package me.ahoo.simba.jdbc
 
 import me.ahoo.simba.core.ContendExecutors
+import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.LeaseConfig
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
@@ -38,7 +39,8 @@ class JdbcMutexContendServiceFactory @JvmOverloads constructor(
     ttl: Duration,
     transition: Duration,
     private val scheduledExecutorService: ScheduledExecutorService = ContendExecutors.newScheduler("simba-jdbc"),
-    private val ioExecutor: ExecutorService = ContendExecutors.newIoExecutor("simba-jdbc-io")
+    private val ioExecutor: ExecutorService = ContendExecutors.newIoExecutor("simba-jdbc-io"),
+    private val observer: ContendObserver = ContendObserver.NOOP
 ) : MutexContendServiceFactory, AutoCloseable {
     private val leaseConfig = LeaseConfig(ttl, transition, initialDelay)
 
@@ -51,7 +53,8 @@ class JdbcMutexContendServiceFactory @JvmOverloads constructor(
             ttl = leaseConfig.ttl,
             transition = leaseConfig.transition,
             scheduler = scheduledExecutorService,
-            ioExecutor = ioExecutor
+            ioExecutor = ioExecutor,
+            observer = observer
         )
     }
 

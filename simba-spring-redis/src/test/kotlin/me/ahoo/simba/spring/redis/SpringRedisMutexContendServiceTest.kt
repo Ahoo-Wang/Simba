@@ -12,6 +12,7 @@
  */
 package me.ahoo.simba.spring.redis
 
+import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.test.MutexContendServiceSpec
 import org.junit.jupiter.api.AfterAll
@@ -35,11 +36,12 @@ internal class SpringRedisMutexContendServiceTest : MutexContendServiceSpec() {
     lateinit var lettuceConnectionFactory: LettuceConnectionFactory
     override lateinit var mutexContendServiceFactory: MutexContendServiceFactory
     lateinit var listenerContainer: RedisMessageListenerContainer
+    lateinit var stringRedisTemplate: StringRedisTemplate
 
     @BeforeAll
     fun setup() {
         lettuceConnectionFactory = RedisFixture.newConnectionFactory()
-        val stringRedisTemplate = StringRedisTemplate(lettuceConnectionFactory)
+        stringRedisTemplate = StringRedisTemplate(lettuceConnectionFactory)
         listenerContainer = RedisMessageListenerContainer()
         listenerContainer.setConnectionFactory(lettuceConnectionFactory)
         listenerContainer.afterPropertiesSet()
@@ -51,6 +53,16 @@ internal class SpringRedisMutexContendServiceTest : MutexContendServiceSpec() {
             listenerContainer = listenerContainer,
             handleExecutor = ForkJoinPool.commonPool(),
             scheduledExecutorService = Executors.newScheduledThreadPool(1)
+        )
+    }
+
+    override fun createObservedFactory(observer: ContendObserver): MutexContendServiceFactory {
+        return SpringRedisMutexContendServiceFactory(
+            ttl = Duration.ofSeconds(2),
+            transition = Duration.ofSeconds(1),
+            redisTemplate = stringRedisTemplate,
+            listenerContainer = listenerContainer,
+            observer = observer
         )
     }
 
