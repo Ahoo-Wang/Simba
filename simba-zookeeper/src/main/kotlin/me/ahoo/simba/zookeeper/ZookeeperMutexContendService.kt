@@ -36,10 +36,22 @@ class ZookeeperMutexContendService(
     private var leaderLatch: LeaderLatch? = null
     private val mutexPath: String = RESOURCE_PREFIX + contender.mutex
 
+    @Suppress("TooGenericExceptionCaught")
     override fun startContend() {
-        leaderLatch = LeaderLatch(curatorFramework, mutexPath, contenderId)
-        leaderLatch!!.addListener(this)
-        leaderLatch!!.start()
+        val latch = LeaderLatch(curatorFramework, mutexPath, contenderId)
+        latch.addListener(this)
+        try {
+            latch.start()
+        } catch (error: Throwable) {
+            // A latch that failed to start must not keep its listener or a half-created node.
+            try {
+                latch.close(CloseMode.SILENT)
+            } catch (cleanupError: Throwable) {
+                error.addSuppressed(cleanupError)
+            }
+            throw error
+        }
+        leaderLatch = latch
     }
 
     override fun stopContend() {

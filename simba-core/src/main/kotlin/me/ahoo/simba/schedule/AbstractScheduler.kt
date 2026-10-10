@@ -12,12 +12,12 @@
  */
 package me.ahoo.simba.schedule
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.core.AbstractMutexContender
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexState
 import me.ahoo.simba.util.Threads.defaultFactory
-import org.slf4j.LoggerFactory
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -32,7 +32,7 @@ abstract class AbstractScheduler(
     contendServiceFactory: MutexContendServiceFactory
 ) {
     companion object {
-        private val log = LoggerFactory.getLogger(AbstractScheduler::class.java)
+        private val log = KotlinLogging.logger {}
     }
 
     private val workContender = WorkContender(mutex)
@@ -113,9 +113,7 @@ abstract class AbstractScheduler(
             try {
                 work()
             } catch (throwable: Throwable) {
-                if (log.isErrorEnabled) {
-                    log.error(throwable.message, throwable)
-                }
+                log.error(throwable) { "work - mutex:[$mutex] - failed:[${throwable.message}]." }
             }
         }
     }

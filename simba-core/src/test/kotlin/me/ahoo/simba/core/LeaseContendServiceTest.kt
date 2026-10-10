@@ -341,13 +341,55 @@ class LeaseContendServiceTest {
         scheduler.pending.single().delayMillis.assert().isEqualTo(500)
     }
 
+    @Test
+    fun `renew decision follows the store reply, not the asynchronous owner view`() {
+        val deferredNotifications = ManualExecutor()
+        val deferred = TestLeaseContendService(contender, store, config, scheduler, io, deferredNotifications)
+        deferred.start()
+        scheduler.runNext()
+        io.runNext()
+        deferred.isOwner.assert().isFalse()
+
+        scheduler.runNext()
+        io.runNext()
+
+        store.renewFlags.assert().containsExactly(false, true)
+    }
+
+    @Test
+    fun `losing the lease switches back to acquire`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+        store.otherOwner = "c2"
+        scheduler.runNext()
+        io.runNext()
+        scheduler.runNext()
+        io.runNext()
+
+        store.renewFlags.assert().containsExactly(false, true, false)
+    }
+
+    @Test
+    fun `rejected reschedule after the scheduler shut down is logged, not thrown`() {
+        service.start()
+        scheduler.runNext()
+        scheduler.reject = true
+
+        io.runNext()
+
+        service.isOwner.assert().isTrue()
+        scheduler.pending.assert().isEmpty()
+    }
+
     private class TestLeaseContendService(
         contender: MutexContender,
         store: MutexLeaseStore,
         config: LeaseConfig,
         scheduler: ManualScheduler,
-        io: Executor
-    ) : LeaseContendService(contender, Executor { it.run() }, store, config, scheduler, io) {
+        io: Executor,
+        handleExecutor: Executor = Executor { it.run() }
+    ) : LeaseContendService(contender, handleExecutor, store, config, scheduler, io) {
         var stopCalls = 0
         var failOnStop = false
 

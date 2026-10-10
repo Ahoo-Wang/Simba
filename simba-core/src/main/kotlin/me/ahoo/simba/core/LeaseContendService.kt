@@ -68,6 +68,12 @@ open class LeaseContendService(
     private var watchdogFuture: ScheduledFuture<*>? = null
 
     /**
+     * Whether the last store reply granted this contender the lease. Decides acquire vs. renew from what the
+     * backend said, not from [isOwner], which notifications update asynchronously.
+     */
+    private var holdsLease = false
+
+    /**
      * `System.nanoTime()` at which the held lease ends; `null` when no bounded lease is held.
      */
     private var leaseDeadlineNanos: Long? = null
@@ -88,10 +94,10 @@ open class LeaseContendService(
             // A contention of the previous lifecycle may still be in flight; it no longer blocks this one.
             inFlight = false
             contendRequested = false
-            disarmWatchdog()
+            dropLease()
             onStart()
             try {
-                schedule(leaseConfig.initialDelayMillis, currentGeneration)
+                schedule(leaseConfig.initialDelayMillis, currentGeneration, rethrowRejection = true)
             } catch (error: Throwable) {
                 try {
                     onStop()
@@ -106,7 +112,7 @@ open class LeaseContendService(
     final override fun stopContend() {
         synchronized(lock) {
             cancelSchedule()
-            disarmWatchdog()
+            dropLease()
             try {
                 onStop()
             } finally {
@@ -137,7 +143,11 @@ open class LeaseContendService(
         return status.isActive && generation == currentGeneration
     }
 
-    private fun schedule(delay: Long, generation: Long) {
+    /**
+     * A rejection (the scheduler was shut down, e.g. its factory closed before this service stopped) is logged,
+     * except while starting, where it must fail [start].
+     */
+    private fun schedule(delay: Long, generation: Long, rethrowRejection: Boolean = false) {
         synchronized(lock) {
             if (!isActive(generation)) {
                 /*
@@ -154,11 +164,20 @@ open class LeaseContendService(
             }
             cancelSchedule()
             val token = scheduleToken
-            scheduledFuture = scheduler.schedule(
-                Runnable { dispatch(generation, token) },
-                delay,
-                TimeUnit.MILLISECONDS
-            )
+            try {
+                scheduledFuture = scheduler.schedule(
+                    Runnable { dispatch(generation, token) },
+                    delay,
+                    TimeUnit.MILLISECONDS
+                )
+            } catch (error: RejectedExecutionException) {
+                if (rethrowRejection) {
+                    throw error
+                }
+                log.error(error) {
+                    "schedule - mutex:[$mutex] contenderId:[$contenderId] - scheduler rejected, contention stops."
+                }
+            }
         }
     }
 
@@ -189,8 +208,9 @@ open class LeaseContendService(
     private fun contend(generation: Long) {
         var nextDelay = leaseConfig.ttlMillis
         try {
+            val renew = synchronized(lock) { holdsLease }
             val sentAtNanos = System.nanoTime()
-            val mutexOwner = leaseStore.contend(mutex, contenderId, isOwner, leaseConfig)
+            val mutexOwner = leaseStore.contend(mutex, contenderId, renew, leaseConfig)
             log.debug {
                 "contend - mutex:[$mutex] contenderId:[$contenderId] - owner:[${mutexOwner.ownerId}]."
             }
@@ -231,9 +251,10 @@ open class LeaseContendService(
             if (isActive(generation)) {
                 notifyOwner(mutexOwner)
                 if (mutexOwner.isOwner(contenderId)) {
+                    holdsLease = true
                     armWatchdog(generation, mutexOwner, sentAtNanos)
                 } else {
-                    disarmWatchdog()
+                    dropLease()
                 }
                 return true
             }
@@ -260,8 +281,9 @@ open class LeaseContendService(
             if (remainingMillis > 0) {
                 return (remainingMillis / 2).coerceIn(MIN_RETRY_MILLIS, leaseConfig.ttlMillis)
             }
-            disarmWatchdog()
-            if (isOwner) {
+            val held = holdsLease
+            dropLease()
+            if (held || isOwner) {
                 notifyOwner(MutexOwner.NONE)
             }
             return leaseConfig.ttlMillis
@@ -278,11 +300,15 @@ open class LeaseContendService(
         val deadlineNanos = sentAtNanos + remainingNanos
         leaseDeadlineNanos = deadlineNanos
         val token = watchdogToken
-        watchdogFuture = scheduler.schedule(
-            Runnable { onLeaseExpired(generation, token) },
-            (deadlineNanos - System.nanoTime()).coerceAtLeast(0),
-            TimeUnit.NANOSECONDS
-        )
+        try {
+            watchdogFuture = scheduler.schedule(
+                Runnable { onLeaseExpired(generation, token) },
+                (deadlineNanos - System.nanoTime()).coerceAtLeast(0),
+                TimeUnit.NANOSECONDS
+            )
+        } catch (error: RejectedExecutionException) {
+            log.error(error) { "armWatchdog - mutex:[$mutex] contenderId:[$contenderId] - scheduler rejected." }
+        }
     }
 
     private fun disarmWatchdog() {
@@ -292,6 +318,11 @@ open class LeaseContendService(
         leaseDeadlineNanos = null
     }
 
+    private fun dropLease() {
+        holdsLease = false
+        disarmWatchdog()
+    }
+
     private fun onLeaseExpired(generation: Long, token: Long) {
         synchronized(lock) {
             if (!isActive(generation) || token != watchdogToken) {
@@ -299,6 +330,7 @@ open class LeaseContendService(
             }
             watchdogFuture = null
             leaseDeadlineNanos = null
+            holdsLease = false
             log.warn {
                 "onLeaseExpired - mutex:[$mutex] contenderId:[$contenderId] - lease ended without renewal, revoking."
             }

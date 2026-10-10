@@ -32,7 +32,7 @@ object ContendExecutors {
     private const val KEEP_ALIVE_SECONDS = 60L
 
     /**
-     * Single-thread scheduler that only triggers contention.
+     * Single-thread scheduler for contention triggers and lease watchdogs; it never runs blocking work.
      */
     @JvmStatic
     fun newScheduler(domain: String): ScheduledExecutorService {
