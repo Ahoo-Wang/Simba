@@ -50,6 +50,7 @@ class ConfigurationMetadataTest {
             Triple("simba.jdbc.initial-delay", "java.time.Duration", "\"0s\""),
             Triple("simba.jdbc.ttl", "java.time.Duration", "\"10s\""),
             Triple("simba.jdbc.transition", "java.time.Duration", "\"6s\""),
+            Triple("simba.jdbc.fencing", "java.lang.Boolean", "false"),
             Triple("simba.redis.enabled", "java.lang.Boolean", "true"),
             Triple("simba.redis.ttl", "java.time.Duration", "\"10s\""),
             Triple("simba.redis.transition", "java.time.Duration", "\"6s\""),

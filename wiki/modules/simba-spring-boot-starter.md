@@ -277,6 +277,7 @@ simba:
 | `simba.jdbc.initial-delay` | `JdbcProperties` | `0s` |
 | `simba.jdbc.ttl` | `JdbcProperties` | `10s` |
 | `simba.jdbc.transition` | `JdbcProperties` | `6s` |
+| `simba.jdbc.fencing` | `JdbcProperties` | `false` |
 | `simba.redis.enabled` | `RedisProperties` | `true` |
 | `simba.redis.ttl` | `RedisProperties` | `10s` |
 | `simba.redis.transition` | `RedisProperties` | `6s` |

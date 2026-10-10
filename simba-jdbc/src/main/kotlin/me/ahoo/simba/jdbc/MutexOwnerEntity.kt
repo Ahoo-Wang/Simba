@@ -20,13 +20,20 @@ import java.util.concurrent.TimeUnit
  *
  * @author ahoo wang
  */
-class MutexOwnerEntity(val mutex: String, ownerId: String, acquiredAt: Long, ttlAt: Long, transitionAt: Long) :
-    MutexOwner(
-        ownerId,
-        acquiredAt,
-        ttlAt,
-        transitionAt
-    ) {
+class MutexOwnerEntity @JvmOverloads constructor(
+    val mutex: String,
+    ownerId: String,
+    acquiredAt: Long,
+    ttlAt: Long,
+    transitionAt: Long,
+    fencingToken: Long = NO_FENCING_TOKEN
+) : MutexOwner(
+    ownerId,
+    acquiredAt,
+    ttlAt,
+    transitionAt,
+    fencingToken
+) {
 
     /**
      * 版本号，用于领导者并发争抢控制.
