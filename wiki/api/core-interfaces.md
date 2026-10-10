@@ -43,10 +43,6 @@ classDiagram
         +isOwner: Boolean
         +isInTtl: Boolean
     }
-    class MutexRetrievalServiceFactory {
-        <<interface>>
-        +createMutexRetrievalService(retrievalListener: MutexRetriever): MutexRetrievalService
-    }
     class MutexContendServiceFactory {
         <<interface>>
         +createMutexContendService(mutexContender: MutexContender): MutexContendService
@@ -208,16 +204,6 @@ interface MutexContendService : MutexRetrievalService {
 | `isOwner` | `Boolean` | `true` if `afterOwner.ownerId == contenderId` |
 | `isInTtl` | `Boolean` | `true` if the contender is the owner AND the lock has not expired its TTL |
 | `fencingToken` | `Long` | Fencing token of the current term while this contender owns the mutex, otherwise `0`. See [ADR 0002](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md). |
-
-## MutexRetrievalServiceFactory
-
-**Source:** [simba-core/.../MutexRetrievalServiceFactory.kt:20](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexRetrievalServiceFactory.kt#L20)
-
-```kotlin
-interface MutexRetrievalServiceFactory {
-    fun createMutexRetrievalService(retrievalListener: MutexRetriever): MutexRetrievalService
-}
-```
 
 ## MutexContendServiceFactory
 
@@ -460,7 +446,6 @@ graph LR
     end
     subgraph sg_2 ["Factory Pattern"]
 
-        RF["MutexRetrievalServiceFactory"] -->|"creates"| RS
         CF["MutexContendServiceFactory"] -->|"creates"| CS
     end
     subgraph sg_3 ["Template Method"]
@@ -477,7 +462,6 @@ graph LR
     style CS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style ARS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style ACS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style RF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style CF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style SC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style STC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3

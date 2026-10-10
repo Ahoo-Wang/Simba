@@ -35,14 +35,4 @@ internal class RedisMutexKeys(mutex: String) {
      * Fencing token of the current term; expires with the lease.
      */
     val tokenKey: String = "$mutexKey:token"
-
-    /**
-     * Contender queue written by Simba < 3.2; only deleted on release.
-     */
-    val legacyQueueKey: String = "$mutexKey:contender"
-
-    /**
-     * Channel on which a Simba < 3.2 owner wakes this contender when releasing.
-     */
-    fun contenderChannel(contenderId: String): String = "$mutexKey:$contenderId"
 }

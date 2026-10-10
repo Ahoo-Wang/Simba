@@ -78,11 +78,10 @@ class SpringRedisMutexReleaseBroadcastTest {
     }
 
     @Test
-    fun `release broadcasts on the mutex channel and drops the legacy queue`() {
+    fun `release broadcasts on the mutex channel`() {
         val store = SpringRedisMutexLeaseStore(redisTemplate)
         val keys = RedisMutexKeys("broadcast-channel")
         redisTemplate.delete(keys.mutexKey)
-        redisTemplate.opsForZSet().add(keys.legacyQueueKey, "dead-contender", 1.0)
         val messages = LinkedBlockingQueue<String>()
         val listener = MessageListener { message, _ -> messages.add(String(message.body)) }
         listenerContainer.addMessageListener(listener, ChannelTopic(keys.mutexKey))
@@ -94,7 +93,6 @@ class SpringRedisMutexReleaseBroadcastTest {
             store.release("broadcast-channel", "a")
 
             messages.poll(2, TimeUnit.SECONDS).assert().isEqualTo("released@@a")
-            redisTemplate.hasKey(keys.legacyQueueKey).assert().isFalse()
         } finally {
             listenerContainer.removeMessageListener(listener)
         }

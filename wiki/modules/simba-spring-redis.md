@@ -57,10 +57,8 @@ All names share the `{mutex}` hash tag, so they land on one Redis Cluster slot. 
 |---|---|---|
 | `simba:{mutex}` | String | `contenderId` of the current owner, expiring after `ttl + transition` (`PX`). |
 | `simba:{mutex}` | Pub/Sub channel | Broadcasts `acquired@@{ownerId}` and `released@@{ownerId}` to every contender. |
-| `simba:{mutex}:{contenderId}` | Pub/Sub channel | Still subscribed so that Simba < 3.2 owners, which address releases to one queued contender, can wake this node during a rolling upgrade. |
 | `simba:{mutex}:fence` | String (counter) | Fencing counter, incremented once per ownership term; never expires. |
 | `simba:{mutex}:token` | String | Fencing token of the current term; expires with the lease. |
-| `simba:{mutex}:contender` | Sorted set (legacy) | Wait queue written only by Simba < 3.2; deleted on every release. |
 
 ## Lua Scripts
 
@@ -96,10 +94,9 @@ return { ownerId, redis.call('pttl', mutexKey), tonumber(redis.call('get', token
 
 ```lua
 if redis.call('get', mutexKey) ~= contenderId then
-    redis.call('zrem', legacyQueueKey, contenderId)
     return 0;
 end
-redis.call('del', mutexKey, legacyQueueKey, tokenKey)
+redis.call('del', mutexKey, tokenKey)
 redis.call('publish', mutexKey, 'released@@' .. contenderId)
 return 1;
 ```
@@ -181,9 +178,9 @@ A node ignores the `acquired@@{ownerId}` broadcast for its own acquisition: the 
 Monotonicity requires Redis to persist the counter (AOF with `appendfsync always`, or equivalent). If Redis restarts without it, the counter resets and tokens can go backwards.
 :::
 
-## Rolling Upgrade from Simba < 3.2
+## Upgrading to 4.0
 
-Key and channel names are unchanged. Older nodes keep receiving releases because they subscribe to the mutex channel and handle `released` from any channel; newer nodes keep their per-contender channel for releases sent by older owners. Older contenders that are only in the legacy queue may wait for their next poll until all nodes are upgraded.
+All nodes must run Simba 3.2 or later before upgrading to 4.0: 4.0 no longer subscribes to the per-contender channels or cleans up the contender queue that Simba 3.1 relied on. Mixed 3.2/3.3/4.0 nodes are compatible.
 
 ## Dependencies
 

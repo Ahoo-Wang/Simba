@@ -348,7 +348,7 @@ flowchart TB
 
 - [`SpringRedisMutexContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendService.kt) uses atomic Lua scripts for lock operations
 - Pub/sub via `RedisMessageListenerContainer` provides real-time notifications when locks are released
-- Two channel types: global (`simba:{mutex}`) for ownership broadcasts, per-contender (`simba:{mutex}:{contenderId}`) for targeted messages
+- One channel per mutex (`simba:{mutex}`) broadcasting acquisitions and releases to every contender
 
 #### Zookeeper Backend
 

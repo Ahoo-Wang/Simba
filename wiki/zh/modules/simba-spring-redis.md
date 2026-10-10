@@ -57,10 +57,8 @@ graph TB
 |---|---|---|
 | `simba:{mutex}` | String | 当前持有者的 `contenderId`，在 `ttl + transition` 后过期（`PX`）。 |
 | `simba:{mutex}` | Pub/Sub 频道 | 向所有竞争者广播 `acquired@@{ownerId}` 和 `released@@{ownerId}`。 |
-| `simba:{mutex}:{contenderId}` | Pub/Sub 频道 | 仍会订阅，以便滚动升级期间 Simba < 3.2 的持有者（只向一个排队竞争者发送释放消息）能唤醒本节点。 |
 | `simba:{mutex}:fence` | String（计数器） | Fencing 计数器，每个持有任期自增一次；不过期。 |
 | `simba:{mutex}:token` | String | 当前任期的 fencing token；随租约过期。 |
-| `simba:{mutex}:contender` | 有序集合（遗留） | 仅由 Simba < 3.2 写入的等待队列；每次释放时删除。 |
 
 ## Lua 脚本
 
@@ -96,10 +94,9 @@ return { ownerId, redis.call('pttl', mutexKey), tonumber(redis.call('get', token
 
 ```lua
 if redis.call('get', mutexKey) ~= contenderId then
-    redis.call('zrem', legacyQueueKey, contenderId)
     return 0;
 end
-redis.call('del', mutexKey, legacyQueueKey, tokenKey)
+redis.call('del', mutexKey, tokenKey)
 redis.call('publish', mutexKey, 'released@@' .. contenderId)
 return 1;
 ```
@@ -181,9 +178,9 @@ class SpringRedisMutexContendServiceFactory(
 单调性要求 Redis 持久化计数器（AOF 且 `appendfsync always`，或同等配置）。如果 Redis 在没有持久化的情况下重启，计数器会被重置，token 可能倒退。
 :::
 
-## 从 Simba < 3.2 滚动升级
+## 升级到 4.0
 
-键和频道名称没有变化。旧节点订阅了 mutex 频道，并且无论消息来自哪个频道都会处理 `released`，因此仍能收到释放通知；新节点保留每竞争者频道，用于接收旧持有者发出的释放消息。只存在于遗留队列中的旧竞争者，在所有节点升级完成前可能要等到下一次轮询。
+升级到 4.0 之前，所有节点都必须运行 Simba 3.2 或更高版本：4.0 不再订阅按竞争者的频道，也不再清理 Simba 3.1 依赖的等待队列。3.2/3.3/4.0 节点可以混跑。
 
 ## 依赖
 

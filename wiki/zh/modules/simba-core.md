@@ -18,7 +18,6 @@ me.ahoo.simba.core
     MutexContender         -- 带生命周期回调的竞争者
     MutexRetrievalService  -- 具有生命周期管理的检索
     MutexContendService    -- 绑定竞争者的检索，支持所有权查询
-    MutexRetrievalServiceFactory
     MutexContendServiceFactory
     AbstractMutexRetriever (via MutexRetriever)
     AbstractMutexContender -- 带默认日志的竞争者
@@ -51,7 +50,6 @@ graph TB
         MC["MutexContender"]
         MRS["MutexRetrievalService"]
         MCS["MutexContendService"]
-        MRF["MutexRetrievalServiceFactory"]
         MCF["MutexContendServiceFactory"]
         AMRS["AbstractMutexRetrievalService"]
         AMCS["AbstractMutexContendService"]
@@ -86,7 +84,6 @@ graph TB
     AMCS --> MC
     MRS --> MR
     MCS --> MC
-    MRF --> MRS
     MCF --> MCS
     MS --> MO
     AMRS --> MS
@@ -104,7 +101,6 @@ graph TB
     style MC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MRS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MCS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style MRF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MCF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style AMRS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style AMCS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
@@ -203,7 +199,7 @@ graph LR
 | 模式 | 使用位置 |
 |---|---|
 | **模板方法** | `AbstractMutexContendService` 定义 `startRetrieval`/`stopRetrieval`；后端实现 `startContend`/`stopContend` |
-| **抽象工厂** | `MutexContendServiceFactory` / `MutexRetrievalServiceFactory` 创建服务实例 |
+| **抽象工厂** | `MutexContendServiceFactory` 创建服务实例 |
 | **观察者 / 回调** | `MutexRetriever.notifyOwner` / `MutexContender.onAcquired`/`onReleased` |
 | **RAII** | `SimbaLocker` 使用 `AutoCloseable` 实现自动锁释放 |
 | **策略** | `ContenderIdGenerator.HOST` / `ContenderIdGenerator.UUID` |

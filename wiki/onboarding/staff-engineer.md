@@ -467,7 +467,7 @@ Services created by `JdbcMutexContendServiceFactory` share one trigger thread an
 
 Each mutex in Redis uses:
 - 1 string key (the mutex name -> owner ID, ~50 bytes)
-- Pub/sub subscriptions per contender: the mutex channel, plus the per-contender channel kept for rolling upgrades from Simba < 3.2
+- One pub/sub subscription per contender: the mutex channel
 
 For 100 mutexes with 10 contenders each, this is approximately 100KB of Redis memory -- negligible.
 
@@ -698,7 +698,7 @@ Zookeeper guarantees causal ordering of events within a session. The `LeaderLatc
 
 Redis pub/sub provides **at-most-once** delivery semantics. If a subscriber is disconnected when a message is published, it will not receive that message. Simba compensates for this:
 
-1. Each contender subscribes to both the global mutex channel and its own per-contender channel
+1. Each contender subscribes to the mutex channel, which carries every acquisition and release
 2. Even if a pub/sub message is missed, the scheduled contention cycle (via `ContendPeriod`) will detect the ownership change on the next poll
 3. The guard mechanism ensures the owner renews before TTL expiry regardless of pub/sub state
 

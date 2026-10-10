@@ -18,7 +18,6 @@ me.ahoo.simba.core
     MutexContender         -- Contender with lifecycle callbacks
     MutexRetrievalService  -- Lifecycle-managed retrieval
     MutexContendService    -- Contender-bound retrieval with ownership queries
-    MutexRetrievalServiceFactory
     MutexContendServiceFactory
     AbstractMutexRetriever (via MutexRetriever)
     AbstractMutexContender -- Default logging contender
@@ -51,7 +50,6 @@ graph TB
         MC["MutexContender"]
         MRS["MutexRetrievalService"]
         MCS["MutexContendService"]
-        MRF["MutexRetrievalServiceFactory"]
         MCF["MutexContendServiceFactory"]
         AMRS["AbstractMutexRetrievalService"]
         AMCS["AbstractMutexContendService"]
@@ -86,7 +84,6 @@ graph TB
     AMCS --> MC
     MRS --> MR
     MCS --> MC
-    MRF --> MRS
     MCF --> MCS
     MS --> MO
     AMRS --> MS
@@ -104,7 +101,6 @@ graph TB
     style MC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MRS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MCS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style MRF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MCF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style AMRS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style AMCS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
@@ -203,7 +199,7 @@ The `HOST` strategy is human-readable and aids debugging. Example: `0:12345@192.
 | Pattern | Where Used |
 |---|---|
 | **Template Method** | `AbstractMutexContendService` defines `startRetrieval`/`stopRetrieval`; backends implement `startContend`/`stopContend` |
-| **Abstract Factory** | `MutexContendServiceFactory` / `MutexRetrievalServiceFactory` create service instances |
+| **Abstract Factory** | `MutexContendServiceFactory` create service instances |
 | **Observer / Callback** | `MutexRetriever.notifyOwner` / `MutexContender.onAcquired`/`onReleased` |
 | **RAII** | `SimbaLocker` uses `AutoCloseable` for automatic lock release |
 | **Strategy** | `ContenderIdGenerator.HOST` / `ContenderIdGenerator.UUID` |

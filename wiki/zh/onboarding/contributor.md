@@ -348,7 +348,7 @@ flowchart TB
 
 - [`SpringRedisMutexContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendService.kt) 使用原子 Lua 脚本进行锁操作
 - 通过 `RedisMessageListenerContainer` 进行发布/订阅，提供锁释放时的实时通知
-- 两种频道类型：全局频道（`simba:{mutex}`）用于所有权广播，按竞争者频道（`simba:{mutex}:{contenderId}`）用于定向消息
+- 每个互斥锁一个频道（`simba:{mutex}`），向所有竞争者广播获取与释放
 
 #### Zookeeper 后端
 

@@ -86,9 +86,9 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
   the local wall clock.
 
 ### Wire contracts (compatibility-sensitive; nodes of different versions may run together)
-- Redis key and channel names are built in both Kotlin (`RedisMutexKeys`) and Lua: `simba:{mutex}`,
-  `simba:{mutex}:{contenderId}` (kept for releases from Simba < 3.2 owners), legacy queue `simba:{mutex}:contender`
-  (only deleted). Pub/sub messages use `{event}@@{ownerId}`; Lua scripts take keys via `KEYS` and return arrays.
+- Redis key and channel names are built in both Kotlin (`RedisMutexKeys`) and Lua: `simba:{mutex}` (lease and
+  channel), `simba:{mutex}:fence`, `simba:{mutex}:token`. 4.0 requires every node to run Simba 3.2+. Pub/sub messages
+  use `{event}@@{ownerId}`; Lua scripts take keys via `KEYS` and return arrays.
 - JDBC schema: `simba_mutex(mutex, acquired_at, ttl_at, transition_at, owner_id varchar(128), version, fencing_token)`;
   the column is added to existing tables by `upgrade-simba-mysql-fencing-token.sql`. The SQL is
   MySQL-specific.

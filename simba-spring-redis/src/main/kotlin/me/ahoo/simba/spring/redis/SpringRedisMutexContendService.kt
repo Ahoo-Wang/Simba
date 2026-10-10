@@ -31,8 +31,8 @@ import java.util.concurrent.ScheduledExecutorService
  * Spring Redis Mutex Contend Service.
  *
  * Contends through [SpringRedisMutexLeaseStore] and subscribes to owner events while running:
- * acquisitions on the mutex channel update the observed owner, and a release broadcast on the mutex channel
- * (or addressed to this contender by a Simba < 3.2 owner) triggers an immediate contention.
+ * acquisitions on the mutex channel update the observed owner, and a release broadcast on it triggers an
+ * immediate contention.
  *
  * @author ahoo wang
  */
@@ -59,10 +59,7 @@ class SpringRedisMutexContendService @JvmOverloads constructor(
     }
 
     private val redisKeys = RedisMutexKeys(contender.mutex)
-    private val listenTopics: List<ChannelTopic> = listOf(
-        ChannelTopic(redisKeys.mutexKey),
-        ChannelTopic(redisKeys.contenderChannel(contender.contenderId))
-    )
+    private val listenTopics: List<ChannelTopic> = listOf(ChannelTopic(redisKeys.mutexKey))
     private val mutexMessageListener: MutexMessageListener = MutexMessageListener()
 
     override fun onStart() {

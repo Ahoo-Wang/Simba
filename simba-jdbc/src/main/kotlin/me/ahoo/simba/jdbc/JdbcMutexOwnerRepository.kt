@@ -114,7 +114,7 @@ class JdbcMutexOwnerRepository @JvmOverloads constructor(
     }
 
     @Throws(SQLException::class, SQLIntegrityConstraintViolationException::class)
-    override fun initMutex(mutex: String): Boolean {
+    fun initMutex(mutex: String): Boolean {
         require(mutex.isNotBlank()) { "mutex is blank!" }
         log.info {
             "initMutex - mutex:[$mutex]."
@@ -132,7 +132,7 @@ class JdbcMutexOwnerRepository @JvmOverloads constructor(
     }
 
     @Suppress("TooGenericExceptionCaught")
-    override fun tryInitMutex(mutex: String): Boolean {
+    fun tryInitMutex(mutex: String): Boolean {
         return try {
             initMutex(mutex)
             true
@@ -144,7 +144,7 @@ class JdbcMutexOwnerRepository @JvmOverloads constructor(
         }
     }
 
-    override fun getOwner(mutex: String): MutexOwnerEntity {
+    fun getOwner(mutex: String): MutexOwnerEntity {
         dataSource.connection.use { connection -> return getOwner(connection, mutex) }
     }
 
@@ -173,7 +173,7 @@ class JdbcMutexOwnerRepository @JvmOverloads constructor(
         }
     }
 
-    override fun ensureOwner(mutex: String): MutexOwnerEntity {
+    fun ensureOwner(mutex: String): MutexOwnerEntity {
         dataSource.connection.use { connection -> return ensureOwner(connection, mutex) }
     }
 
@@ -211,7 +211,7 @@ class JdbcMutexOwnerRepository @JvmOverloads constructor(
      * @param transition transition
      * @return if return true,acquired.
      */
-    override fun acquire(mutex: String, contenderId: String, ttl: Long, transition: Long): Boolean {
+    fun acquire(mutex: String, contenderId: String, ttl: Long, transition: Long): Boolean {
         dataSource.connection.use { return acquire(it, mutex, contenderId, ttl, transition) }
     }
 
