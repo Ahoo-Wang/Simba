@@ -35,6 +35,7 @@ val exampleProjects = setOf(
 
 val testProject = project(":simba-test")
 val codeCoverageReportProject = project(":code-coverage-report")
+val testJavaVersion: Provider<Int> = providers.gradleProperty("testJavaVersion").map { it.toInt() }.orElse(17)
 val publishProjects = subprojects - exampleProjects - codeCoverageReportProject
 val libraryProjects = publishProjects - bomProjects
 
@@ -89,6 +90,12 @@ configure(libraryProjects) {
     }
     tasks.withType<Test> {
         useJUnitPlatform()
+        // Bytecode targets the JDK 17 baseline; -PtestJavaVersion=N runs the tests on a newer JVM (CI: JDK 25).
+        javaLauncher.set(
+            project.the<JavaToolchainService>().launcherFor {
+                languageVersion.set(testJavaVersion.map { JavaLanguageVersion.of(it) })
+            }
+        )
         testLogging {
             exceptionFormat = TestExceptionFormat.FULL
         }

@@ -15,6 +15,7 @@ not as it is planned to be; design direction belongs in `docs/adr/`.
 ./gradlew <module>:test --tests <fully.qualified.TestClass>
 ./gradlew simba-example:check -PexampleBackend=jdbc|redis|zookeeper   # default: redis
 ./gradlew codeCoverageReport                      # Aggregated JaCoCo report
+./gradlew check -PtestJavaVersion=25              # Run tests on another JDK (bytecode stays 17)
 ```
 
 | Module check | Needs |
