@@ -1,0 +1,29 @@
+name: 🎉 Feature request
+description: Propose a change or a new capability
+labels: [ enhancement ]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what prevents it today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Observable outcomes that show the request is done.
+      placeholder: "- With X configured, Y happens\n- Existing Z keeps working"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

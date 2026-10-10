@@ -251,3 +251,7 @@ repository.save(order, fencingToken = locker.fencingToken)
 
 - [Govern-EventBus](https://github.com/Ahoo-Wang/govern-eventbus/tree/master/eventbus-core/src/main/java/me/ahoo/eventbus/core/compensate)
 - [CoSky](https://github.com/Ahoo-Wang/CoSky/blob/main/cosky-rest-api/src/main/kotlin/me/ahoo/cosky/rest/stat/StatServiceScheduler.kt)
+
+## 参与贡献
+
+工作流程、质量门禁和发布流程参见 [CONTRIBUTING.md](CONTRIBUTING.md)，报告安全漏洞参见 [SECURITY.md](SECURITY.md)。

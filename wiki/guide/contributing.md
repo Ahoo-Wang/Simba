@@ -125,12 +125,12 @@ No external service required. Tests use Curator's embedded test server (`Testing
 
 Detekt enforces static analysis rules defined in [`config/detekt/detekt.yml`]([file_path:config/detekt/detekt.yml](https://github.com/Ahoo-Wang/Simba/blob/main/config/detekt/detekt.yml)). Key rules:
 
-| Rule | Description |
+| Rule | Setting |
 |---|---|
-| `MaxLineLength` | 120 characters per line |
-| `TooManyFunctions` | Warns at 11+ functions per class |
-| `LongParameterList` | Warns at 6+ parameters |
+| Formatting (ktlint via `detekt-formatting`) | Follows `.editorconfig`: 4-space indent, 120-column Kotlin lines, LF, final newline |
+| `AbsentOrWrongFileLicense` | Every Kotlin source starts with the Apache header in `config/detekt/license.template` |
 | `WildcardImport` | Disallowed -- use explicit imports |
+| `TooManyFunctions`, `LongParameterList`, `NestedBlockDepth`, `ReturnCount` | Disabled |
 
 Auto-correction is enabled (`autoCorrect = true`), so many issues are fixed by running `./gradlew detekt`.
 
@@ -253,7 +253,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 [optional body]
 ```
 
-Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `ci`.
+Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`, `style`, `revert`; add `!` for breaking changes. The `Labeler` workflow rejects PR titles that do not match and labels PRs for the release notes (see [CONTRIBUTING.md](https://github.com/Ahoo-Wang/Simba/blob/main/CONTRIBUTING.md)).
 
 Scopes are typically module names: `core`, `jdbc`, `redis`, `zookeeper`, `spring-boot-starter`, `deps`.
 

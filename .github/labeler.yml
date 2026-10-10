@@ -1,0 +1,38 @@
+# Area labels by changed paths (actions/labeler). Type labels come from the PR title, see workflows/labeler.yml.
+"module: core":
+  - changed-files:
+      - any-glob-to-any-file: ["simba-core/**"]
+"module: jdbc":
+  - changed-files:
+      - any-glob-to-any-file: ["simba-jdbc/**"]
+"module: redis":
+  - changed-files:
+      - any-glob-to-any-file: ["simba-spring-redis/**"]
+"module: zookeeper":
+  - changed-files:
+      - any-glob-to-any-file: ["simba-zookeeper/**"]
+"module: starter":
+  - changed-files:
+      - any-glob-to-any-file: ["simba-spring-boot-starter/**"]
+"module: example":
+  - changed-files:
+      - any-glob-to-any-file: ["simba-example/**"]
+test:
+  - changed-files:
+      - any-glob-to-any-file: ["simba-test/**", "**/src/test/**"]
+documentation:
+  - changed-files:
+      - any-glob-to-any-file: ["wiki/**", "docs/**", "skills/**", "**/*.md", "llms.txt"]
+build:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.gradle.kts"
+          - "gradle/**"
+          - "gradle.properties"
+          - "gradlew*"
+          - "simba-bom/**"
+          - "simba-dependencies/**"
+          - "config/**"
+ci:
+  - changed-files:
+      - any-glob-to-any-file: [".github/**", "renovate.json", "codecov.yml"]

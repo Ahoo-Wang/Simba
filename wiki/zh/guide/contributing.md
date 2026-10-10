@@ -125,12 +125,12 @@ graph TD
 
 Detekt 强制执行在 [`config/detekt/detekt.yml`]([file_path:config/detekt/detekt.yml](https://github.com/Ahoo-Wang/Simba/blob/main/config/detekt/detekt.yml)) 中定义的静态分析规则。关键规则：
 
-| 规则 | 说明 |
+| 规则 | 设置 |
 |---|---|
-| `MaxLineLength` | 每行最多 120 个字符 |
-| `TooManyFunctions` | 每个类超过 11 个函数时发出警告 |
-| `LongParameterList` | 超过 6 个参数时发出警告 |
+| 格式化（通过 `detekt-formatting` 的 ktlint） | 遵循 `.editorconfig`：4 空格缩进、Kotlin 每行 120 列、LF、文件末尾换行 |
+| `AbsentOrWrongFileLicense` | 每个 Kotlin 源文件都以 `config/detekt/license.template` 中的 Apache 许可证头开头 |
 | `WildcardImport` | 禁止 -- 使用显式导入 |
+| `TooManyFunctions`、`LongParameterList`、`NestedBlockDepth`、`ReturnCount` | 已禁用 |
 
 自动纠错已启用（`autoCorrect = true`），因此运行 `./gradlew detekt` 即可修复许多问题。
 
@@ -253,7 +253,7 @@ graph TD
 [optional body]
 ```
 
-类型：`feat`、`fix`、`refactor`、`test`、`docs`、`chore`、`ci`。
+类型：`feat`、`fix`、`perf`、`refactor`、`docs`、`test`、`build`、`ci`、`chore`、`style`、`revert`；破坏性变更加 `!`。`Labeler` 工作流会拒绝不符合格式的 PR 标题，并为发布说明给 PR 打标签（参见 [CONTRIBUTING.md](https://github.com/Ahoo-Wang/Simba/blob/main/CONTRIBUTING.md)）。
 
 作用域通常是模块名称：`core`、`jdbc`、`redis`、`zookeeper`、`spring-boot-starter`、`deps`。
 

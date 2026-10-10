@@ -1,9 +1,13 @@
+# Release note categories, filled from the labels applied by workflows/labeler.yml.
 changelog:
   exclude:
     labels:
       - ignore-for-release
 
   categories:
+    - title: 💥 Breaking Changes
+      labels:
+        - breaking-change
     - title: 🎉 New Features
       labels:
         - enhancement
@@ -13,18 +17,16 @@ changelog:
     - title: ⚡ Performance Improvements
       labels:
         - performance
-    - title: 🔧 Breaking Changes
-      labels:
-        - breaking-change
     - title: 📚 Documentation Updates
       labels:
         - documentation
-    - title: 🔨 Maintenance
-      labels:
-        - maintenance
     - title: 🤖 Dependency Updates
       labels:
         - dependency
+        - dependencies
+    - title: 🔨 Maintenance
+      labels:
+        - maintenance
     - title: Other Changes
       labels:
         - '*'

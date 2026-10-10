@@ -47,3 +47,7 @@ formatting:
     active: false
   Filename:
     active: false
+comments:
+  AbsentOrWrongFileLicense:
+    active: true
+    licenseTemplateFile: 'license.template'

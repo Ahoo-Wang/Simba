@@ -1,0 +1,50 @@
+name: 🐛 Bug report
+description: Something does not work as documented
+labels: [ bug ]
+body:
+  - type: markdown
+    attributes:
+      value: Search [existing issues](https://github.com/Ahoo-Wang/Simba/issues?q=is%3Aissue) first. Issues that cannot be reproduced from the information given may be closed.
+  - type: input
+    id: version
+    attributes:
+      label: Simba version
+      placeholder: "4.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options: [ JDBC (MySQL), Redis, Zookeeper, Not backend specific ]
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: JDK, Spring Boot, and backend server versions.
+      placeholder: "JDK 21, Spring Boot 4.1.0, MySQL 8.4"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include logs (`me.ahoo.simba` at debug) and stack traces.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal code or a repository link.
+    validations:
+      required: true

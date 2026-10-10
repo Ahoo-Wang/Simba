@@ -1,0 +1,68 @@
+#
+# Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#      http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+name: Labeler
+on:
+  # pull_request_target so fork PRs can be labeled; no PR code is checked out or executed.
+  pull_request_target:
+    types: [ opened, edited, synchronize, reopened ]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  area:
+    name: Label by changed paths
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          sync-labels: true
+
+  type:
+    name: Check title and label by type
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            // Conventional Commits title, as required by CONTRIBUTING.md: type(scope)!: summary
+            const title = context.payload.pull_request.title;
+            const match = /^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)(\(([^)]+)\))?(!)?: \S.*$/.exec(title);
+            if (!match) {
+              core.setFailed(`PR title "${title}" must follow Conventional Commits: "type(scope): summary" ` +
+                `with type in feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert.`);
+              return;
+            }
+            const [, type, , scope, bang] = match;
+            const typeLabels = {
+              feat: 'enhancement', fix: 'bug', perf: 'performance', docs: 'documentation',
+              refactor: 'maintenance', test: 'maintenance', build: 'maintenance', ci: 'maintenance',
+              chore: 'maintenance', style: 'maintenance', revert: 'maintenance',
+            };
+            const managed = ['enhancement', 'bug', 'performance', 'documentation', 'maintenance', 'breaking-change', 'dependency'];
+            const wanted = new Set([scope === 'deps' ? 'dependency' : typeLabels[type]]);
+            const body = context.payload.pull_request.body || '';
+            if (bang || /^BREAKING[ -]CHANGE:/m.test(body)) {
+              wanted.add('breaking-change');
+            }
+            const issue = { owner: context.repo.owner, repo: context.repo.repo, issue_number: context.payload.pull_request.number };
+            const current = context.payload.pull_request.labels.map(label => label.name);
+            for (const label of current.filter(name => managed.includes(name) && !wanted.has(name))) {
+              await github.rest.issues.removeLabel({ ...issue, name: label });
+            }
+            const missing = [...wanted].filter(name => !current.includes(name));
+            if (missing.length) {
+              await github.rest.issues.addLabels({ ...issue, labels: missing });
+            }
