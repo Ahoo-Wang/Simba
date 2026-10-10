@@ -4,91 +4,33 @@ export const en: DefaultTheme.Config = {
   label: 'English',
   lang: 'en',
   title: 'Simba',
-  description: 'Distributed Mutex Library for the JVM',
+  description: 'Leader election and distributed mutex for the JVM',
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide/' },
-      { text: 'Architecture', link: '/architecture/' },
       { text: 'API', link: '/api/' },
-      { text: 'Modules', link: '/modules/' },
-      { text: 'Testing', link: '/testing/' },
-      { text: 'Onboarding', link: '/onboarding/' },
+      { text: 'Architecture', link: '/architecture/' },
+      { text: 'Contributing', link: '/contributing/' },
       {
-        text: 'v3.1',
+        text: 'Releases',
         items: [
-          { text: 'Contributing', link: '/guide/contributing' },
+          { text: 'Upgrading', link: '/guide/upgrading' },
+          { text: 'Release Notes', link: 'https://github.com/Ahoo-Wang/Simba/releases' },
         ],
       },
     ],
     sidebar: {
       '/guide/': [
         {
-          text: 'Getting Started',
+          text: 'Guide',
           items: [
             { text: 'Introduction', link: '/guide/' },
             { text: 'Quick Start', link: '/guide/quick-start' },
+            { text: 'Backends', link: '/guide/backends' },
+            { text: 'Correctness', link: '/guide/correctness' },
             { text: 'Configuration', link: '/guide/configuration' },
             { text: 'Observability', link: '/guide/observability' },
-          ],
-        },
-      ],
-      '/architecture/': [
-        {
-          text: 'Architecture',
-          items: [
-            { text: 'Overview', link: '/architecture/' },
-            { text: 'Core Abstractions', link: '/architecture/core-abstractions' },
-            { text: 'Contention Mechanics', link: '/architecture/contention-mechanics' },
-            { text: 'Backend Implementations', link: '/architecture/backends' },
-          ],
-        },
-      ],
-      '/api/': [
-        {
-          text: 'API Reference',
-          items: [
-            { text: 'Overview', link: '/api/' },
-            { text: 'Core Interfaces', link: '/api/core-interfaces' },
-            { text: 'Locker API', link: '/api/locker-api' },
-            { text: 'Scheduler API', link: '/api/scheduler-api' },
-          ],
-        },
-      ],
-      '/modules/': [
-        {
-          text: 'Modules',
-          items: [
-            { text: 'Overview', link: '/modules/' },
-            { text: 'simba-core', link: '/modules/simba-core' },
-            { text: 'simba-jdbc', link: '/modules/simba-jdbc' },
-            { text: 'simba-spring-redis', link: '/modules/simba-spring-redis' },
-            { text: 'simba-zookeeper', link: '/modules/simba-zookeeper' },
-            { text: 'simba-spring-boot-starter', link: '/modules/simba-spring-boot-starter' },
-            { text: 'simba-test', link: '/modules/simba-test' },
-          ],
-        },
-      ],
-      '/testing/': [
-        {
-          text: 'Testing',
-          items: [
-            { text: 'Overview', link: '/testing/' },
-            { text: 'Unit Testing', link: '/testing/unit-testing' },
-            { text: 'Integration Testing', link: '/testing/integration-testing' },
-            { text: 'TCK', link: '/testing/tck' },
-          ],
-        },
-      ],
-      '/onboarding/': [
-        {
-          text: 'Onboarding',
-          collapsed: false,
-          items: [
-            { text: 'Overview', link: '/onboarding/' },
-            { text: 'Contributor Guide', link: '/onboarding/contributor' },
-            { text: 'Staff Engineer Guide', link: '/onboarding/staff-engineer' },
-            { text: 'Executive Guide', link: '/onboarding/executive' },
-            { text: 'Product Manager Guide', link: '/onboarding/product-manager' },
+            { text: 'Upgrading', link: '/guide/upgrading' },
           ],
         },
       ],

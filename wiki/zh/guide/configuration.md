@@ -1,275 +1,101 @@
 ---
 title: 配置
-description: Simba 配置的完整参考 -- Spring Boot 属性、编程式工厂配置和锁生命周期时序。
+description: 所有 simba.* Spring Boot 属性、回调执行器，以及不使用 Spring 时的后端工厂。
 ---
 
 # 配置
 
-本页涵盖 Simba 中所有可用的配置选项。你可以通过 Spring Boot 属性（推荐用于 Spring 应用）或通过工厂类以编程方式配置 Simba。
+`ttl` 和 `transition` 的含义及取值方法，请阅读 [正确性](/zh/guide/correctness#选择-ttl-和-transition)。
 
 ## Spring Boot 属性
 
-所有属性都以 `simba.` 为前缀。Starter 会根据你启用的后端自动配置对应的 `MutexContendServiceFactory`。
+| 属性 | 默认值 | 说明 |
+|---|---|---|
+| `simba.enabled` | `true` | 所有 Simba 自动配置的总开关。 |
+| `simba.backend` | — | `jdbc`、`redis` 或 `zookeeper`。激活多个后端时必须设置，否则启动失败。必须指向一个已激活的后端。 |
+| `simba.jdbc.enabled` | `true` | 启用 JDBC 后端。 |
+| `simba.jdbc.initial-delay` | `0s` | `start()` 之后首次竞争前的延迟。 |
+| `simba.jdbc.ttl` | `10s` | 持有者续期前的租约长度。同时用作 JDBC 语句超时。 |
+| `simba.jdbc.transition` | `6s` | `ttl` 之后只有持有者可以续期的宽限期。 |
+| `simba.jdbc.fencing` | `true` | 从 `fencing_token` 列签发 fencing token；没有该列的表请设为 `false`。 |
+| `simba.redis.enabled` | `true` | 启用 Redis 后端。 |
+| `simba.redis.ttl` | `10s` | 持有者续期前的租约长度。 |
+| `simba.redis.transition` | `6s` | `ttl` 之后只有持有者可以续期的宽限期。 |
+| `simba.zookeeper.enabled` | `true` | 启用 Zookeeper 后端。时序由 Curator 会话决定。 |
+| `simba.scheduling.enabled` | `true` | 随应用上下文运行 `@SimbaScheduled` 方法和 `SimbaScheduler` bean。 |
+| `simba.metrics.enabled` | `true` | 存在 `MeterRegistry` bean 时记录 Micrometer 指标；见 [可观测性](/zh/guide/observability)。 |
 
-### 全局配置
+时长支持 Spring Boot 格式（`10s`、`500ms`、`PT1M`）。`ttl` 必须为正，`transition` 和 `initial-delay` 不能为负。
 
-| 属性 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `simba.enabled` | `Boolean` | `true` | 所有 Simba 自动配置的主开关。 |
-| `simba.backend` | `String` | — | `jdbc`、`redis` 或 `zookeeper`。当有多个后端模块处于活跃状态时必须设置，否则启动失败。 |
+## Starter 创建的 Bean
 
-### JDBC 后端
+| Bean | 条件 | 覆盖或关闭 |
+|---|---|---|
+| `MutexContendServiceFactory` | 所选后端的基础设施 bean 存在：单个 `DataSource`、一个 `StringRedisTemplate` 或一个 `CuratorFramework` | 定义自己的 `MutexContendServiceFactory` |
+| `MutexOwnerRepository`（JDBC） | 单个 `DataSource` | 定义自己的 `MutexOwnerRepository` |
+| `RedisMessageListenerContainer`（Redis） | 单个 `RedisConnectionFactory` | 定义自己的 container |
+| `simbaHandleExecutor` | 总是 | 定义同名 bean |
+| `MicrometerContendObserver` | Micrometer 且存在 `MeterRegistry` bean | `simba.metrics.enabled=false` |
+| `SimbaEndpoint` | Actuator，端点已启用并暴露 | Actuator 的 `management.*` 属性 |
 
-属性前缀：`simba.jdbc`
-
-定义在 [`JdbcProperties`]([file_path:simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/jdbc/JdbcProperties.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/jdbc/JdbcProperties.kt)) 中。
-
-| 属性 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `simba.jdbc.enabled` | `Boolean` | `true` | 启用 JDBC 后端。当 `simba.enabled=true` 且此标志为 `true` 时激活。 |
-| `simba.jdbc.initial-delay` | `Duration` | `0s` | `start()` 后首次竞争尝试前的延迟。 |
-| `simba.jdbc.ttl` | `Duration` | `10s` | 所有者租约的生存时间。所有者必须在此到期前续租。 |
-| `simba.jdbc.transition` | `Duration` | `6s` | TTL 到期后的宽限期。现任所有者在此窗口期间可以优先续租。 |
-| `simba.jdbc.fencing` | `Boolean` | `true` | 从 `fencing_token` 列签发 fencing token。已有的表需要先执行 `upgrade-simba-mysql-fencing-token.sql`，或设为 `false`。 |
-
-**示例 `application.yml`：**
-
-```yaml
-simba:
-  enabled: true
-  jdbc:
-    enabled: true
-    initial-delay: 5s
-    ttl: 30s
-    transition: 10s
-```
-
-### Redis 后端
-
-属性前缀：`simba.redis`
-
-定义在 [`RedisProperties`]([file_path:simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/redis/RedisProperties.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/redis/RedisProperties.kt)) 中。
-
-| 属性 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `simba.redis.enabled` | `Boolean` | `true` | 启用 Redis 后端。 |
-| `simba.redis.ttl` | `Duration` | `10s` | 所有者租约的生存时间。 |
-| `simba.redis.transition` | `Duration` | `6s` | TTL 到期后的宽限期。 |
-
-**示例 `application.yml`：**
-
-```yaml
-simba:
-  redis:
-    enabled: true
-    ttl: 15s
-    transition: 8s
-```
-
-### Zookeeper 后端
-
-属性前缀：`simba.zookeeper`
-
-定义在 [`ZookeeperProperties`]([file_path:simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/zookeeper/ZookeeperProperties.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/zookeeper/ZookeeperProperties.kt)) 中。
-
-| 属性 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `simba.zookeeper.enabled` | `Boolean` | `true` | 启用 Zookeeper 后端。 |
-
-Zookeeper 后端将领导权生命周期管理委托给 Curator 的 `LeaderLatch`，因此在 Simba 层面不需要额外的时序参数。
-
-**示例 `application.yml`：**
-
-```yaml
-simba:
-  zookeeper:
-    enabled: true
-```
-
-### 指标
-
-| 属性 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `simba.metrics.enabled` | `Boolean` | `true` | 存在 `MeterRegistry` bean 时记录 Micrometer 指标，参见 [可观测性](/zh/guide/observability)。 |
-
-### 定时任务
-
-| 属性 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `simba.scheduling.enabled` | `Boolean` | `true` | 让 `@SimbaScheduled` 方法和 `SimbaScheduler` bean 随应用上下文运行。 |
+上下文中所有 `ContendObserver` bean 都会按 `@Order` 传给后端工厂。
 
 ### 回调执行器
 
-所有后端都在 `simbaHandleExecutor` bean 上执行 `onAcquired` / `onReleased`，它是一个空闲线程会被回收的专用 daemon 线程池。定义同名 bean 即可使用自己的执行器：
+`onAcquired` 和 `onReleased` 在 `simbaHandleExecutor` 上运行，这是一个专用的守护线程池，空闲线程会被回收。
+同一个竞争者的回调从不并发执行，因此线程池只随同一时刻被通知的竞争者数量增长。使用自己的执行器：
 
 ```kotlin
-@Bean(name = [SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME])
-fun simbaHandleExecutor(): Executor = Executors.newFixedThreadPool(2)
+@Bean(name = [SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME]) // "simbaHandleExecutor"
+fun simbaHandleExecutor(): ExecutorService = Executors.newFixedThreadPool(2)
 ```
 
-## 时序关系
+## 不使用 Spring
 
-理解 `ttl` 和 `transition` 如何交互对于正确配置至关重要：
+每个后端都有一个工厂。轮询类后端的工厂拥有一个调度器（竞争触发和租约看门狗）和一个 I/O 执行器（后端调用），两者都是守护线程且空闲回收；
+关闭时请 `close()` 工厂。不传 `handleExecutor` 时，回调运行在 `ForkJoinPool.commonPool()` 上；如果回调可能阻塞，请传入专用执行器。
 
-```mermaid
-graph LR
-    subgraph sg_65 ["Timeline"]
-        direction LR
-        A["acquiredAt"] -->|"ttl"| B["ttlAt"]
-        B -->|"transition"| C["transitionAt"]
-    end
+::: code-group
 
-    A -.->|"owner renews here"| B
-    B -.->|"grace window"| C
-    C -.->|"other contenders<br>can acquire"| D["next acquisition"]
-
-    style A fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style B fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style C fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style D fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-
-```
-
-**关键规则：**
-
-- 所有者应在 `ttlAt` 之前续租。guard 操作会同时延长 `ttlAt` 和 `transitionAt`。
-- 非所有者竞争者在 `transitionAt` 时唤醒，并带有 **-200ms 到 +1000ms** 的随机抖动（参见 [`ContendPeriod.nextContenderDelay()`]([file_path:simba-core/src/main/kotlin/me/ahoo/simba/core/ContendPeriod.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/ContendPeriod.kt#L43-L49))）。
-- 如果 `transition` 为零，所有者没有宽限期，竞争者会在 `ttlAt` 时立即唤醒。
-
-## 编程式配置
-
-不使用 Spring Boot 时，可以直接创建工厂。
-
-### JDBC 工厂
-
-```kotlin
-import me.ahoo.simba.jdbc.JdbcMutexContendServiceFactory
-import me.ahoo.simba.jdbc.JdbcMutexOwnerRepository
-import java.time.Duration
-
-val repository = JdbcMutexOwnerRepository(dataSource)
+```kotlin [JDBC]
 val factory = JdbcMutexContendServiceFactory(
-    mutexOwnerRepository = repository,
-    initialDelay = Duration.ofSeconds(0),
+    mutexOwnerRepository = JdbcMutexOwnerRepository(
+        dataSource,
+        queryTimeout = Duration.ofSeconds(10), // 默认：无超时
+        fencing = true
+    ),
+    handleExecutor = callbackExecutor,
+    initialDelay = Duration.ZERO,
     ttl = Duration.ofSeconds(10),
-    transition = Duration.ofSeconds(6)
+    transition = Duration.ofSeconds(6),
+    observer = myObserver // 可选
 )
 ```
 
-工厂参数与 Spring Boot 属性一一对应。[`JdbcMutexContendServiceFactory`]([file_path:simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendServiceFactory.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendServiceFactory.kt)) 接受一个可选的 `handleExecutor`（默认为 `ForkJoinPool.commonPool()`）。
-
-### Redis 工厂
-
-```kotlin
-import me.ahoo.simba.spring.redis.SpringRedisMutexContendServiceFactory
-import org.springframework.data.redis.core.StringRedisTemplate
-import org.springframework.data.redis.listener.RedisMessageListenerContainer
-import java.time.Duration
-import java.util.concurrent.Executors
-
+```kotlin [Redis]
+val listenerContainer = RedisMessageListenerContainer().apply {
+    setConnectionFactory(connectionFactory)
+    afterPropertiesSet()
+    start()
+}
 val factory = SpringRedisMutexContendServiceFactory(
-    redisTemplate = redisTemplate,
-    listenerContainer = listenerContainer,
-    scheduledExecutorService = Executors.newScheduledThreadPool(4),
     ttl = Duration.ofSeconds(10),
-    transition = Duration.ofSeconds(6)
+    transition = Duration.ofSeconds(6),
+    redisTemplate = StringRedisTemplate(connectionFactory),
+    listenerContainer = listenerContainer,
+    handleExecutor = callbackExecutor,
+    observer = myObserver // 可选
 )
 ```
 
-### Zookeeper 工厂
-
-```kotlin
-import me.ahoo.simba.zookeeper.ZookeeperMutexContendServiceFactory
-import org.apache.curator.framework.CuratorFramework
-import java.util.concurrent.ForkJoinPool
-
+```kotlin [Zookeeper]
 val factory = ZookeeperMutexContendServiceFactory(
-    handleExecutor = ForkJoinPool.commonPool(),
-    curatorFramework = curatorClient
+    handleExecutor = callbackExecutor,
+    curatorFramework = curatorFramework, // 已启动
+    observer = myObserver // 可选
 )
 ```
 
-Zookeeper 后端将租约管理委托给 Curator，因此不需要时序参数。
+:::
 
-## 锁生命周期状态图
-
-`MutexContendService` 遵循严格的状态机。理解这一点有助于调试生命周期相关问题：
-
-```mermaid
-stateDiagram-v2
-    [*] --> INITIAL
-    INITIAL --> STARTING : start()
-    STARTING --> RUNNING : startRetrieval() OK
-    STARTING --> INITIAL : exception
-    RUNNING --> STOPPING : stop()
-    RUNNING --> STOPPING : close()
-    STOPPING --> INITIAL : cleanup done
-    note right of RUNNING : Owner renews via guard()
-    note right of INITIAL : Ready to start again
-```
-
-## 竞争时序流程
-
-以下时序图展示了 `ContendPeriod` 如何为所有者和非所有者竞争者计算下次延迟：
-
-```mermaid
-sequenceDiagram
-autonumber
-    participant Owner as Current Owner
-    participant CP as ContendPeriod
-    participant C1 as Contender 1
-    participant C2 as Contender 2
-
-    Owner->>CP: nextOwnerDelay(owner)
-    CP-->>Owner: ttlAt - now (positive if within TTL)
-    Note over Owner: Owner calls guard() before ttlAt
-
-    Owner->>CP: nextOwnerDelay(owner) after renewal
-    CP-->>Owner: new ttlAt - now
-
-    Note over CP: TTL expires -- transition begins
-
-    C1->>CP: nextContenderDelay(owner)
-    CP-->>C1: transitionAt - now + random(-200..1000ms)
-
-    C2->>CP: nextContenderDelay(owner)
-    CP-->>C2: transitionAt - now + random(-200..1000ms)
-
-    Note over C1,C2: Different jitter values<br>spread out acquisition attempts
-```
-
-## 所有者状态图
-
-单次租约期间 `MutexOwner` 的生命周期：
-
-```mermaid
-stateDiagram-v2
-    [*] --> NoOwner
-    NoOwner --> Owned : contender acquires
-    state Owned {
-        [*] --> InTTL
-        InTTL --> InTransition : ttlAt reached
-        InTransition --> [*] : transitionAt reached
-    }
-    Owned --> NoOwner : release or transition expires
-    state InTTL {
-        [*] --> FreshAcquire
-        FreshAcquire --> Renewed : guard() succeeds
-        Renewed --> Renewed : guard() succeeds
-    }
-```
-
-## 推荐默认值
-
-| 场景 | TTL | 过渡期 | 说明 |
-|---|---|---|---|
-| **短时间任务** | 5s | 3s | 快速故障转移，后端负载较高 |
-| **标准工作负载** | 10s | 6s | 默认值 -- 良好的平衡 |
-| **重型任务** | 30s -- 60s | 10s -- 20s | 允许在领导者上执行长时间运行的工作 |
-| **1 分钟周期的调度器** | 65s+ | 20s+ | 必须超过调度周期 |
-
-## 相关页面
-
-- [快速开始](/zh/guide/quick-start) -- 添加依赖并编写你的第一个锁。
-- [架构设计](/architecture/) -- 深入了解竞争机制。
-- [参与贡献](/zh/guide/contributing) -- 开发环境设置和测试。
+所有工厂和服务的构造函数都标注了 `@JvmOverloads`，Java 调用方可以省略末尾的可选参数。

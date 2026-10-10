@@ -22,7 +22,7 @@ briefly acted without a valid lease, yet it left only a WARN line.
 3. **Micrometer (starter)**: an optional `micrometer-core` dependency; with a `MeterRegistry` bean the starter
    passes a Micrometer observer to the backend factories (`simba.metrics.enabled`). Meters are tagged by mutex only
    — never by contender id — to keep cardinality bounded.
-4. **Not now**: an actuator endpoint listing owners, until there is demand.
+4. **Not now**: an actuator endpoint listing owners, until there is demand (added later by [ADR 0006](0006-actuator-endpoint.md)).
 
 ## Consequences
 

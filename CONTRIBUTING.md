@@ -1,6 +1,6 @@
 # Contributing to Simba
 
-Thanks for helping. This page is the contract for changes; the [contributor guide](https://simba.ahoo.me/guide/contributing.html) has more background.
+Thanks for helping. This page is the contract for changes; the [contributor guide](https://simba.ahoo.me/contributing/) covers tests, the backend TCK and adding a backend.
 
 ## Development setup
 

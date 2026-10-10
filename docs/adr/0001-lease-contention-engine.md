@@ -1,6 +1,6 @@
 # ADR 0001: Shared Lease Contention Engine
 
-- Status: Accepted — phase 1 shipped in #541, #542 (with #543) and #544; phase 2 A–C in #545; fencing tokens moved to ADR 0002
+- Status: Accepted — phase 1 shipped in #541, #542 (with #543) and #544; phase 2 A–C in #545; fencing tokens moved to ADR 0002; phase 3 scoped by [ADR 0003](0003-simba-4.md) (no injected clock, JDBC dialect SPI deferred)
 - Date: 2026-10-09
 
 ## Context

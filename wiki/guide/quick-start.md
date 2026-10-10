@@ -1,51 +1,38 @@
 ---
 title: Quick Start
-description: Get up and running with Simba in minutes. Add dependencies, choose a backend, and acquire your first distributed lock.
+description: Add Simba to a Spring Boot or plain JVM application, configure one backend, and run leader-only work.
 ---
 
 # Quick Start
 
-This guide walks you through adding Simba to your project, configuring a backend, and acquiring a distributed lock in a few lines of code.
+Requirements: JDK 17+, and a running MySQL, Redis or Zookeeper. The examples use Spring Boot 4.1 with its dependency
+management; without Spring Boot, see [Without Spring](#without-spring).
 
-## Prerequisites
+## 1. Add Dependencies
 
-- **JDK 17** or later (Simba targets JVM 17 toolchain)
-- **Gradle 8+** with Kotlin DSL (recommended) or **Maven 3.9+**
-- A running instance of one of the supported backends: MySQL, Redis, or Zookeeper
-
-## Add Dependencies
-
-The examples below target Spring Boot 4.1 and assume its dependency management is enabled. The Simba starter supplies auto-configuration, but each backend still needs its client/infrastructure dependencies. Choose exactly one complete set.
-
-### Gradle Kotlin DSL
+The starter only contains auto-configuration. Add it together with **exactly one** backend set:
 
 ::: code-group
 
-```kotlin [JDBC/MySQL]
+```kotlin [JDBC (Gradle)]
 implementation("me.ahoo.simba:simba-spring-boot-starter:4.3.0")
 implementation("me.ahoo.simba:simba-jdbc:4.3.0")
 implementation("org.springframework.boot:spring-boot-starter-jdbc")
 runtimeOnly("com.mysql:mysql-connector-j")
 ```
 
-```kotlin [Redis]
+```kotlin [Redis (Gradle)]
 implementation("me.ahoo.simba:simba-spring-boot-starter:4.3.0")
 implementation("me.ahoo.simba:simba-spring-redis:4.3.0")
 implementation("org.springframework.boot:spring-boot-starter-data-redis")
 ```
 
-```kotlin [Zookeeper]
+```kotlin [Zookeeper (Gradle)]
 implementation("me.ahoo.simba:simba-spring-boot-starter:4.3.0")
 implementation("me.ahoo.simba:simba-zookeeper:4.3.0")
 ```
 
-:::
-
-### Maven XML
-
-::: code-group
-
-```xml [JDBC/MySQL]
+```xml [JDBC (Maven)]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
@@ -67,7 +54,7 @@ implementation("me.ahoo.simba:simba-zookeeper:4.3.0")
 </dependency>
 ```
 
-```xml [Redis]
+```xml [Redis (Maven)]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
@@ -84,7 +71,7 @@ implementation("me.ahoo.simba:simba-zookeeper:4.3.0")
 </dependency>
 ```
 
-```xml [Zookeeper]
+```xml [Zookeeper (Maven)]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
@@ -99,294 +86,136 @@ implementation("me.ahoo.simba:simba-zookeeper:4.3.0")
 
 :::
 
-## Choose Your API Level
+`simba-bom` (`me.ahoo.simba:simba-bom`) aligns the versions of all Simba modules if you prefer a platform import.
 
-Simba provides three API levels. Pick the one that matches your use case:
+## 2. Connect the Backend
 
-```mermaid
-graph TD
-    subgraph sg_20 ["Which API?"]
-        direction TB
-        Q1{"Need periodic<br>scheduled work?"}
-        Q2{"Want RAII /<br>try-with-resources?"}
-        Q3{"Need full control<br>via callbacks?"}
-        SCH["Use @SimbaScheduled / SimbaScheduler"]
-        LK["Use SimbaLocker"]
-        CB["Use MutexContender"]
-    end
-
-    Q1 -->|"Yes"| SCH
-    Q1 -->|"No"| Q2
-    Q2 -->|"Yes"| LK
-    Q2 -->|"No"| CB
-
-    style Q1 fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style Q2 fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style Q3 fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style SCH fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style LK fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style CB fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-
-```
-
-## Basic Usage with MutexContender
-
-The simplest way to use Simba is to implement [`MutexContender`]([file_path:simba-core/src/main/kotlin/me/ahoo/simba/core/MutexContender.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexContender.kt)). You receive callbacks when you acquire or lose the lock.
-
-```kotlin
-import me.ahoo.simba.core.AbstractMutexContender
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.core.MutexState
-
-class LeaderContender(mutex: String) : AbstractMutexContender(mutex) {
-    override fun onAcquired(mutexState: MutexState) {
-        println("[$contenderId] acquired leadership for mutex: $mutex")
-    }
-
-    override fun onReleased(mutexState: MutexState) {
-        println("[$contenderId] lost leadership for mutex: $mutex")
-    }
-}
-```
-
-Create the contender and start contention:
-
-```kotlin
-val factory: MutexContendServiceFactory = /* obtain from backend, e.g. JdbcMutexContendServiceFactory */
-val contender = LeaderContender("my-task-lock")
-val service = factory.createMutexContendService(contender)
-service.start()
-
-// When done:
-service.stop()
-```
-
-## Using SimbaLocker
-
-[`SimbaLocker`]([file_path:simba-core/src/main/kotlin/me/ahoo/simba/locker/SimbaLocker.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/locker/SimbaLocker.kt)) implements `AutoCloseable` so you can use it in a try-with-resources block. The calling thread blocks until the lock is acquired.
-
-```kotlin
-import me.ahoo.simba.locker.SimbaLocker
-import java.time.Duration
-
-val factory: MutexContendServiceFactory = /* ... */
-
-SimbaLocker("my-task-lock", factory).use { locker ->
-    locker.acquire()
-    println("Lock acquired -- doing critical work")
-    // lock is released automatically when the block exits
-}
-
-// With a timeout:
-SimbaLocker("my-task-lock", factory).use { locker ->
-    locker.acquire(Duration.ofSeconds(30))
-    println("Lock acquired within 30s")
-}
-```
-
-## Leader-Only Scheduling
-
-With the Spring Boot starter, annotate a bean method with `@SimbaScheduled`. It runs on the leader only, starts after the context refreshes and stops on shutdown:
-
-```kotlin
-import me.ahoo.simba.schedule.ScheduleContext
-import me.ahoo.simba.spring.boot.starter.scheduling.SimbaScheduled
-import org.springframework.stereotype.Service
-
-@Service
-class CleanupJobs {
-    @SimbaScheduled(mutex = "cleanup-task", fixedRate = "5m")
-    fun cleanup(context: ScheduleContext) {
-        println("Running cleanup on leader instance, fencing token ${context.fencingToken}")
-    }
-}
-```
-
-Without Spring, create a `SimbaScheduler` and manage its lifecycle:
-
-```kotlin
-import me.ahoo.simba.schedule.ScheduleConfig
-import me.ahoo.simba.schedule.SimbaScheduler
-import java.time.Duration
-
-val scheduler = SimbaScheduler("cleanup-task", factory, ScheduleConfig.rate(Duration.ZERO, Duration.ofMinutes(5))) {
-    println("Running cleanup on leader instance...")
-}
-scheduler.start()
-// on shutdown
-scheduler.close()
-```
-
-Work starts when the node becomes leader and is interrupted when it loses leadership. `AbstractScheduler` offers the same semantics for the subclassing style; see the [Scheduler API](/api/scheduler-api).
-
-## Spring Boot Auto-Configuration
-
-The starter creates a `MutexContendServiceFactory` only after the selected backend infrastructure is available. Configure the matching `DataSource`, Redis connection, or `CuratorFramework` bean.
+The starter creates a `MutexContendServiceFactory` bean once the backend's infrastructure bean exists: a
+`DataSource`, a `StringRedisTemplate`, or a `CuratorFramework`.
 
 ::: code-group
 
-```yaml [JDBC application.yml]
-simba:
-  jdbc:
-    enabled: true
-    initial-delay: 0s
-    ttl: 10s
-    transition: 6s
-
+```yaml [JDBC]
 spring:
   datasource:
     url: jdbc:mysql://localhost:3306/simba_db
-    username: root
-    password: root
+    username: simba
+    password: ${DB_PASSWORD}
 ```
 
-```yaml [Redis application.yml]
-simba:
-  redis:
-    enabled: true
-    ttl: 10s
-    transition: 6s
-
+```yaml [Redis]
 spring:
   data:
     redis:
       url: redis://localhost:6379
 ```
 
-```kotlin [Zookeeper Bean]
-import org.apache.curator.framework.CuratorFramework
-import org.apache.curator.framework.CuratorFrameworkFactory
-import org.apache.curator.retry.ExponentialBackoffRetry
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Configuration
-
+```kotlin [Zookeeper]
 @Configuration(proxyBeanMethods = false)
 class ZookeeperConfiguration {
     @Bean(initMethod = "start", destroyMethod = "close")
-    fun curatorFramework(): CuratorFramework = CuratorFrameworkFactory.newClient(
-        "localhost:2181",
-        ExponentialBackoffRetry(1000, 3)
-    )
+    fun curatorFramework(): CuratorFramework =
+        CuratorFrameworkFactory.newClient("localhost:2181", ExponentialBackoffRetry(1000, 3))
 }
 ```
 
 :::
 
-For JDBC, also create the `simba_mutex` table with [`simba-jdbc/src/init-script/init-simba-mysql.sql:17`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/init-simba-mysql.sql#L17).
+JDBC also needs the `simba_mutex` table: run
+[`init-simba-mysql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/init-simba-mysql.sql)
+once. Rows for new mutexes are inserted automatically. See [Backends](/guide/backends) for the schema and for Redis
+and Zookeeper operating notes.
 
-After those prerequisites exist, auto-configuration creates the `MutexContendServiceFactory` bean. Inject it and use it directly:
+Lease timing defaults to `ttl=10s`, `transition=6s`; see [Configuration](/guide/configuration) before changing it.
+
+## 3. Run Code on the Leader
+
+### Leader-Only Scheduling
+
+Annotate a bean method. It runs on the leader only, starts after the context refreshes and stops on shutdown:
 
 ```kotlin
-import org.springframework.stereotype.Component
-import me.ahoo.simba.core.AbstractMutexContender
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.core.MutexState
-import jakarta.annotation.PostConstruct
-import jakarta.annotation.PreDestroy
-
-@Component
-class MyLeaderTask(
-    private val contendServiceFactory: MutexContendServiceFactory
-) : AbstractMutexContender("spring-task-lock") {
-
-    private val service = contendServiceFactory.createMutexContendService(this)
-
-    @PostConstruct
-    fun onStart() = service.start()
-
-    @PreDestroy
-    fun onStop() = service.stop()
-
-    override fun onAcquired(mutexState: MutexState) {
-        println("This instance is now the leader!")
-    }
-
-    override fun onReleased(mutexState: MutexState) {
-        println("Leadership lost.")
+@Service
+class ReportJobs(private val reports: ReportService) {
+    @SimbaScheduled(mutex = "report", fixedDelay = "1m")
+    fun generate(context: ScheduleContext) {
+        reports.generate(fencingToken = context.fencingToken)
     }
 }
 ```
 
-## Lock Acquisition Sequence
+Set exactly one of `fixedDelay` and `fixedRate`; `initialDelay` defaults to `0s`. The method takes no parameter or a
+single `ScheduleContext`. Durations use Spring Boot formats (`10s`, `500ms`, `PT1M`) and accept `${...}` placeholders.
+The work runs on its own thread and is **interrupted** when the node loses leadership, so make it respond to
+interruption.
 
-The following diagram shows the full sequence when two contenders compete for the same mutex:
+### SimbaLocker
 
-```mermaid
-sequenceDiagram
-autonumber
-    participant A as Contender A
-    participant S as Backend Storage
-    participant B as Contender B
+Block the calling thread until it owns the mutex; `close()` releases it:
 
-    A->>S: startContend() -- acquire mutex
-    S-->>A: success -- owner = A (ttlAt, transitionAt)
-    A->>A: onAcquired()
-    B->>S: startContend() -- acquire mutex
-    S-->>B: fail -- owner = A (within transition)
-    B->>B: schedule retry with jitter
-    Note over A,S: A's TTL expires -- A calls guard()
-    A->>S: guard() -- renew lease
-    S-->>A: success -- extended ttlAt
-    Note over A,S: After several renewals A stops
-    A->>S: release()
-    S-->>B: pub/sub notification: released
-    B->>S: acquire mutex
-    S-->>B: success -- owner = B
-    B->>B: onAcquired()
+```kotlin
+SimbaLocker("nightly-migration", factory).use { locker ->
+    locker.acquire(Duration.ofSeconds(30)) // throws TimeoutException
+    migrate(fencingToken = locker.fencingToken)
+}
 ```
 
-## Locker Acquisition Sequence
-
-```mermaid
-sequenceDiagram
-autonumber
-    participant T as Thread
-    participant L as SimbaLocker
-    participant CS as ContendService
-    participant S as Backend
-
-    T->>L: acquire(timeout)
-    L->>CS: start()
-    CS->>S: startContend()
-    L->>T: LockSupport.park()
-    S-->>CS: onAcquired callback
-    CS->>L: onAcquired()
-    L->>T: LockSupport.unpark()
-    T->>T: critical section executes
-    T->>L: close() / release
-    L->>CS: stop()
-    CS->>S: release mutex
+```java
+try (Locker locker = new SimbaLocker("nightly-migration", factory)) {
+    locker.acquire(Duration.ofSeconds(30));
+    migrate(locker.getFencingToken());
+}
 ```
 
-## Scheduler Lifecycle Sequence
+A locker belongs to one thread at a time. Interrupting the thread does not cancel `acquire()` (the interrupt flag is
+restored); use the timeout overload to bound the wait.
 
-```mermaid
-sequenceDiagram
-autonumber
-    participant App as Application
-    participant Sch as AbstractScheduler
-    participant CS as ContendService
-    participant S as Backend
-    participant W as ScheduledExecutor
+### MutexContender
 
-    App->>Sch: start()
-    Sch->>CS: start()
-    CS->>S: startContend()
-    S-->>CS: onAcquired -- becomes owner
-    CS->>Sch: WorkContender.onAcquired()
-    Sch->>W: scheduleAtFixedRate(work)
-    loop Every period
-        W->>Sch: work()
-        Sch->>App: work() executes
-    end
-    Note over S,CS: Ownership expires
-    S-->>CS: onReleased
-    CS->>Sch: WorkContender.onReleased()
-    Sch->>W: cancel future
+Receive callbacks for as long as the service runs:
+
+```kotlin
+@Component
+class Coordinator(factory: MutexContendServiceFactory) : AbstractMutexContender("coordinator"), SmartLifecycle {
+    private val service = factory.createMutexContendService(this)
+
+    override fun onAcquired(mutexState: MutexState) = startCoordinating()
+    override fun onReleased(mutexState: MutexState) = stopCoordinating()
+
+    override fun start() = service.start()
+    override fun stop() = service.stop()
+    override fun isRunning() = service.running
+}
 ```
 
-## Next Steps
+Callbacks run on the `simbaHandleExecutor`, one at a time per contender. Keep them short and hand long work to
+another thread. `stop()` waits for its own `onReleased`, so do not call it while holding a lock that your callbacks
+take.
 
-- [Configuration Reference](/guide/configuration) -- tune TTL, transition, and initial delay per backend.
-- [Architecture Overview](/architecture/) -- understand the abstraction chain in depth.
-- [Contributing](/guide/contributing) -- set up the development environment and run the test suite.
+## Without Spring
+
+Build a factory for your backend and manage lifecycles yourself:
+
+```kotlin
+val factory = JdbcMutexContendServiceFactory(
+    mutexOwnerRepository = JdbcMutexOwnerRepository(dataSource, queryTimeout = Duration.ofSeconds(10)),
+    initialDelay = Duration.ZERO,
+    ttl = Duration.ofSeconds(10),
+    transition = Duration.ofSeconds(6)
+)
+
+val scheduler = SimbaScheduler("report", factory, ScheduleConfig.delay(Duration.ZERO, Duration.ofMinutes(1))) { context ->
+    reports.generate(fencingToken = context.fencingToken)
+}
+scheduler.start()
+// on shutdown
+scheduler.close()
+factory.close()
+```
+
+[Configuration](/guide/configuration#without-spring) lists the Redis and Zookeeper factories and their executors.
+
+## Example Application
+
+[`simba-example`](https://github.com/Ahoo-Wang/Simba/tree/main/simba-example) is a Spring Boot application with a
+contender and a `@SimbaScheduled` job; it runs against any backend (`-PexampleBackend=jdbc|redis|zookeeper`).

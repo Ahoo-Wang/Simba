@@ -2,7 +2,8 @@
 
 Simba is a JVM distributed mutex / leader-election library. It guarantees that, per mutex, at most one
 contender *observes itself* as owner of a time-bounded lease, and it delivers ordered acquire/release callbacks.
-It does **not** provide fencing tokens: local ownership is a weakly consistent view of the backend.
+Local ownership is a weakly consistent view of the backend: a paused process can act after its lease ended, so only a
+protected resource that checks the fencing token (ADR 0002) can reject a stale owner.
 
 This file records invariants and traps that are not obvious from the code. Describe the code as it is,
 not as it is planned to be; design direction belongs in `docs/adr/`.
@@ -107,8 +108,8 @@ publication metadata.
   Do not re-implement scheduling or generation checks in the backend.
 - **Redis Lua / naming:** change `RedisMutexKeys`, `SpringRedisMutexLeaseStore`, `AcquireResult` / `OwnerEvent`
   and all three scripts together; keep mixed-version nodes working or document the upgrade order.
-- **JDBC SQL / schema:** only compatible widening without asking; update the init script, README/wiki schema
-  snippets, and consider DB time vs JVM time.
+- **JDBC SQL / schema:** only compatible widening without asking; update the init script, the schema snippet in
+  `wiki/guide/backends.md` (EN/ZH), and consider DB time vs JVM time.
 - **Starter:** each backend activates on `simba.enabled`, `simba.<backend>.enabled` (both default `true`) and
   `simba.backend` (unset or naming it), plus its bean conditions; `SimbaAutoConfiguration` fails startup when several
   backends are active without `simba.backend`. Keep `META-INF/spring/...AutoConfiguration.imports` and
@@ -148,8 +149,8 @@ publication metadata.
 
 | Path | Content |
 |---|---|
-| `README.md`, `README.zh-CN.md`, `llms.txt` | User-facing entry points |
-| `wiki/` | VitePress site (authoritative docs); rules in `wiki/AGENTS.md` |
+| `README.md`, `README.zh-CN.md`, `llms.txt` | Entry points: what Simba is, install, one example per API, links (`llms.txt` mirrors `wiki/llms.txt`) |
+| `wiki/` | VitePress site (authoritative docs, one topic per page); page map and rules in `wiki/AGENTS.md` |
 | `docs/adr/` | Architecture decision records |
 | `CONTRIBUTING.md`, `SECURITY.md`, `.github/` | Contribution workflow, quality gates, SemVer and release process; vulnerability reporting; templates, labeler, CODEOWNERS |
 | `skills/simba/`, `skills/simba-testing/` | Source skill docs; do not generate marketplace artifacts here |

@@ -51,7 +51,7 @@ groups:
           summary: "Leadership of {{ $labels.mutex }} moves too often"
 ```
 
-各节点被抓取的时刻不同，交接时可能短暂显示为 0 个或 2 个 owner，`for: 1m` 用来过滤这种情况。租约本身不会重叠：租约到期时节点会在本地撤销身份；可能比租约活得更久的写入应携带 [fencing token](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md)。
+各节点被抓取的时刻不同，交接时可能短暂显示为 0 个或 2 个 owner，`for: 1m` 用来过滤这种情况。租约到期时节点会在本地撤销身份，因此持续的 `SimbaSplitLeadership` 指向后端问题（例如 Redis 故障转移）。可能比租约活得更久的写入应携带 [fencing token](/zh/guide/correctness#fencing-token)。
 
 ## Actuator 端点
 
@@ -123,5 +123,5 @@ val factory = SpringRedisMutexContendServiceFactory(
 
 ## 相关页面
 
-- [配置](/zh/guide/configuration) -- 所有 `simba.*` 属性。
-- [Spring Boot Starter](/zh/modules/simba-spring-boot-starter) -- 自动配置细节。
+- [配置](/zh/guide/configuration)：所有 `simba.*` 属性以及 starter 创建的 bean。
+- [正确性](/zh/guide/correctness#故障模式)：每种故障的表现。

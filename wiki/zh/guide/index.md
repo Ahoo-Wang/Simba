@@ -1,216 +1,57 @@
 ---
 title: 简介
-description: 了解 Simba 是什么、为什么需要它，以及其核心概念 -- 互斥锁、竞争者、所有者、TTL 和过渡期 -- 如何协同工作。
+description: Simba 是什么、保证什么、不保证什么，以及如何选择 API 和后端。
 ---
 
-# Simba 简介
+# 简介
 
-Simba 是一个面向 JVM 的分布式互斥锁（分布式锁）库，使用 Kotlin 编写。它使多个应用实例能够通过在任意时刻选举出单一领导者来协调对共享资源的访问。与重量级的协调服务不同，Simba 是一个轻量级的库，你只需将其作为依赖引入即可 -- 无需单独部署服务进程。
+Simba 是一个用于 **选主（leader election）和分布式互斥** 的 JVM 库。应用的每个实例都去竞争一个具名的 *mutex*；
+后端（MySQL、Redis 或 Zookeeper）把一个有时限的 *租约（lease）* 授予其中一个实例，Simba 再通过回调告诉每个实例它何时获得或失去所有权。
+Simba 没有独立的服务端：它作为库运行在你的应用里，使用你已经在运维的存储。
 
-## 为什么需要 Simba
+典型用途：让定时任务只在一个节点上运行、由一个消费者驱动某个流程、选出一个协调者。
 
-在水平扩展的服务中，你经常需要恰好一个实例来执行某项任务：运行定时作业、写入共享资源或协调部署。Simba 通过一个简单的协议来解决这个问题，该协议由你选择的存储方案支持：你已有的关系数据库（JDBC/MySQL）、Redis 实例，或 Zookeeper 集群。
+## Simba 保证什么
 
-核心设计目标：
+1. **每个租约最多一个本地持有者。** 对同一个 mutex，在租约有效期内最多只有一个竞争者 *认为* 自己是持有者。
+   租约结束且没有续期成功时，节点会自行撤销所有权，即使后端调用仍然挂起。
+2. **活性。** 持有者停止、崩溃或失联后，租约结束时会有其他竞争者接管（Zookeeper：会话过期时）。
+3. **有序回调。** `onAcquired` 和 `onReleased` 对每个竞争者按顺序投递，且不在内部锁内执行；`stop()` 总会投递最后一次 `onReleased`。
+4. **Fencing token。** 每个所有权任期都带有一个 token，在所有后端上都随任期严格递增（`0` 表示没有）。
 
-- **简洁的 API** -- 三种抽象级别（回调式、RAII 式、调度器式），让你根据场景选择最合适的方式。
-- **可插拔的存储** -- 无需修改应用代码即可切换后端。
-- **公平性** -- 随机抖动防止惊群效应问题。
-- **Spring 原生** -- 通过 Spring Boot starter 实现自动配置，并提供功能能力标志。
+## Simba 不保证什么
 
-## 核心概念
+本地所有权是后端状态的 *弱一致视图*。因 GC、磁盘卡顿或网络分区而暂停的进程，可能在租约结束后恢复，并继续完成已经开始的工作，
+而此时另一个节点已经持有 mutex。任何基于租约的锁都无法单独阻止这种情况。
 
-### 互斥锁（Mutex）
+如果重叠执行会造成损害，必须由被保护的资源拒绝过期的持有者：每次写入都带上 [fencing token](/zh/guide/correctness#fencing-token)，
+由资源拒绝小于其已见最大值的 token。如果重复执行只是浪费（例如报表生成两次），仅靠租约就足够了。
 
-**互斥锁**是一种命名资源，同一时刻最多只能有一个竞争者拥有它。在 Simba 中，互斥锁通过一个普通字符串来标识（例如 `"my-scheduled-job"`）。所有引用相同互斥锁字符串的竞争者都竞争同一把锁。
+## 选择 API
 
-[`MutexRetriever`]([file_path:simba-core/src/main/kotlin/me/ahoo/simba/core/MutexRetriever.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexRetriever.kt)) 接口定义了契约：
+| 你想要…… | 使用 | 页面 |
+|---|---|---|
+| 只在 leader 上周期性执行某个方法 | `@SimbaScheduled`（Spring）或 `SimbaScheduler` | [快速开始](/zh/guide/quick-start#仅在-leader-上调度) |
+| 阻塞线程直到持有锁，用完释放 | `SimbaLocker` | [快速开始](/zh/guide/quick-start#simbalocker) |
+| 在应用运行期间响应领导权变化 | `MutexContender` + `MutexContendService` | [快速开始](/zh/guide/quick-start#mutexcontender) |
 
-```kotlin
-interface MutexRetriever {
-    val mutex: String
-    fun notifyOwner(mutexState: MutexState)
-}
-```
+三者都构建在同一个竞争服务之上；[API 参考](/zh/api/) 记录了每个类型。
 
-### 竞争者（Contender）
+## 选择后端
 
-**竞争者**是参与互斥锁竞争的应用实例。每个竞争者都有一个唯一的 `contenderId` -- 默认通过 [`ContenderIdGenerator`]([file_path:simba-core/src/main/kotlin/me/ahoo/simba/core/ContenderIdGenerator.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/ContenderIdGenerator.kt)) 基于主机名和进程 ID 生成。[`MutexContender`]([file_path:simba-core/src/main/kotlin/me/ahoo/simba/core/MutexContender.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexContender.kt)) 接口扩展了 `MutexRetriever`，并添加了 `onAcquired` / `onReleased` 回调。
+| | JDBC（MySQL） | Redis | Zookeeper |
+|---|---|---|---|
+| 机制 | 每个 mutex 一行，条件 `UPDATE` | 通过 Lua 执行 `SET NX PX`，释放时 pub/sub 广播 | Curator `LeaderLatch` |
+| 崩溃后的故障转移 | 租约结束（`ttl + transition`）+ 抖动 | 租约结束 + 抖动 | 会话超时 |
+| 正常停止后的故障转移 | 竞争者下一次轮询（最晚到租约结束 + 抖动） | 立即（释放广播） | 立即 |
+| 时钟 | 数据库时间 | Redis `PTTL` + 本地时钟 | 无（临时节点） |
+| Fencing token 持久性 | 事务性 | 需要 Redis 持久化（AOF） | ZooKeeper `czxid` |
 
-### 所有者（Owner）
+选择你已经在运行的那个。[后端](/zh/guide/backends) 页面介绍了每个后端的部署与运维要点。
 
-**所有者**是当前持有互斥锁的竞争者。所有权由 [`MutexOwner`]([file_path:simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt)) 记录表示，包含以下字段：
+## 下一步
 
-| 字段 | 含义 |
-|---|---|
-| `ownerId` | 当前所有者的 `contenderId`（如果没有所有者则为空字符串）。 |
-| `acquiredAt` | 获取所有权的时间戳。 |
-| `ttlAt` | TTL 窗口到期的绝对时间。 |
-| `transitionAt` | 过渡（宽限）窗口到期的绝对时间。 |
-
-### TTL（生存时间）
-
-**TTL** 是竞争者持有独占所有权的持续时间。在 TTL 到期之前，所有者必须通过调用 guard 操作来**续租**。如果续租成功，TTL 会被延长；如果续租失败或所有者崩溃，所有权将失效。
-
-### 过渡期（Transition）
-
-**过渡期**是 TTL 到期后开始的宽限期。在过渡期间：
-
-1. 当前所有者可以优先续租（使领导权保持稳定）。
-2. 非所有者竞争者在随机抖动后等待，然后再尝试获取。
-
-这种两阶段设计（TTL + 过渡期）既给了现任所有者公平的续租机会，又保证了当所有者失去响应时系统最终的可用性。
-
-## 概览速查
-
-| 方面 | 详情 |
-|---|---|
-| **语言** | Kotlin（JVM 17+） |
-| **制品** | `me.ahoo.simba:simba-core` + 后端模块 |
-| **后端** | JDBC/MySQL、Redis、Zookeeper |
-| **API** | `MutexContender`（回调式）、`SimbaLocker`（RAII 式）、`AbstractScheduler`（调度式） |
-| **Spring Boot** | 通过 `simba-spring-boot-starter` 自动配置 |
-| **许可证** | Apache 2.0 |
-| **版本** | 4.3.0 |
-
-## 架构概览
-
-下图展示了主要组件之间的连接关系：
-
-```mermaid
-graph TD
-    subgraph sg_73 ["Application"]
-        direction TB
-        APP["Your Code<br>implements MutexContender<br>or extends AbstractScheduler"]
-    end
-
-    subgraph sg_74 ["simba-core"]
-        direction TB
-        CS["MutexContendService<br>created by Factory"]
-        CP["ContendPeriod<br>computes delays"]
-        MO["MutexOwner<br>ownerId, ttlAt, transitionAt"]
-        MS["MutexState<br>before / after"]
-    end
-
-    subgraph sg_75 ["Backends"]
-        direction TB
-        JF["JdbcMutexContendServiceFactory"]
-        RF["SpringRedisMutexContendServiceFactory"]
-        ZF["ZookeeperMutexContendServiceFactory"]
-    end
-
-    subgraph sg_76 ["Storage"]
-        direction TB
-        MYSQL[("MySQL<br>simba_mutex")]
-        REDIS[("Redis<br>Lua scripts + Pub/Sub")]
-        ZK[("Zookeeper<br>Curator LeaderLatch")]
-    end
-
-    APP --> CS
-    CS --> CP
-    CS --> MS
-    CP --> MO
-    JF --> CS
-    RF --> CS
-    ZF --> CS
-    JF --> MYSQL
-    RF --> REDIS
-    ZF --> ZK
-
-    style APP fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style CS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style CP fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style MO fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style MS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style JF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style RF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style ZF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style MYSQL fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style REDIS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style ZK fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-
-```
-
-## 模块地图
-
-```mermaid
-graph LR
-    subgraph sg_77 ["Modules"]
-        direction LR
-        CORE["simba-core<br>Interfaces + AbstractScheduler"]
-        JDBC["simba-jdbc<br>JDBC backend"]
-        REDIS["simba-spring-redis<br>Redis backend"]
-        ZK["simba-zookeeper<br>Zookeeper backend"]
-        BOOT["simba-spring-boot-starter<br>Auto-configuration"]
-        TEST["simba-test<br>TCK base classes"]
-        BOM["simba-bom / simba-dependencies<br>Version management"]
-        EX["simba-example<br>Example app"]
-    end
-
-    CORE --> JDBC
-    CORE --> REDIS
-    CORE --> ZK
-    CORE --> BOOT
-    CORE --> TEST
-    BOOT --> JDBC
-    BOOT --> REDIS
-    BOOT --> ZK
-
-    style CORE fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style JDBC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style REDIS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style ZK fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style BOOT fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style TEST fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style BOM fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style EX fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-
-```
-
-## 锁生命周期状态图
-
-下图展示了 `MutexContendService` 所经历的状态：
-
-```mermaid
-stateDiagram-v2
-    [*] --> INITIAL
-    INITIAL --> STARTING : start()
-    STARTING --> RUNNING : startRetrieval() succeeds
-    STARTING --> INITIAL : startRetrieval() throws
-    RUNNING --> STOPPING : stop()
-    STOPPING --> INITIAL : stopRetrieval() completes
-
-    state INITIAL {
-        [*] --> Idle
-    }
-
-    state RUNNING {
-        [*] --> Contending
-        Contending --> Owner : onAcquired()
-        Contending --> Waiting : onReleased()
-        Owner --> Renewing : guard()
-        Renewing --> Owner : renewal succeeds
-        Renewing --> Waiting : lease ends without renewal
-        Waiting --> Contending : timer fires
-    }
-```
-
-## 对比：Simba 与其他方案
-
-| 特性 | Simba | Redisson | Curator | ShedLock |
-|---|---|---|---|---|
-| **存储** | JDBC、Redis、Zookeeper | 仅 Redis | 仅 Zookeeper | JDBC、Redis、Mongo |
-| **API 风格** | 回调式、RAII 式、调度器式 | Lock、Semaphore 等 | LeaderLatch | 基于注解 |
-| **领导者选举** | 内置（TTL + 过渡期） | 基于锁 | 临时节点 | 不适用 |
-| **定时任务支持** | `AbstractScheduler` | 未内置 | 未内置 | 核心功能 |
-| **惊群效应缓解** | 随机抖动（-200ms..+1s） | 发布/订阅等待 | 基于 Watch | 不适用 |
-| **Spring Boot Starter** | 是 | 是 | 否 | 是 |
-| **Kotlin 优先** | 是 | Java 优先 | Java 优先 | Java 优先 |
-| **许可证** | Apache 2.0 | Apache 2.0 | Apache 2.0 | Apache 2.0 |
-
-## 相关页面
-
-- [快速开始](/zh/guide/quick-start) -- 添加依赖并运行你的第一个分布式锁。
-- [配置参考](/zh/guide/configuration) -- Spring Boot 属性和编程式配置的完整参考。
-- [架构概览](/architecture/) -- 深入了解抽象链和竞争机制。
-- [参与贡献](/zh/guide/contributing) -- 设置开发环境并提交 PR。
+- [快速开始](/zh/guide/quick-start)：添加依赖并运行代码。
+- [正确性](/zh/guide/correctness)：租约、时序、fencing token 与故障模式。保护任何不能重复写入的资源之前，请先阅读。
+- [配置](/zh/guide/configuration)、[可观测性](/zh/guide/observability)、[升级](/zh/guide/upgrading)。
+- 如果你要参与 Simba 本身的开发：[架构](/zh/architecture/) 和 [参与贡献](/zh/contributing/)。
