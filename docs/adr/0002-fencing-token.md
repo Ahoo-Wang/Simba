@@ -1,6 +1,6 @@
 # ADR 0002: Fencing Tokens
 
-- Status: Proposed
+- Status: Accepted — step 1 (core API and Zookeeper) implemented; Redis and JDBC pending
 - Date: 2026-10-09
 
 ## Context
@@ -34,9 +34,17 @@ Downstream resources store the highest token seen per mutex and reject operation
 
 | Backend | Token source | Notes |
 |---|---|---|
-| Zookeeper | Sequence number of the latch node that won leadership (`LeaderLatch.getLastPathIsLeader()`) | No extra writes. The leader is always the lowest live sequence, and every node created later has a higher one, so each new leader's sequence exceeds all previous leaders'. A re-election after connection loss creates a new node and therefore a new, larger token. |
+| Zookeeper | `czxid` of the latch node that won leadership (`LeaderLatch.getLastPathIsLeader()`), read once per term | ZooKeeper transaction ids grow monotonically across the ensemble, and each new leader's node was created after the previous leader's (the leader is the lowest live sequence; every later node is newer), so the czxid increases strictly per term. A re-election after connection loss creates a new node and therefore a larger token. |
 | JDBC | New column `fencing_token bigint unsigned not null default 0`, incremented in the acquire `UPDATE` only when ownership changes | The assignment must precede `owner_id` in the `SET` list (MySQL evaluates assignments left to right using updated values): `fencing_token = if(owner_id = ? and transition_at > now, fencing_token, fencing_token + 1)`. Requires a schema migration, so it is opt-in (`fencing` flag on the repository and `simba.jdbc.fencing`) until 4.0. |
 | Redis | Counter `simba:{mutex}:fence` incremented by `mutex_acquire.lua` on a successful `SET NX`; the term's token is stored in `simba:{mutex}:token` with the lease's `PX` and returned by acquire and guard as a third reply element | Monotonicity only holds if Redis persists the counter (AOF with `appendfsync always` or equivalent); without persistence a restart resets it. Documented as a deployment requirement. |
+
+### Why not the Zookeeper sequence number
+
+The first draft used the latch node's sequence number. `LeaderLatch` creates `/simba/{mutex}` as a container
+node, which ZooKeeper deletes once it has no children, and a recreated parent restarts its sequence at zero. A
+paused sole leader whose session expired would leave the container to be reaped; the next leader would then get a
+smaller token than the stale process still holds, inverting the fencing check. `ZookeeperFencingTokenTest` covers
+this case.
 
 ### Mixed versions
 

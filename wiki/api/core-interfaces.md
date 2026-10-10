@@ -207,6 +207,7 @@ interface MutexContendService : MutexRetrievalService {
 | `contenderId` | `String` | Delegates to `contender.contenderId` |
 | `isOwner` | `Boolean` | `true` if `afterOwner.ownerId == contenderId` |
 | `isInTtl` | `Boolean` | `true` if the contender is the owner AND the lock has not expired its TTL |
+| `fencingToken` | `Long` | Fencing token of the current term while this contender owns the mutex, otherwise `0`. See [ADR 0002](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md). |
 
 ## MutexRetrievalServiceFactory
 
@@ -319,6 +320,7 @@ open class MutexOwner(
 | `acquiredAt` | `Long` | Timestamp (epoch millis) when the lock was acquired |
 | `ttlAt` | `Long` | Timestamp when the TTL expires. After this, the owner should renew or another contender may take over. |
 | `transitionAt` | `Long` | End of the transition/grace period. During this window the current owner can preferentially renew. |
+| `fencingToken` | `Long` | Strictly increasing per ownership term, stable within one. `NO_FENCING_TOKEN` (`0`) when the backend does not issue tokens (currently only Zookeeper does). |
 
 | Method | Return | Description |
 |---|---|---|

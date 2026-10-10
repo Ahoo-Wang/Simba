@@ -24,6 +24,7 @@ interface Locker : AutoCloseable {
 | `acquire()` | Blocks the calling thread until the lock is acquired. Calls `close()` when done. |
 | `acquire(timeout: Duration)` | Blocks the calling thread up to `timeout`. Throws `TimeoutException` if the lock is not acquired within the timeout. |
 | `close()` | Releases the lock and stops the contend service. Called automatically in try-with-resources / `use {}`. |
+| `fencingToken` | Fencing token of the held lock, `0` when not held or unsupported by the backend. Pass it to the protected resource. |
 
 ## SimbaLocker
 

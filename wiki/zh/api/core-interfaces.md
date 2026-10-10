@@ -207,6 +207,7 @@ interface MutexContendService : MutexRetrievalService {
 | `contenderId` | `String` | 委托给 `contender.contenderId` |
 | `isOwner` | `Boolean` | 如果 `afterOwner.ownerId == contenderId` 则为 `true` |
 | `isInTtl` | `Boolean` | 如果竞争者是所有者且锁未超过 TTL 则为 `true` |
+| `fencingToken` | `Long` | 本竞争者持有互斥锁时为当前任期的 fencing token，否则为 `0`。参见 [ADR 0002](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md)。 |
 
 ## MutexRetrievalServiceFactory
 
@@ -319,6 +320,7 @@ open class MutexOwner(
 | `acquiredAt` | `Long` | 获取锁时的时间戳（纪元毫秒） |
 | `ttlAt` | `Long` | TTL 到期的时间戳。此后所有者应续期，或其他竞争者可能接管。 |
 | `transitionAt` | `Long` | 转换/宽限期结束时间。在此窗口期间，当前所有者可以优先续期。 |
+| `fencingToken` | `Long` | 按持有任期严格递增，任期内保持不变。后端不签发 token 时为 `NO_FENCING_TOKEN`（`0`），目前只有 Zookeeper 签发。 |
 
 | 方法 | 返回值 | 描述 |
 |---|---|---|

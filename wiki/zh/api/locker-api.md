@@ -24,6 +24,7 @@ interface Locker : AutoCloseable {
 | `acquire()` | 阻塞调用线程直到获取到锁。完成后调用 `close()`。 |
 | `acquire(timeout: Duration)` | 阻塞调用线程最多 `timeout` 时长。如果在超时时间内未获取到锁则抛出 `TimeoutException`。 |
 | `close()` | 释放锁并停止竞争服务。在 try-with-resources / `use {}` 中自动调用。 |
+| `fencingToken` | 持有锁时的 fencing token，未持有或后端不支持时为 `0`。请把它传给受保护的资源。 |
 
 ## SimbaLocker
 

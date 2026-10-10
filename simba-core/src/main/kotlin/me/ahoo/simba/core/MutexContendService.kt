@@ -36,4 +36,11 @@ interface MutexContendService : MutexRetrievalService {
         get() = afterOwner.isOwner(contenderId)
     val isInTtl: Boolean
         get() = afterOwner.isInTtl(contenderId)
+
+    /**
+     * Fencing token of the current term while this contender owns the mutex, otherwise
+     * [MutexOwner.NO_FENCING_TOKEN]. Pass it to protected resources so they can reject stale owners.
+     */
+    val fencingToken: Long
+        get() = afterOwner.let { if (it.isOwner(contenderId)) it.fencingToken else MutexOwner.NO_FENCING_TOKEN }
 }
