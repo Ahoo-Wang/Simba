@@ -17,6 +17,8 @@ Thanks for helping. This page is the contract for changes; the [contributor guid
 5. **Document** in English and Chinese (README, wiki). Regenerate `wiki/llms-full.txt` with `pnpm run sync:llms`. Update `AGENTS.md` when an invariant changes.
 6. **Review**: CODEOWNERS are requested automatically. A pull request merges (squash) only when all required checks pass and review comments are resolved.
 
+`main` is protected by a repository ruleset: changes only through pull requests, squash merges only, required status checks (tests per module and example backend, CodeQL, Codecov, PR title), resolved review threads, and no force-pushes or deletion.
+
 ## Quality gates (CI)
 
 | Gate | Where |
