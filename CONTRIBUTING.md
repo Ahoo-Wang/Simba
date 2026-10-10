@@ -4,7 +4,7 @@ Thanks for helping. This page is the contract for changes; the [contributor guid
 
 ## Development setup
 
-- JDK 17 and Docker (the JDBC and Redis tests start MySQL and Redis with Testcontainers).
+- JDK 17 and Docker (the JDBC and Redis tests start MySQL and Redis with Testcontainers). `-PtestJavaVersion=N` runs the tests on another installed JDK; bytecode always targets 17.
 - `./gradlew check` runs all tests, detekt (static analysis and formatting) and the license-header check.
 - Wiki: Node.js 22.12+ and pnpm, see `wiki/AGENTS.md`.
 
@@ -23,7 +23,7 @@ Thanks for helping. This page is the contract for changes; the [contributor guid
 
 | Gate | Where |
 |---|---|
-| Unit, integration and TCK tests per module, plus the example app per backend | `Integration Test` workflow |
+| Unit, integration and TCK tests per module, plus the example app per backend; the full suite also runs on JDK 25 | `Integration Test` workflow |
 | detekt static analysis, formatting and Apache license headers | `./gradlew check` |
 | Coverage: project and patch targets | Codecov (`codecov.yml`) |
 | Security analysis | CodeQL workflow |

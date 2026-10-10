@@ -157,3 +157,35 @@ jobs:
           name: test-reports-jdbc
           path: '**/build/reports/tests/'
           retention-days: 7
+
+  jdk-25-test:
+    name: Simba Test (JDK 25)
+    needs: [ simba-core-test ]
+    runs-on: ubuntu-latest
+    # Bytecode targets the JDK 17 baseline; this job runs the full suite on JDK 25 to catch runtime regressions early.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # The last version is the default, so Gradle (and detekt) run on 17; only the test JVM is 25.
+      # Static analysis already runs in the JDK 17 jobs.
+      - name: Set up JDK 25 and 17
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          java-version: |
+            25
+            17
+          distribution: 'temurin'
+
+      - name: Test on JDK 25
+        run: >-
+          ./gradlew test -PtestJavaVersion=25
+          -Porg.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_25_X64
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-reports-jdk-25
+          path: '**/build/reports/tests/'
+          retention-days: 7
