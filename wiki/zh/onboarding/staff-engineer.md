@@ -239,7 +239,7 @@ stateDiagram-v2
 ```
 Backend detects ownership change
   -> calls notifyOwner(MutexOwner)
-    -> AbstractMutexRetrievalService.safeNotifyOwner(newOwner)
+    -> AbstractMutexRetrievalService.dispatch(newOwner)
       -> compute MutexState(afterOwner, newOwner)
       -> update mutexState field
       -> CompletableFuture.runAsync({ retriever.notifyOwner(state) }, handleExecutor)
@@ -653,7 +653,7 @@ stateDiagram-v2
 
 ### 所有者状态安全
 
-`mutexState` 字段是 `@Volatile` 的，带有 `protected set`。更新发生在 `safeNotifyOwner()` 中，它始终通过 `CompletableFuture.runAsync()` 从 `handleExecutor` 调用。这意味着：
+`mutexState` 字段是 `@Volatile` 的，带有 `protected set`。更新发生在 `applyAndNotify()` 中（持有状态锁），它始终通过 `CompletableFuture.runAsync()` 从 `handleExecutor` 调用。这意味着：
 
 1. `mutexState` 写入发生在处理执行器线程上
 2. `@Volatile` 确保对所有线程的可见性
@@ -789,7 +789,7 @@ Simba 通过以下方式建立 happens-before 关系：
 
 ### 潜在可见性间隙
 
-从 `MutexOwnerRepository.acquireAndGetOwner()` 返回的 `mutexOwner` 对象在后端的调度线程上创建，但在处理执行器线程上读取（当竞争者回调访问 `mutexState.after` 时）。这是安全的，因为 `safeNotifyOwner()` 中对 `mutexState` 的 `@Volatile` 写入建立了 happens-before 关系。
+从 `MutexOwnerRepository.acquireAndGetOwner()` 返回的 `mutexOwner` 对象在后端的调度线程上创建，但在处理执行器线程上读取（当竞争者回调访问 `mutexState.after` 时）。这是安全的，因为 `applyAndNotify()` 中对 `mutexState` 的 `@Volatile` 写入建立了 happens-before 关系。
 
 ---
 

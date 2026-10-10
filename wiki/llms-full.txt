@@ -1206,7 +1206,7 @@ The status transitions use `AtomicReferenceFieldUpdater.compareAndSet()` to prev
 ```
 Backend detects ownership change
   -> calls notifyOwner(MutexOwner)
-    -> AbstractMutexRetrievalService.safeNotifyOwner(newOwner)
+    -> AbstractMutexRetrievalService.dispatch(newOwner)
       -> compute MutexState(afterOwner, newOwner)
       -> update mutexState field
       -> CompletableFuture.runAsync({ retriever.notifyOwner(state) }, handleExecutor)
@@ -1620,7 +1620,7 @@ This means `start()` and `stop()` are thread-safe and will not corrupt state eve
 
 ### Owner State Safety
 
-The `mutexState` field is `@Volatile` with a `protected set`. Updates happen in `safeNotifyOwner()` which is always called from the `handleExecutor` via `CompletableFuture.runAsync()`. This means:
+The `mutexState` field is `@Volatile` with a `protected set`. Updates happen in `applyAndNotify()` under the state lock, which is always called from the `handleExecutor` via `CompletableFuture.runAsync()`. This means:
 
 1. The `mutexState` write happens on the handle executor thread
 2. The `@Volatile` ensures visibility to all threads
@@ -1756,7 +1756,7 @@ Simba establishes happens-before relationships through:
 
 ### Potential Visibility Gaps
 
-The `mutexOwner` object returned from `MutexOwnerRepository.acquireAndGetOwner()` is created on the backend's scheduling thread but read on the handle executor thread (when the contender callback accesses `mutexState.after`). This is safe because the `@Volatile` write to `mutexState` in `safeNotifyOwner()` establishes the happens-before relationship.
+The `mutexOwner` object returned from `MutexOwnerRepository.acquireAndGetOwner()` is created on the backend's scheduling thread but read on the handle executor thread (when the contender callback accesses `mutexState.after`). This is safe because the `@Volatile` write to `mutexState` in `applyAndNotify()` establishes the happens-before relationship.
 
 ---
 
@@ -2817,10 +2817,11 @@ need to implement `startRetrieval()` / `stopRetrieval()` (and by extension, `sta
 
 ### Asynchronous Notification Dispatch
 
-Owner notifications are always dispatched asynchronously via
-`CompletableFuture.runAsync(safeNotifyOwner, handleExecutor)` ([line 71](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/AbstractMutexRetrievalService.kt#L71)).
-This ensures that a slow `onAcquired()` / `onReleased()` callback never blocks the contention
-scheduling thread. The JDBC and Redis factories default `handleExecutor` to `ForkJoinPool.commonPool()`;
+Owner notifications are always dispatched asynchronously on a sequential executor over `handleExecutor`
+([`AbstractMutexRetrievalService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/AbstractMutexRetrievalService.kt)), so callbacks run one at a time in submission order and a slow
+`onAcquired()` / `onReleased()` never blocks the contention scheduling thread. The internal state lock is never held
+while a callback runs: `start()` and the backend release in `stop()` do not wait for user code. `stop()` returns only
+after its own `onReleased` ran; called from inside a callback, it delivers that release inline. The JDBC and Redis factories default `handleExecutor` to `ForkJoinPool.commonPool()`;
 the Spring Boot starter passes its dedicated `simbaHandleExecutor` bean instead.
 
 ## Key Concepts
@@ -3189,7 +3190,7 @@ is the base class for all retrieval services. It manages:
 - **Status transitions** — uses `AtomicReferenceFieldUpdater` ([line 32](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/AbstractMutexRetrievalService.kt#L32))
   for lock-free CAS on the `status` field. `start()` requires `INITIAL -> STARTING`, and
   `stop()` requires `RUNNING -> STOPPING`.
-- **Owner state** — the `mutexState` field is `@Volatile` and updated in `safeNotifyOwner()`.
+- **Owner state** — the `mutexState` field is `@Volatile` and updated in `applyAndNotify()` under the state lock.
 - **Async notification** — `notifyOwner(newOwner)` dispatches via `CompletableFuture.runAsync()`
   on the `handleExecutor`, ensuring that slow callbacks never block the contention thread.
 - **Template methods** — subclasses implement `startRetrieval()` and `stopRetrieval()`.
@@ -3210,8 +3211,8 @@ autonumber
     Note over ARS: ... contention loop runs ...
 
     ARS->>ARS: newOwner detected
-    ARS->>HE: CompletableFuture.runAsync(safeNotifyOwner)
-    HE->>ARS: safeNotifyOwner(newOwner)
+    ARS->>HE: CompletableFuture.runAsync(dispatch)
+    HE->>ARS: dispatch(newOwner)
     ARS->>ARS: mutexState = MutexState(afterOwner, newOwner)
     ARS->>R: notifyOwner(newState)
 
@@ -3305,8 +3306,8 @@ autonumber
 
     BACKEND->>AMCS: contends and obtains new MutexOwner
     AMCS->>AMCS: notifyOwner(newOwner)
-    AMCS->>HE: CompletableFuture.runAsync(safeNotifyOwner)
-    HE->>AMCS: safeNotifyOwner(newOwner)
+    AMCS->>HE: CompletableFuture.runAsync(dispatch)
+    HE->>AMCS: dispatch(newOwner)
     AMCS->>AMCS: state = MutexState(afterOwner, newOwner)
     AMCS->>AMCS: mutexState = state
     AMCS->>MC: notifyOwner(state)
@@ -5901,7 +5902,7 @@ abstract class AbstractMutexRetrievalService(
 Key behaviors:
 - `start()` -- CAS from `INITIAL` to `STARTING`, calls `startRetrieval()`, sets `RUNNING`
 - `stop()` -- CAS from `RUNNING` to `STOPPING`, calls `stopRetrieval()`, sets `INITIAL`
-- `notifyOwner(newOwner)` -- dispatches `safeNotifyOwner` on `handleExecutor`, which updates `mutexState` and calls `retriever.notifyOwner`
+- `notifyOwner(newOwner)` -- dispatches on a sequential executor over `handleExecutor`, which updates `mutexState` under the state lock and then calls `retriever.notifyOwner` outside it`
 
 ## AbstractMutexContendService
 
@@ -7299,7 +7300,7 @@ autonumber
         Repo-->>Service: MutexOwnerEntity
 
         Service->>Service: notifyOwner(mutexOwner)
-        Service->>Executor: runAsync(safeNotifyOwner)
+        Service->>Executor: runAsync(dispatch)
         Executor->>Contender: onAcquired(mutexState) or onReleased(mutexState)
 
         Service->>Service: contendPeriod.ensureNextDelay(mutexOwner)

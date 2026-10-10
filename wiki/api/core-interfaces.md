@@ -254,7 +254,7 @@ abstract class AbstractMutexRetrievalService(
 Key behaviors:
 - `start()` -- CAS from `INITIAL` to `STARTING`, calls `startRetrieval()`, sets `RUNNING`
 - `stop()` -- CAS from `RUNNING` to `STOPPING`, calls `stopRetrieval()`, sets `INITIAL`
-- `notifyOwner(newOwner)` -- dispatches `safeNotifyOwner` on `handleExecutor`, which updates `mutexState` and calls `retriever.notifyOwner`
+- `notifyOwner(newOwner)` -- dispatches on a sequential executor over `handleExecutor`, which updates `mutexState` under the state lock and then calls `retriever.notifyOwner` outside it`
 
 ## AbstractMutexContendService
 

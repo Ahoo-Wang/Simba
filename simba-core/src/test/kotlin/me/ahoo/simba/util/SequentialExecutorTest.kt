@@ -80,4 +80,39 @@ class SequentialExecutorTest {
 
         ran.assert().containsExactly(2)
     }
+
+    @Test
+    fun `executeAndWait runs inline on the caller when idle`() {
+        val executor = SequentialExecutor { error("idle executeAndWait must not use the delegate") }
+        var ranOn: Thread? = null
+
+        executor.executeAndWait { ranOn = Thread.currentThread() }
+
+        ranOn.assert().isSameAs(Thread.currentThread())
+    }
+
+    @Test
+    fun `executeAndWait waits for the active drainer and keeps order`() {
+        val pool = Executors.newSingleThreadExecutor()
+        val executor = SequentialExecutor(pool)
+        val firstStarted = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val order = java.util.Collections.synchronizedList(mutableListOf<String>())
+        executor.execute {
+            firstStarted.countDown()
+            releaseFirst.await()
+            order += "first"
+        }
+        firstStarted.await(2, TimeUnit.SECONDS).assert().isTrue()
+
+        val waiter = kotlin.concurrent.thread { executor.executeAndWait { order += "second" } }
+        waiter.join(100)
+        waiter.isAlive.assert().isTrue()
+        releaseFirst.countDown()
+        waiter.join(2000)
+
+        waiter.isAlive.assert().isFalse()
+        order.assert().containsExactly("first", "second")
+        pool.shutdown()
+    }
 }

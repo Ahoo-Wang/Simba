@@ -14,6 +14,7 @@ package me.ahoo.simba.util
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -40,6 +41,44 @@ internal class SequentialExecutor(private val delegate: Executor) : Executor {
         } catch (error: RejectedExecutionException) {
             queue.remove(command)
             throw error
+        }
+    }
+
+    /**
+     * Runs [command] in order with the other tasks and returns once it ran. When no drain is active the caller
+     * becomes the drainer and runs the queued tasks itself; otherwise it waits for the active drainer.
+     * Must not be called from a task of this executor (it would wait for itself).
+     */
+    fun executeAndWait(command: Runnable) {
+        val done = CountDownLatch(1)
+        queue.add(
+            Runnable {
+                try {
+                    command.run()
+                } finally {
+                    done.countDown()
+                }
+            }
+        )
+        if (draining.compareAndSet(false, true)) {
+            drain()
+            return
+        }
+        awaitUninterruptibly(done)
+    }
+
+    private fun awaitUninterruptibly(latch: CountDownLatch) {
+        var interrupted = false
+        while (true) {
+            try {
+                latch.await()
+                break
+            } catch (_: InterruptedException) {
+                interrupted = true
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt()
         }
     }
 

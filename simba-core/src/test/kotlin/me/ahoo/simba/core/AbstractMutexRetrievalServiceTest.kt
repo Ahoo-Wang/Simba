@@ -20,7 +20,11 @@ import org.hamcrest.Matchers.sameInstance
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.util.ArrayDeque
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 class AbstractMutexRetrievalServiceTest {
     private fun newService(): FakeMutexContendService {
@@ -202,19 +206,16 @@ class AbstractMutexRetrievalServiceTest {
     }
 
     @Test
-    fun `self notification submitted while active but executing after stop must not revive ownership`() {
+    fun `self notification still pending at stop must not revive ownership`() {
         val contender = FakeMutexContender("m", "c1")
         val executor = ManualExecutor()
         val service = FakeMutexContendService(contender, executor)
         service.start()
 
-        // submitted while RUNNING, but the dispatch happens only after stop() completed:
-        // a multi-threaded handleExecutor may execute it after the stop notification
+        // submitted while RUNNING but dispatched only while stopping: stop() drains it before its release
         val future = service.publishOwner(MutexOwner("c1", 0, 100, 200))
-        service.stop()
+        stopWhileDriving(service, executor)
         assertThat(service.status, equalTo(MutexRetrievalService.Status.INITIAL))
-
-        executor.runAll()
         future.join()
 
         assertThat(service.mutexState, equalTo(MutexState.NONE))
@@ -222,7 +223,7 @@ class AbstractMutexRetrievalServiceTest {
     }
 
     @Test
-    fun `stop release notification executing after stop must still be applied`() {
+    fun `release notification pending at stop is applied`() {
         val contender = FakeMutexContender("m", "c1")
         val executor = ManualExecutor()
         val service = FakeMutexContendService(contender, executor)
@@ -232,12 +233,9 @@ class AbstractMutexRetrievalServiceTest {
         acquisition.join()
         assertThat(service.hasOwner(), equalTo(true))
 
-        // the release notification is submitted while stopping and may execute once the
-        // service is fully stopped (INITIAL) — it must still be applied
+        // a release submitted just before stop() is still pending when stopping begins
         val future = service.publishOwner(MutexOwner.NONE)
-        service.stop()
-
-        executor.runAll()
+        stopWhileDriving(service, executor)
         future.join()
 
         assertThat(service.mutexState.after, equalTo(MutexOwner.NONE))
@@ -255,7 +253,7 @@ class AbstractMutexRetrievalServiceTest {
         acquisition.join()
 
         val release = service.publishOwner(MutexOwner.NONE)
-        service.stop()
+        stopWhileDriving(service, executor)
         service.start()
         executor.runAll()
         release.join()
@@ -293,7 +291,7 @@ class AbstractMutexRetrievalServiceTest {
         service.start()
 
         val stale = service.publishOwner(MutexOwner("c1", 0, Long.MAX_VALUE, Long.MAX_VALUE))
-        service.stop()
+        stopWhileDriving(service, executor)
         service.start()
 
         executor.runAll()
@@ -304,22 +302,126 @@ class AbstractMutexRetrievalServiceTest {
         service.stop()
     }
 
+    @Test
+    fun `stop releases the backend without waiting for a slow callback and returns after its release`() {
+        val callbackEntered = CountDownLatch(1)
+        val releaseCallback = CountDownLatch(1)
+        val contender = object : AbstractMutexContender("m", "c1") {
+            override fun onAcquired(mutexState: MutexState) {
+                callbackEntered.countDown()
+                releaseCallback.await()
+            }
+        }
+        val pool = Executors.newSingleThreadExecutor()
+        val service = FakeMutexContendService(contender, pool)
+        service.start()
+        service.publishOwner(MutexOwner("c1", 0, Long.MAX_VALUE, Long.MAX_VALUE))
+        callbackEntered.await(2, TimeUnit.SECONDS).assert().isTrue()
+
+        val stopper = thread { service.stop() }
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        while (!service.stopContendCalled && System.nanoTime() < deadline) {
+            Thread.onSpinWait()
+        }
+
+        // the backend lease is released while onAcquired is still blocked; stop() itself waits for onReleased
+        service.stopContendCalled.assert().isTrue()
+        stopper.isAlive.assert().isTrue()
+        releaseCallback.countDown()
+        stopper.join(2000)
+        stopper.isAlive.assert().isFalse()
+        service.status.assert().isEqualTo(MutexRetrievalService.Status.INITIAL)
+        pool.shutdown()
+    }
+
+    @Test
+    fun `start is not blocked by a slow callback`() {
+        val callbackEntered = CountDownLatch(1)
+        val releaseCallback = CountDownLatch(1)
+        val contender = object : AbstractMutexContender("m", "c1") {
+            override fun onReleased(mutexState: MutexState) {
+                callbackEntered.countDown()
+                releaseCallback.await()
+            }
+        }
+        val pool = Executors.newSingleThreadExecutor()
+        val service = FakeMutexContendService(contender, pool)
+        service.start()
+        service.publishOwner(MutexOwner("c1", 0, Long.MAX_VALUE, Long.MAX_VALUE)).join()
+        // a release notification whose callback blocks, while the service stays running
+        service.publishOwner(MutexOwner.NONE)
+        callbackEntered.await(2, TimeUnit.SECONDS).assert().isTrue()
+
+        val starter = thread { runCatching { service.start() } }
+        starter.join(2000)
+
+        // start() returned (with the expected state error) instead of waiting for the blocked callback
+        starter.isAlive.assert().isFalse()
+        releaseCallback.countDown()
+        service.stop()
+        pool.shutdown()
+    }
+
+    @Test
+    fun `stop called from a callback delivers its release inline`() {
+        val released = CountDownLatch(1)
+        lateinit var service: FakeMutexContendService
+        val contender = object : AbstractMutexContender("m", "c1") {
+            override fun onAcquired(mutexState: MutexState) {
+                service.stop()
+            }
+
+            override fun onReleased(mutexState: MutexState) {
+                released.countDown()
+            }
+        }
+        val pool = Executors.newSingleThreadExecutor()
+        service = FakeMutexContendService(contender, pool)
+        service.start()
+
+        service.publishOwner(MutexOwner("c1", 0, Long.MAX_VALUE, Long.MAX_VALUE))
+
+        released.await(2, TimeUnit.SECONDS).assert().isTrue()
+        service.status.assert().isEqualTo(MutexRetrievalService.Status.INITIAL)
+        pool.shutdown()
+    }
+
+    /**
+     * Runs stop() on another thread while this thread drives [executor]: stop() waits for the queued
+     * notifications, including its own release, to be dispatched.
+     */
+    private fun stopWhileDriving(service: FakeMutexContendService, executor: ManualExecutor) {
+        val stopper = thread { service.stop() }
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        // Drive only once stopping began, so pending notifications are dispatched while stopping.
+        while (service.status == MutexRetrievalService.Status.RUNNING && System.nanoTime() < deadline) {
+            Thread.onSpinWait()
+        }
+        while (stopper.isAlive && System.nanoTime() < deadline) {
+            executor.runAll()
+            stopper.join(5)
+        }
+        executor.runAll()
+        stopper.isAlive.assert().isFalse()
+    }
+
     private class ManualExecutor : Executor {
         private val tasks = ArrayDeque<Runnable>()
 
+        @Synchronized
         override fun execute(command: Runnable) {
             tasks.addLast(command)
         }
 
         fun runAll() {
-            while (tasks.isNotEmpty()) {
-                tasks.removeFirst().run()
+            while (true) {
+                (synchronized(this) { tasks.pollFirst() } ?: return).run()
             }
         }
 
         fun runAllInReverseOrder() {
-            while (tasks.isNotEmpty()) {
-                tasks.removeLast().run()
+            while (true) {
+                (synchronized(this) { tasks.pollLast() } ?: return).run()
             }
         }
     }

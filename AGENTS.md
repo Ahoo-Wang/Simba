@@ -69,8 +69,9 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
 ### Threading
 - Owner notifications run asynchronously on a sequential executor over `handleExecutor`
   (library default: `ForkJoinPool.commonPool()`; the starter injects the dedicated `simbaHandleExecutor` bean).
-  Callbacks are invoked while holding the internal notify lock:
-  `onAcquired` / `onReleased` must not block, and must not add locks that `start()` / `stop()` contend on.
+  The state lock is never held while callbacks run; `SequentialExecutor` keeps them ordered. `stop()` returns only
+  after its own `onReleased` ran (inline when called from a callback), so callers of `stop()` must not hold locks
+  that their callbacks take. Keep callbacks short.
 - `LeaseContendService` splits a trigger `ScheduledExecutorService` (never blocks) from an `ioExecutor` running
   `MutexLeaseStore` calls, with at most one call in flight per service and lifecycle. JDBC and Redis factories own
   shared executors from `ContendExecutors` (daemon, idle threads reclaimed) and shut them down on `close()`.

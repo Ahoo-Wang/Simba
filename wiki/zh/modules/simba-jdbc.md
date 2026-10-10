@@ -199,7 +199,7 @@ autonumber
         Repo-->>Service: MutexOwnerEntity
 
         Service->>Service: notifyOwner(mutexOwner)
-        Service->>Executor: runAsync(safeNotifyOwner)
+        Service->>Executor: runAsync(dispatch)
         Executor->>Contender: onAcquired(mutexState) or onReleased(mutexState)
 
         Service->>Service: contendPeriod.ensureNextDelay(mutexOwner)

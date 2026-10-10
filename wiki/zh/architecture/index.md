@@ -168,7 +168,7 @@ Simba 应用了多种经典设计模式，以保持抽象的整洁和后端实�
 
 ### 异步通知分发
 
-所有者通知始终通过 `CompletableFuture.runAsync(safeNotifyOwner, handleExecutor)` 异步分发（[第 71 行](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/AbstractMutexRetrievalService.kt#L71)）。这确保了缓慢的 `onAcquired()` / `onReleased()` 回调永远不会阻塞争用调度线程。JDBC 和 Redis 工厂默认的 `handleExecutor` 是 `ForkJoinPool.commonPool()`；Spring Boot starter 则传入专用的 `simbaHandleExecutor` bean。
+所有者通知始终在基于 `handleExecutor` 的顺序执行器上异步分发（[`AbstractMutexRetrievalService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/AbstractMutexRetrievalService.kt)），因此回调按提交顺序逐个执行，缓慢的 `onAcquired()` / `onReleased()` 永远不会阻塞争用调度线程。内部状态锁从不在回调执行期间持有：`start()` 和 `stop()` 中的后端释放都不会等待用户代码。`stop()` 只在它自己的 `onReleased` 执行完后返回；如果在回调内部调用，会直接内联发出该释放通知。JDBC 和 Redis 工厂默认的 `handleExecutor` 是 `ForkJoinPool.commonPool()`；Spring Boot starter 则传入专用的 `simbaHandleExecutor` bean。
 
 ## 核心概念
 
