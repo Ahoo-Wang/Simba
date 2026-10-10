@@ -29,6 +29,11 @@
       "matchFileNames": ["wiki/**"],
       "matchUpdateTypes": ["major"],
       "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Look up Maven artifacts in the public repositories the build resolves from; the publishing repositories (GitHub Packages, Linyi) need credentials Renovate does not have and only add 401s",
+      "matchDatasources": ["maven"],
+      "registryUrls": ["https://repo.maven.apache.org/maven2/", "https://plugins.gradle.org/m2/"]
     }
   ]
 }
