@@ -12,6 +12,7 @@
  */
 package me.ahoo.simba.locker
 
+import me.ahoo.simba.core.MutexOwner
 import java.time.Duration
 import java.util.concurrent.TimeoutException
 
@@ -35,4 +36,10 @@ interface Locker : AutoCloseable {
 
     @Throws(TimeoutException::class)
     fun acquire(timeout: Duration)
+
+    /**
+     * Fencing token of the held lock, [MutexOwner.NO_FENCING_TOKEN] when not held or unsupported by the backend.
+     */
+    val fencingToken: Long
+        get() = MutexOwner.NO_FENCING_TOKEN
 }

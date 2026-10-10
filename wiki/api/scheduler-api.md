@@ -46,6 +46,7 @@ abstract class AbstractScheduler(...) {
 | `start()` | Starts contention for the mutex and begins scheduling `work()` when leadership is acquired. |
 | `stop()` | Stops contention and cancels any scheduled work. |
 | `running` | `true` if the underlying contend service is active. |
+| `fencingToken` (protected) | Fencing token of the current leadership term for `work()` to pass to protected resources; `0` when not leader or unsupported. |
 
 ### Internal Design
 

@@ -57,6 +57,13 @@ abstract class AbstractScheduler(
     val running: Boolean
         get() = contendService.running
 
+    /**
+     * Fencing token of the current leadership term, for [work] to pass to protected resources.
+     * [me.ahoo.simba.core.MutexOwner.NO_FENCING_TOKEN] when not leader or unsupported by the backend.
+     */
+    protected val fencingToken: Long
+        get() = contendService.fencingToken
+
     inner class WorkContender(mutex: String) : AbstractMutexContender(mutex) {
         /**
          * Created lazily on first acquisition and shut down by [shutdown] on scheduler stop,

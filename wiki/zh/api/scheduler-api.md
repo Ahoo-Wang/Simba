@@ -46,6 +46,7 @@ abstract class AbstractScheduler(...) {
 | `start()` | 启动互斥竞争，并在获取领导权后开始调度 `work()`。 |
 | `stop()` | 停止竞争并取消所有已调度的工作。 |
 | `running` | 如果底层竞争服务处于活跃状态则为 `true`。 |
+| `fencingToken`（protected） | 当前领导任期的 fencing token，供 `work()` 传给受保护的资源；非领导者或不支持时为 `0`。 |
 
 ### 内部设计
 

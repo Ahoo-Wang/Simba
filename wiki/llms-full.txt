@@ -5871,6 +5871,7 @@ interface MutexContendService : MutexRetrievalService {
 | `contenderId` | `String` | Delegates to `contender.contenderId` |
 | `isOwner` | `Boolean` | `true` if `afterOwner.ownerId == contenderId` |
 | `isInTtl` | `Boolean` | `true` if the contender is the owner AND the lock has not expired its TTL |
+| `fencingToken` | `Long` | Fencing token of the current term while this contender owns the mutex, otherwise `0`. See [ADR 0002](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md). |
 
 ## MutexRetrievalServiceFactory
 
@@ -5983,6 +5984,7 @@ open class MutexOwner(
 | `acquiredAt` | `Long` | Timestamp (epoch millis) when the lock was acquired |
 | `ttlAt` | `Long` | Timestamp when the TTL expires. After this, the owner should renew or another contender may take over. |
 | `transitionAt` | `Long` | End of the transition/grace period. During this window the current owner can preferentially renew. |
+| `fencingToken` | `Long` | Strictly increasing per ownership term, stable within one. `NO_FENCING_TOKEN` (`0`) when the backend does not issue tokens (currently only Zookeeper does). |
 
 | Method | Return | Description |
 |---|---|---|
@@ -6174,6 +6176,7 @@ interface Locker : AutoCloseable {
 | `acquire()` | Blocks the calling thread until the lock is acquired. Calls `close()` when done. |
 | `acquire(timeout: Duration)` | Blocks the calling thread up to `timeout`. Throws `TimeoutException` if the lock is not acquired within the timeout. |
 | `close()` | Releases the lock and stops the contend service. Called automatically in try-with-resources / `use {}`. |
+| `fencingToken` | Fencing token of the held lock, `0` when not held or unsupported by the backend. Pass it to the protected resource. |
 
 ## SimbaLocker
 
@@ -6442,6 +6445,7 @@ abstract class AbstractScheduler(...) {
 | `start()` | Starts contention for the mutex and begins scheduling `work()` when leadership is acquired. |
 | `stop()` | Stops contention and cancels any scheduled work. |
 | `running` | `true` if the underlying contend service is active. |
+| `fencingToken` (protected) | Fencing token of the current leadership term for `work()` to pass to protected resources; `0` when not leader or unsupported. |
 
 ### Internal Design
 
@@ -7699,6 +7703,10 @@ override fun notLeader() {
 | `stopContend()` | Closes the latch with `CloseMode.NOTIFY_LEADER`, which triggers leadership transfer to the next participant. |
 | `isLeader()` | Called by Curator when this participant wins leadership. Notifies the service with a new `MutexOwner`. |
 | `notLeader()` | Called by Curator when this participant loses leadership. Notifies with `MutexOwner.NONE`. |
+
+### Fencing Token
+
+`isLeader()` sets `MutexOwner.fencingToken` to the **czxid** of the latch node that won leadership. ZooKeeper transaction ids grow monotonically across the ensemble, and every later leader's node is created after the previous leader's, so the token increases strictly per term. The node's sequence number is not used: `LeaderLatch` creates `/simba/{mutex}` as a container node that ZooKeeper deletes once empty, which restarts the sequence. If the czxid cannot be read, the token is `0`, which protected resources reject.
 
 ### CloseMode.NOTIFY_LEADER
 

@@ -115,6 +115,9 @@ class SimbaLocker(
         }
     }
 
+    override val fencingToken: Long
+        get() = contendService.fencingToken
+
     override fun onAcquired(mutexState: MutexState) {
         super.onAcquired(mutexState)
         LockSupport.unpark(OWNER[this])

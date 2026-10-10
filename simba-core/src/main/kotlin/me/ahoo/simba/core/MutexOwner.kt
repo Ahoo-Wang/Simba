@@ -20,7 +20,7 @@ import com.google.errorprone.annotations.Immutable
  * @author ahoo wang
  */
 @Immutable
-open class MutexOwner(
+open class MutexOwner @JvmOverloads constructor(
     /**
      * 持有者Id.
      */
@@ -40,7 +40,12 @@ open class MutexOwner(
      * 2. 用于缓冲领导者任务执行时间
      * [java.util.concurrent.TimeUnit.MILLISECONDS]
      */
-    val transitionAt: Long = Long.MAX_VALUE
+    val transitionAt: Long = Long.MAX_VALUE,
+    /**
+     * Fencing token of this ownership term: strictly increasing across terms of the mutex and stable within one.
+     * [NO_FENCING_TOKEN] when the backend does not issue tokens. See ADR 0002.
+     */
+    val fencingToken: Long = NO_FENCING_TOKEN
 ) {
 
     fun isOwner(contenderId: String): Boolean {
@@ -80,6 +85,7 @@ open class MutexOwner(
 
     companion object {
         const val NONE_OWNER_ID = ""
+        const val NO_FENCING_TOKEN = 0L
 
         @JvmField
         val NONE = MutexOwner(NONE_OWNER_ID, 0, 0, 0)

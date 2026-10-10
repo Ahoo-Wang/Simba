@@ -122,6 +122,10 @@ override fun notLeader() {
 | `isLeader()` | 当此参与者赢得领导权时由 Curator 调用。使用新的 `MutexOwner` 通知服务。 |
 | `notLeader()` | 当此参与者失去领导权时由 Curator 调用。使用 `MutexOwner.NONE` 通知。 |
 
+### Fencing Token
+
+`isLeader()` 将 `MutexOwner.fencingToken` 设为赢得领导权的 latch 节点的 **czxid**。ZooKeeper 事务 id 在整个集群内单调递增，后一任领导者的节点总是在前一任之后创建，因此 token 按任期严格递增。不使用节点序号：`LeaderLatch` 把 `/simba/{mutex}` 创建为容器节点，ZooKeeper 会在其为空时删除它，序号随之从头开始。如果无法读取 czxid，token 为 `0`，受保护的资源会拒绝它。
+
 ### CloseMode.NOTIFY_LEADER
 
 当 latch 使用 `NOTIFY_LEADER` 关闭时，Curator 触发下一个参与者的 `isLeader()` 回调，实现无缝的领导权移交，无需轮询延迟。

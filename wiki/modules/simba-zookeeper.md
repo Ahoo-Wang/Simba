@@ -122,6 +122,10 @@ override fun notLeader() {
 | `isLeader()` | Called by Curator when this participant wins leadership. Notifies the service with a new `MutexOwner`. |
 | `notLeader()` | Called by Curator when this participant loses leadership. Notifies with `MutexOwner.NONE`. |
 
+### Fencing Token
+
+`isLeader()` sets `MutexOwner.fencingToken` to the **czxid** of the latch node that won leadership. ZooKeeper transaction ids grow monotonically across the ensemble, and every later leader's node is created after the previous leader's, so the token increases strictly per term. The node's sequence number is not used: `LeaderLatch` creates `/simba/{mutex}` as a container node that ZooKeeper deletes once empty, which restarts the sequence. If the czxid cannot be read, the token is `0`, which protected resources reject.
+
 ### CloseMode.NOTIFY_LEADER
 
 When the latch closes with `NOTIFY_LEADER`, Curator triggers the next participant's `isLeader()` callback, enabling seamless leadership handoff without polling delay.

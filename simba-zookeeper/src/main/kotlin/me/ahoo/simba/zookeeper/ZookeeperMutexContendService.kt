@@ -12,6 +12,7 @@
  */
 package me.ahoo.simba.zookeeper
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.core.AbstractMutexContendService
 import me.ahoo.simba.core.MutexContender
 import me.ahoo.simba.core.MutexOwner
@@ -40,10 +41,13 @@ class ZookeeperMutexContendService(
     override fun startContend() {
         val latch = LeaderLatch(curatorFramework, mutexPath, contenderId)
         latch.addListener(this)
+        // Assigned before start(): isLeader() may fire during start() and reads the latch for the fencing token.
+        leaderLatch = latch
         try {
             latch.start()
         } catch (error: Throwable) {
             // A latch that failed to start must not keep its listener or a half-created node.
+            leaderLatch = null
             try {
                 latch.close(CloseMode.SILENT)
             } catch (cleanupError: Throwable) {
@@ -51,7 +55,6 @@ class ZookeeperMutexContendService(
             }
             throw error
         }
-        leaderLatch = latch
     }
 
     override fun stopContend() {
@@ -68,7 +71,24 @@ class ZookeeperMutexContendService(
              */
             return
         }
-        notifyOwner(MutexOwner(contenderId))
+        notifyOwner(MutexOwner(contenderId, fencingToken = leadershipFencingToken()))
+    }
+
+    /**
+     * The czxid of the latch node that won leadership. ZooKeeper transaction ids grow monotonically across the
+     * whole ensemble, and every later leader's node was created after the previous leader's, so the czxid
+     * increases strictly per term. The node's sequence number would not: LeaderLatch creates its parent as a
+     * container node, which ZooKeeper deletes once empty, restarting the sequence.
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private fun leadershipFencingToken(): Long {
+        val path = leaderLatch?.lastPathIsLeader ?: return MutexOwner.NO_FENCING_TOKEN
+        return try {
+            curatorFramework.checkExists().forPath(path)?.czxid ?: MutexOwner.NO_FENCING_TOKEN
+        } catch (error: Exception) {
+            log.warn(error) { "leadershipFencingToken - mutex:[$mutex] contenderId:[$contenderId] - unavailable." }
+            MutexOwner.NO_FENCING_TOKEN
+        }
     }
 
     override fun notLeader() {
@@ -76,6 +96,7 @@ class ZookeeperMutexContendService(
     }
 
     companion object {
+        private val log = KotlinLogging.logger {}
         const val RESOURCE_PREFIX = "/simba/"
     }
 }
