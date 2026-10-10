@@ -67,8 +67,9 @@ class FakeMutexContendService(
     contender: MutexContender,
     handleExecutor: Executor = SameThreadExecutor,
     var throwOnStartContend: Throwable? = null,
-    var throwOnStopContend: Throwable? = null
-) : AbstractMutexContendService(contender, handleExecutor) {
+    var throwOnStopContend: Throwable? = null,
+    observer: ContendObserver = ContendObserver.NOOP
+) : AbstractMutexContendService(contender, handleExecutor, observer) {
     var startContendCalled = false
         private set
     var stopContendCalled = false
@@ -98,3 +99,31 @@ class FakeMutexContendService(
  * factory cannot work because its service's contender would be fixed before the locker exists.
  * See SimbaLockerTest.ControllableFactory and AbstractSchedulerTest.CapturingFactory.
  */
+
+/**
+ * [ContendObserver] recording events as strings, e.g. `contend:m:acquire:OWNER`, `acquired:m`, `work:m:SUCCESS`.
+ */
+class RecordingObserver(private val failing: Boolean = false) : ContendObserver {
+    val events: java.util.concurrent.BlockingQueue<String> = java.util.concurrent.LinkedBlockingQueue()
+
+    private fun record(event: String) {
+        events.add(event)
+        check(!failing) { "observer failure" }
+    }
+
+    override fun onContend(mutex: String, renew: Boolean, durationNanos: Long, outcome: ContendOutcome) {
+        check(durationNanos >= 0)
+        record("contend:$mutex:${if (renew) "renew" else "acquire"}:$outcome")
+    }
+
+    override fun onAcquired(mutex: String) = record("acquired:$mutex")
+
+    override fun onReleased(mutex: String) = record("released:$mutex")
+
+    override fun onLeaseExpired(mutex: String) = record("expired:$mutex")
+
+    override fun onWork(mutex: String, durationNanos: Long, outcome: WorkOutcome) {
+        check(durationNanos >= 0)
+        record("work:$mutex:$outcome")
+    }
+}

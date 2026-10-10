@@ -38,6 +38,53 @@ class LeaseContendServiceTest {
     private val service = TestLeaseContendService(contender, store, config, scheduler, io)
 
     @Test
+    fun `observer receives contention, ownership and lease expiry events`() {
+        val observer = RecordingObserver()
+        val observed = TestLeaseContendService(contender, store, config, scheduler, io, observer = observer)
+        observed.start()
+        scheduler.runNext()
+        io.runNext()
+        scheduler.runNext()
+        io.runNext()
+        store.failNext = IllegalStateException("backend unavailable")
+        scheduler.runNext()
+        io.runNext()
+        scheduler.watchdogs.last().run()
+        store.otherOwner = "c2"
+        scheduler.runNext()
+        io.runNext()
+
+        observer.events.toList().assert().containsExactly(
+            "contend:m:acquire:OWNER",
+            "acquired:m",
+            "contend:m:renew:OWNER",
+            "contend:m:renew:FAILED",
+            "expired:m",
+            "released:m",
+            "contend:m:acquire:OTHER"
+        )
+    }
+
+    @Test
+    fun `a failing observer does not affect contention`() {
+        val observed = TestLeaseContendService(
+            contender,
+            store,
+            config,
+            scheduler,
+            io,
+            observer = RecordingObserver(failing = true)
+        )
+        observed.start()
+        scheduler.runNext()
+        io.runNext()
+
+        observed.isOwner.assert().isTrue()
+        contender.acquired.size.assert().isEqualTo(1)
+        scheduler.pending.size.assert().isEqualTo(1)
+    }
+
+    @Test
     fun `acquires and schedules renewal at ttl`() {
         service.start()
         scheduler.runNext()
@@ -388,8 +435,9 @@ class LeaseContendServiceTest {
         config: LeaseConfig,
         scheduler: ManualScheduler,
         io: Executor,
-        handleExecutor: Executor = Executor { it.run() }
-    ) : LeaseContendService(contender, handleExecutor, store, config, scheduler, io) {
+        handleExecutor: Executor = Executor { it.run() },
+        observer: ContendObserver = ContendObserver.NOOP
+    ) : LeaseContendService(contender, handleExecutor, store, config, scheduler, io, observer) {
         var stopCalls = 0
         var failOnStop = false
 

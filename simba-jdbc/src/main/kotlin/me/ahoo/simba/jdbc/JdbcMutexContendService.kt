@@ -13,6 +13,7 @@
 package me.ahoo.simba.jdbc
 
 import me.ahoo.simba.core.ContendExecutors
+import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.LeaseConfig
 import me.ahoo.simba.core.LeaseContendService
 import me.ahoo.simba.core.MutexContender
@@ -36,12 +37,14 @@ class JdbcMutexContendService @JvmOverloads constructor(
     transition: Duration,
     scheduler: ScheduledExecutorService =
         ContendExecutors.newScheduler("JdbcSimba_${mutexContender.mutex}_${mutexContender.contenderId}"),
-    ioExecutor: Executor = Executor { it.run() }
+    ioExecutor: Executor = Executor { it.run() },
+    observer: ContendObserver = ContendObserver.NOOP
 ) : LeaseContendService(
     contender = mutexContender,
     handleExecutor = handleExecutor,
     leaseStore = JdbcMutexLeaseStore(mutexOwnerRepository),
     leaseConfig = LeaseConfig(ttl, transition, initialDelay),
     scheduler = scheduler,
-    ioExecutor = ioExecutor
+    ioExecutor = ioExecutor,
+    observer = observer
 )

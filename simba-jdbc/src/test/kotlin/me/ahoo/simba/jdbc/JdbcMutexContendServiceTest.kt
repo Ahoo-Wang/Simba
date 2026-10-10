@@ -13,6 +13,7 @@
 package me.ahoo.simba.jdbc
 
 import me.ahoo.simba.core.AbstractMutexContender
+import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexOwner
 import me.ahoo.simba.core.MutexState
@@ -53,6 +54,17 @@ internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
         jdbcMutexOwnerRepository.tryInitMutex(MULTI_CONTEND_MUTEX)
         jdbcMutexOwnerRepository.tryInitMutex(SCHEDULE_MUTEX)
         jdbcMutexOwnerRepository.tryInitMutex(SIMBA_SCHEDULER_MUTEX)
+        jdbcMutexOwnerRepository.tryInitMutex(OBSERVER_MUTEX)
+    }
+
+    override fun createObservedFactory(observer: ContendObserver): MutexContendServiceFactory {
+        return JdbcMutexContendServiceFactory(
+            mutexOwnerRepository = jdbcMutexOwnerRepository,
+            initialDelay = Duration.ZERO,
+            ttl = Duration.ofSeconds(2),
+            transition = Duration.ofSeconds(5),
+            observer = observer
+        )
     }
 
     @Test

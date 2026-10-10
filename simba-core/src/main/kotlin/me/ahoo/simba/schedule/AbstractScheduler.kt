@@ -57,7 +57,12 @@ abstract class AbstractScheduler(
         get() = contendService.fencingToken
 
     inner class WorkContender(mutex: String) : AbstractMutexContender(mutex) {
-        private val runner = ScheduledWorkRunner(mutex, { config }, { worker }) { work() }
+        private val runner = ScheduledWorkRunner(
+            mutex,
+            { config },
+            { worker },
+            { ScheduledWorkRunner.observerOf(contendService) }
+        ) { work() }
 
         override fun onAcquired(mutexState: MutexState) {
             super.onAcquired(mutexState)

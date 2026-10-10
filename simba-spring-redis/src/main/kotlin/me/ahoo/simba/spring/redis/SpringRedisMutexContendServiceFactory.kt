@@ -13,6 +13,7 @@
 package me.ahoo.simba.spring.redis
 
 import me.ahoo.simba.core.ContendExecutors
+import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.LeaseConfig
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
@@ -41,7 +42,8 @@ class SpringRedisMutexContendServiceFactory @JvmOverloads constructor(
     private val listenerContainer: RedisMessageListenerContainer,
     private val handleExecutor: Executor = ForkJoinPool.commonPool(),
     private val scheduledExecutorService: ScheduledExecutorService = ContendExecutors.newScheduler("simba-redis"),
-    private val ioExecutor: ExecutorService = ContendExecutors.newIoExecutor("simba-redis-io")
+    private val ioExecutor: ExecutorService = ContendExecutors.newIoExecutor("simba-redis-io"),
+    private val observer: ContendObserver = ContendObserver.NOOP
 ) : MutexContendServiceFactory, AutoCloseable {
     private val leaseConfig = LeaseConfig(ttl, transition)
 
@@ -54,7 +56,8 @@ class SpringRedisMutexContendServiceFactory @JvmOverloads constructor(
             redisTemplate = redisTemplate,
             listenerContainer = listenerContainer,
             scheduledExecutorService = scheduledExecutorService,
-            ioExecutor = ioExecutor
+            ioExecutor = ioExecutor,
+            observer = observer
         )
     }
 

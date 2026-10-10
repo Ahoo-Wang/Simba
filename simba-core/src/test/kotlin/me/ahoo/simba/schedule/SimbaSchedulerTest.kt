@@ -12,11 +12,13 @@
  */
 package me.ahoo.simba.schedule
 
+import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.FakeMutexContendService
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexContender
 import me.ahoo.simba.core.MutexOwner
+import me.ahoo.simba.core.RecordingObserver
 import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.Test
 import java.time.Duration
@@ -86,6 +88,39 @@ class SimbaSchedulerTest {
     }
 
     @Test
+    fun `work outcomes reach the contend service observer`() {
+        val observer = RecordingObserver()
+        val observedFactory = CapturingFactory(observer)
+        val runs = AtomicInteger()
+        val sleeping = CountDownLatch(1)
+        val scheduler = SimbaScheduler(
+            "observed",
+            observedFactory,
+            ScheduleConfig.rate(Duration.ZERO, Duration.ofMillis(20))
+        ) {
+            when (runs.incrementAndGet()) {
+                1 -> Unit
+                2 -> error("second run fails")
+                else -> {
+                    sleeping.countDown()
+                    Thread.sleep(TimeUnit.MINUTES.toMillis(1))
+                }
+            }
+        }
+        scheduler.start()
+        observedFactory.lead(scheduler)
+        val events = generateSequence { observer.events.poll(2, TimeUnit.SECONDS) }.take(3).toList()
+        sleeping.await(2, TimeUnit.SECONDS).assert().isTrue()
+
+        observedFactory.service!!.publishOwner(MutexOwner("other")).join()
+
+        events.assert().containsExactly("acquired:observed", "work:observed:SUCCESS", "work:observed:FAILED")
+        observer.events.poll(2, TimeUnit.SECONDS).assert().isEqualTo("released:observed")
+        observer.events.poll(2, TimeUnit.SECONDS).assert().isEqualTo("work:observed:INTERRUPTED")
+        scheduler.stop()
+    }
+
+    @Test
     fun `a failing run does not stop later runs`() {
         val runs = AtomicInteger()
         val secondRun = CountDownLatch(1)
@@ -142,11 +177,12 @@ class SimbaSchedulerTest {
         scheduler.running.assert().isFalse()
     }
 
-    private class CapturingFactory : MutexContendServiceFactory {
+    private class CapturingFactory(private val observer: ContendObserver = ContendObserver.NOOP) :
+        MutexContendServiceFactory {
         var service: FakeMutexContendService? = null
 
         override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
-            return FakeMutexContendService(mutexContender).also { service = it }
+            return FakeMutexContendService(mutexContender, observer = observer).also { service = it }
         }
 
         fun lead(scheduler: SimbaScheduler, fencingToken: Long = MutexOwner.NO_FENCING_TOKEN) {

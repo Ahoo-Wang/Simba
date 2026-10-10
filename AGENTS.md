@@ -79,6 +79,8 @@ publication metadata.
   shared executors from `ContendExecutors` (daemon, idle threads reclaimed) and shut them down on `close()`.
   A directly constructed service defaults to its own idle-reclaimed scheduler and runs I/O on the trigger thread.
 - `SimbaLocker` is owned by one thread at a time; interruption does not cancel `acquire()` (the flag is restored).
+- `ContendObserver` (ADR 0005) receives contention, ownership, watchdog and work events; observer failures are
+  logged and ignored. New backend factories/services take it as a trailing optional parameter.
 - `SimbaScheduler` and `AbstractScheduler` share `ScheduledWorkRunner`: the worker executor is created on acquire,
   work is cancelled with interrupt on release, and the executor is shut down on `stop()`.
 

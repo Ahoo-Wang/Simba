@@ -12,6 +12,7 @@
  */
 package me.ahoo.simba.zookeeper
 
+import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexContender
 import me.ahoo.simba.core.MutexOwner
@@ -66,6 +67,12 @@ internal class ZookeeperMutexContendServiceTest : MutexContendServiceSpec() {
         curatorFramework = CuratorFrameworkFactory.newClient(testingServer.connectString, RetryNTimes(1, 10))
         curatorFramework.start()
         mutexContendServiceFactory = ZookeeperMutexContendServiceFactory(ForkJoinPool.commonPool(), curatorFramework)
+    }
+
+    override val reportsContention: Boolean = false
+
+    override fun createObservedFactory(observer: ContendObserver): MutexContendServiceFactory {
+        return ZookeeperMutexContendServiceFactory(ForkJoinPool.commonPool(), curatorFramework, observer)
     }
 
     @AfterAll

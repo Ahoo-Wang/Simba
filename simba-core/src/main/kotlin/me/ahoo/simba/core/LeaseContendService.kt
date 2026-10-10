@@ -35,14 +35,15 @@ import java.util.concurrent.TimeUnit
  *
  * @author ahoo wang
  */
-open class LeaseContendService(
+open class LeaseContendService @JvmOverloads constructor(
     contender: MutexContender,
     handleExecutor: Executor,
     private val leaseStore: MutexLeaseStore,
     val leaseConfig: LeaseConfig,
     private val scheduler: ScheduledExecutorService,
-    private val ioExecutor: Executor = DIRECT_EXECUTOR
-) : AbstractMutexContendService(contender, handleExecutor) {
+    private val ioExecutor: Executor = DIRECT_EXECUTOR,
+    observer: ContendObserver = ContendObserver.NOOP
+) : AbstractMutexContendService(contender, handleExecutor, observer) {
     companion object {
         private val log = KotlinLogging.logger {}
         private val DIRECT_EXECUTOR = Executor { it.run() }
@@ -207,10 +208,12 @@ open class LeaseContendService(
     @Suppress("TooGenericExceptionCaught")
     private fun contend(generation: Long) {
         var nextDelay = leaseConfig.ttlMillis
+        val renew = synchronized(lock) { holdsLease }
+        val sentAtNanos = System.nanoTime()
         try {
-            val renew = synchronized(lock) { holdsLease }
-            val sentAtNanos = System.nanoTime()
             val mutexOwner = leaseStore.contend(mutex, contenderId, renew, leaseConfig)
+            val outcome = if (mutexOwner.isOwner(contenderId)) ContendOutcome.OWNER else ContendOutcome.OTHER
+            observe { onContend(mutex, renew, System.nanoTime() - sentAtNanos, outcome) }
             log.debug {
                 "contend - mutex:[$mutex] contenderId:[$contenderId] - owner:[${mutexOwner.ownerId}]."
             }
@@ -218,6 +221,7 @@ open class LeaseContendService(
                 nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
             }
         } catch (throwable: Throwable) {
+            observe { onContend(mutex, renew, System.nanoTime() - sentAtNanos, ContendOutcome.FAILED) }
             log.error(throwable) {
                 "contend - mutex:[$mutex] contenderId:[$contenderId] - failed:[${throwable.message}]."
             }
@@ -334,6 +338,7 @@ open class LeaseContendService(
             log.warn {
                 "onLeaseExpired - mutex:[$mutex] contenderId:[$contenderId] - lease ended without renewal, revoking."
             }
+            observe { onLeaseExpired(mutex) }
             /*
              * Not gated on isOwner: the acquisition notification may still be queued, and the sequential
              * notifier applies this release after it; a release while not owner is a no-op.

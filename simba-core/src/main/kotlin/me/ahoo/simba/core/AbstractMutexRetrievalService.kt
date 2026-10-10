@@ -92,6 +92,11 @@ abstract class AbstractMutexRetrievalService protected constructor(
         }
     }
 
+    /**
+     * Called in notification order after [mutexState] changed and before the retriever is notified.
+     */
+    protected open fun onStateApplied(mutexState: MutexState) = Unit
+
     protected abstract fun startRetrieval()
     protected abstract fun stopRetrieval()
 
@@ -135,6 +140,7 @@ abstract class AbstractMutexRetrievalService protected constructor(
             }
             MutexState(afterOwner, newOwner).also { mutexState = it }
         }
+        onStateApplied(newState)
         try {
             retriever.notifyOwner(newState)
         } catch (throwable: Throwable) {
