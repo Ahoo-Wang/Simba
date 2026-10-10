@@ -55,13 +55,13 @@ erDiagram
 | `transition_at` | `BIGINT UNSIGNED` | Epoch millis when the grace period ends. Equals `acquired_at + ttl + transition`. |
 | `owner_id` | `VARCHAR(128)` | The `contenderId` of the current owner. Empty string when no owner. |
 | `version` | `INT UNSIGNED` | Incremented on every acquire/release as a state-change counter. Not compared in `WHERE` — concurrency is guarded by the owner/transition predicates. |
-| `fencing_token` | `BIGINT UNSIGNED` | Fencing token, incremented once per ownership term when `simba.jdbc.fencing` is enabled. |
+| `fencing_token` | `BIGINT UNSIGNED` | Fencing token, incremented once per ownership term (`simba.jdbc.fencing`, on by default). |
 
 ### Fencing Tokens
 
-With `simba.jdbc.fencing=true` (or `JdbcMutexOwnerRepository(dataSource, fencing = true)`), the acquire `UPDATE` advances `fencing_token` only when a new ownership term starts: a takeover, or a re-acquire after the owner's own lease ended. Renewals keep it. The assignment is the first in the `SET` list, because MySQL evaluates assignments left to right with already-updated values and the condition must read the previous owner. See [ADR 0002](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md).
+With fencing on (the default; `simba.jdbc.fencing` / `JdbcMutexOwnerRepository(fencing = ...)`), the acquire `UPDATE` advances `fencing_token` only when a new ownership term starts: a takeover, or a re-acquire after the owner's own lease ended. Renewals keep it. The assignment is the first in the `SET` list, because MySQL evaluates assignments left to right with already-updated values and the condition must read the previous owner. See [ADR 0002](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md).
 
-Fencing is opt-in because it needs the `fencing_token` column: new installs get it from `init-simba-mysql.sql`, and existing tables need [`upgrade-simba-mysql-fencing-token.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/upgrade-simba-mysql-fencing-token.sql) before enabling it.
+Fencing needs the `fencing_token` column: new installs get it from `init-simba-mysql.sql`; existing tables need [`upgrade-simba-mysql-fencing-token.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/upgrade-simba-mysql-fencing-token.sql) before upgrading to 4.0, or set `simba.jdbc.fencing=false`.
 
 ## Key Classes
 
@@ -205,7 +205,7 @@ simba:
     initial-delay: 0s    # Delay before first contention
     ttl: 10s             # Lock TTL
     transition: 6s       # Grace period after TTL
-    fencing: false       # Issue fencing tokens (needs the fencing_token column)
+    fencing: true        # Issue fencing tokens (needs the fencing_token column)
 ```
 
 **Source:** [simba-spring-boot-starter/.../JdbcProperties.kt:25](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/jdbc/JdbcProperties.kt#L25)
@@ -217,7 +217,7 @@ simba:
 | `simba.jdbc.initial-delay` | `0s` | Delay before first contention attempt |
 | `simba.jdbc.ttl` | `10s` | Lock TTL -- how long the lock is held before requiring renewal |
 | `simba.jdbc.transition` | `6s` | Grace period after TTL for preferential owner renewal |
-| `simba.jdbc.fencing` | `false` | Issue fencing tokens from the `fencing_token` column |
+| `simba.jdbc.fencing` | `true` | Issue fencing tokens from the `fencing_token` column |
 
 ## Error Handling
 

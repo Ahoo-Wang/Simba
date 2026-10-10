@@ -311,7 +311,7 @@ class MutexOwner(
 | `ttlAt` | `Long` | TTL 到期的时间戳。此后所有者应续期，或其他竞争者可能接管。 |
 | `transitionAt` | `Long` | 转换/宽限期结束时间。在此窗口期间，当前所有者可以优先续期。 |
 | `observedAt` | `Long` | 观测到该持有者时的后端时间（JDBC 为数据库时间）。 |
-| `fencingToken` | `Long` | 按持有任期严格递增，任期内保持不变。后端不签发 token 时为 `NO_FENCING_TOKEN`（`0`），Zookeeper 和 Redis 始终签发，JDBC 需开启 `simba.jdbc.fencing`。 |
+| `fencingToken` | `Long` | 按持有任期严格递增，任期内保持不变。后端不签发 token 时为 `NO_FENCING_TOKEN`（`0`），所有后端都会签发；JDBC 设置 `simba.jdbc.fencing=false` 时除外。 |
 
 | 方法 | 返回值 | 描述 |
 |---|---|---|
