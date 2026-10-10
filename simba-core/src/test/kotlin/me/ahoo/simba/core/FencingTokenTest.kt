@@ -12,8 +12,13 @@
  */
 package me.ahoo.simba.core
 
+import me.ahoo.simba.locker.Locker
+import me.ahoo.simba.locker.SimbaLocker
+import me.ahoo.simba.schedule.AbstractScheduler
+import me.ahoo.simba.schedule.ScheduleConfig
 import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.Test
+import java.time.Duration
 
 class FencingTokenTest {
     @Test
@@ -34,5 +39,55 @@ class FencingTokenTest {
         service.publishOwner(MutexOwner("c2", fencingToken = 43)).join()
         service.fencingToken.assert().isEqualTo(MutexOwner.NO_FENCING_TOKEN)
         service.stop()
+    }
+
+    @Test
+    fun `locker exposes the token of its contend service`() {
+        val factory = CapturingFactory()
+        val locker = SimbaLocker("m", factory)
+        val service = factory.service!!
+        service.start()
+
+        service.publishOwner(MutexOwner(locker.contenderId, fencingToken = 7)).join()
+
+        locker.fencingToken.assert().isEqualTo(7)
+        locker.close()
+    }
+
+    @Test
+    fun `locker implementations default to no fencing token`() {
+        val locker = object : Locker {
+            override fun acquire() = Unit
+            override fun acquire(timeout: Duration) = Unit
+            override fun close() = Unit
+        }
+
+        locker.fencingToken.assert().isEqualTo(MutexOwner.NO_FENCING_TOKEN)
+    }
+
+    @Test
+    fun `scheduler work sees the token of its leadership term`() {
+        val factory = CapturingFactory()
+        val scheduler = object : AbstractScheduler("m", factory) {
+            override val config: ScheduleConfig = ScheduleConfig.delay(Duration.ofHours(1), Duration.ofHours(1))
+            override val worker: String = "fencing-worker"
+            override fun work() = Unit
+            fun token() = fencingToken
+        }
+        val service = factory.service!!
+        scheduler.start()
+
+        service.publishOwner(MutexOwner(service.contenderId, fencingToken = 9)).join()
+
+        scheduler.token().assert().isEqualTo(9)
+        scheduler.stop()
+    }
+
+    private class CapturingFactory : MutexContendServiceFactory {
+        var service: FakeMutexContendService? = null
+
+        override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
+            return FakeMutexContendService(mutexContender).also { service = it }
+        }
     }
 }
