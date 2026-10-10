@@ -284,6 +284,8 @@ simba:
 | `simba.scheduling.enabled` | `SimbaSchedulingAutoConfiguration` | `true` |
 | `simba.metrics.enabled` | `SimbaMetricsAutoConfiguration` | `true` |
 
+classpath 上有 Actuator 且端点已暴露时，会注册 `simba` Actuator 端点（`SimbaEndpointAutoConfiguration`），参见 [可观测性](/zh/guide/observability#actuator-端点)。
+
 ## Gradle 功能变体
 
 该 starter 使用 Gradle 的 `registerFeature` 创建可选的功能变体。这确保消费者只引入所需的后端依赖。

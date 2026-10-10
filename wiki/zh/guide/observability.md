@@ -1,11 +1,11 @@
 ---
 title: 可观测性
-description: 用 Micrometer 指标观察 leader 身份、后端竞争、租约看门狗撤销和只在 leader 上执行的任务，以及自定义 ContendObserver 和告警规则。
+description: Micrometer 指标、只读的 simba Actuator 端点、告警规则以及自定义 ContendObserver。
 ---
 
 # 可观测性
 
-Simba 通过 `ContendObserver` 报告每个 mutex 上发生的事件。使用 Spring Boot 且 classpath 上有 Micrometer 时，starter 会自动把这些事件记录为指标。
+Simba 通过 `ContendObserver` 报告每个 mutex 上发生的事件。使用 Spring Boot 时，starter 会把这些事件记录为 Micrometer 指标，并通过 Actuator 端点提供当前状态。
 
 ## Micrometer 指标
 
@@ -53,6 +53,42 @@ groups:
 
 各节点被抓取的时刻不同，交接时可能短暂显示为 0 个或 2 个 owner，`for: 1m` 用来过滤这种情况。租约本身不会重叠：租约到期时节点会在本地撤销身份；可能比租约活得更久的写入应携带 [fencing token](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md)。
 
+## Actuator 端点
+
+引入 Spring Boot Actuator 后，只读的 `simba` 端点会展示本节点正在竞争的 mutex。和所有 Actuator 端点一样，它默认不通过 HTTP 暴露：
+
+```yaml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,simba
+```
+
+`GET /actuator/simba` 列出正在运行的竞争服务；`GET /actuator/simba/{mutex}` 只返回一个 mutex（本节点没有竞争它时返回 404）：
+
+```json
+{
+  "mutexes": [
+    {
+      "mutex": "report",
+      "contenderId": "0:4242@host-a",
+      "status": "RUNNING",
+      "owner": true,
+      "currentOwner": {
+        "ownerId": "0:4242@host-a",
+        "fencingToken": 7,
+        "acquiredAt": "2026-10-10T08:00:00Z",
+        "ttlAt": "2026-10-10T08:00:10Z",
+        "transitionAt": "2026-10-10T08:00:16Z"
+      }
+    }
+  ]
+}
+```
+
+`currentOwner` 是本节点最后观察到的 owner，所以 JDBC 和 Redis 的非 leader 节点也能看到谁是 leader；Zookeeper 节点只知道自己的情况。租约不限期时 `ttlAt` 和 `transitionAt` 为 `null`。端点没有写操作。不通过 starter 创建的工厂，需要传入 `SimbaServiceTracker` 观察者才会出现在端点里。
+
 ## 自定义观察者
 
 实现 `ContendObserver` 即可把事件转发到其他地方。所有方法默认什么都不做；实现必须快速且线程安全，抛出的异常会被记录并忽略。
@@ -83,6 +119,7 @@ val factory = SpringRedisMutexContendServiceFactory(
 | `onAcquired(mutex)` / `onReleased(mutex)` | 本竞争者获得或失去身份（所有后端）。 |
 | `onLeaseExpired(mutex)` | 租约看门狗撤销了身份（JDBC、Redis），随后触发 `onReleased`。 |
 | `onWork(mutex, durationNanos, outcome)` | 一次只在 leader 上执行的任务结束。 |
+| `onStarted(service)` / `onStopped(service)` | 竞争服务已启动，或已停止并送达释放通知。 |
 
 ## 相关页面
 

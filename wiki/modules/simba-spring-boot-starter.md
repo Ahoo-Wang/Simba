@@ -286,6 +286,8 @@ simba:
 | `simba.scheduling.enabled` | `SimbaSchedulingAutoConfiguration` | `true` |
 | `simba.metrics.enabled` | `SimbaMetricsAutoConfiguration` | `true` |
 
+The `simba` Actuator endpoint (`SimbaEndpointAutoConfiguration`) is registered when Actuator is on the classpath and the endpoint is exposed; see [Observability](/guide/observability#actuator-endpoint).
+
 ## Gradle Feature Variants
 
 The starter uses Gradle's `registerFeature` to create optional capability variants. This ensures consumers only pull backend dependencies they need.

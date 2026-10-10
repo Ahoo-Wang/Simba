@@ -238,7 +238,8 @@ repository.save(order, fencingToken = locker.fencingToken)
 
 引入 Micrometer（例如 `spring-boot-starter-actuator`）后，starter 会记录 `simba.mutex.owner`、
 `simba.mutex.ownership.changes`、`simba.mutex.contend`、`simba.mutex.lease.expired` 和 `simba.scheduler.work`，
-按 mutex 打标签。告警规则和自定义 `ContendObserver` 参见 [可观测性](https://simba.ahoo.me/zh/guide/observability)。
+按 mutex 打标签。引入 Actuator 并暴露后，只读的 `simba` 端点（`/actuator/simba`）会列出本节点竞争的 mutex
+及其最后观察到的 owner。告警规则和自定义 `ContendObserver` 参见 [可观测性](https://simba.ahoo.me/zh/guide/observability)。
 
 ## 升级到 4.0
 

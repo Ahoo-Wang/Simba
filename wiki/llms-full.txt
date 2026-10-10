@@ -5095,7 +5095,7 @@ stateDiagram-v2
 <doc title="Observability" path="guide/observability.md">
 # Observability
 
-Simba reports what happens to each mutex through a `ContendObserver`. With Spring Boot and Micrometer on the classpath, the starter records these events as metrics automatically.
+Simba reports what happens to each mutex through a `ContendObserver`. With Spring Boot, the starter records these events as Micrometer metrics and serves the current state through an Actuator endpoint.
 
 ## Micrometer Metrics
 
@@ -5143,6 +5143,42 @@ groups:
 
 Nodes are scraped at different moments, so a handover can briefly look like zero or two owners; the `for: 1m` clause filters that out. Leases themselves never overlap: a node revokes its ownership locally when its lease ends, and writes that may outlive it should carry a [fencing token](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md).
 
+## Actuator Endpoint
+
+With Spring Boot Actuator, the read-only `simba` endpoint shows what this node contends for. Like every Actuator endpoint it is not exposed over HTTP by default:
+
+```yaml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,simba
+```
+
+`GET /actuator/simba` lists the running contend services; `GET /actuator/simba/{mutex}` returns one mutex (404 when this node does not contend for it):
+
+```json
+{
+  "mutexes": [
+    {
+      "mutex": "report",
+      "contenderId": "0:4242@host-a",
+      "status": "RUNNING",
+      "owner": true,
+      "currentOwner": {
+        "ownerId": "0:4242@host-a",
+        "fencingToken": 7,
+        "acquiredAt": "2026-10-10T08:00:00Z",
+        "ttlAt": "2026-10-10T08:00:10Z",
+        "transitionAt": "2026-10-10T08:00:16Z"
+      }
+    }
+  ]
+}
+```
+
+`currentOwner` is the owner this node last observed, so non-leaders on JDBC and Redis show who leads; Zookeeper nodes only know about themselves. `ttlAt` and `transitionAt` are `null` for unbounded leases. The endpoint has no write operations. Services from factories built outside the starter appear only if the factory is given the `SimbaServiceTracker` observer.
+
 ## Custom Observers
 
 Implement `ContendObserver` to forward events elsewhere. Every method defaults to a no-op; implementations must be fast and thread-safe, and exceptions are logged and ignored.
@@ -5173,6 +5209,7 @@ val factory = SpringRedisMutexContendServiceFactory(
 | `onAcquired(mutex)` / `onReleased(mutex)` | This contender gained or lost ownership (all backends). |
 | `onLeaseExpired(mutex)` | The lease watchdog revoked ownership (JDBC, Redis); `onReleased` follows. |
 | `onWork(mutex, durationNanos, outcome)` | A leader-only work run ended. |
+| `onStarted(service)` / `onStopped(service)` | A contend service started, or stopped after delivering its release. |
 
 ## Related Pages
 
@@ -8229,6 +8266,8 @@ simba:
 | `simba.zookeeper.enabled` | `ZookeeperProperties` | `true` |
 | `simba.scheduling.enabled` | `SimbaSchedulingAutoConfiguration` | `true` |
 | `simba.metrics.enabled` | `SimbaMetricsAutoConfiguration` | `true` |
+
+The `simba` Actuator endpoint (`SimbaEndpointAutoConfiguration`) is registered when Actuator is on the classpath and the endpoint is exposed; see [Observability](/guide/observability#actuator-endpoint).
 
 ## Gradle Feature Variants
 
