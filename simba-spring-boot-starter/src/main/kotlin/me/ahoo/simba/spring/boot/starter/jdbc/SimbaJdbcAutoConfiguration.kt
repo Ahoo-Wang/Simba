@@ -12,11 +12,14 @@
  */
 package me.ahoo.simba.spring.boot.starter.jdbc
 
+import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.jdbc.JdbcMutexContendServiceFactory
 import me.ahoo.simba.jdbc.JdbcMutexOwnerRepository
 import me.ahoo.simba.jdbc.MutexOwnerRepository
+import me.ahoo.simba.spring.boot.starter.ContendObservers
 import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
@@ -57,14 +60,16 @@ class SimbaJdbcAutoConfiguration(private val jdbcProperties: JdbcProperties) {
     @ConditionalOnBean(MutexOwnerRepository::class)
     fun jdbcMutexContendServiceFactory(
         mutexOwnerRepository: MutexOwnerRepository,
-        @Qualifier(SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME) handleExecutor: Executor
+        @Qualifier(SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME) handleExecutor: Executor,
+        observers: ObjectProvider<ContendObserver>
     ): MutexContendServiceFactory {
         return JdbcMutexContendServiceFactory(
             mutexOwnerRepository = mutexOwnerRepository,
             handleExecutor = handleExecutor,
             initialDelay = jdbcProperties.initialDelay,
             ttl = jdbcProperties.ttl,
-            transition = jdbcProperties.transition
+            transition = jdbcProperties.transition,
+            observer = ContendObservers.of(observers)
         )
     }
 }

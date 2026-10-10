@@ -284,6 +284,7 @@ simba:
 | `simba.redis.transition` | `RedisProperties` | `6s` |
 | `simba.zookeeper.enabled` | `ZookeeperProperties` | `true` |
 | `simba.scheduling.enabled` | `SimbaSchedulingAutoConfiguration` | `true` |
+| `simba.metrics.enabled` | `SimbaMetricsAutoConfiguration` | `true` |
 
 ## Gradle Feature Variants
 

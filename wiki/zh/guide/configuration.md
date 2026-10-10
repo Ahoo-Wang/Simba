@@ -86,6 +86,12 @@ simba:
     enabled: true
 ```
 
+### 指标
+
+| 属性 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `simba.metrics.enabled` | `Boolean` | `true` | 存在 `MeterRegistry` bean 时记录 Micrometer 指标，参见 [可观测性](/zh/guide/observability)。 |
+
 ### 定时任务
 
 | 属性 | 类型 | 默认值 | 说明 |

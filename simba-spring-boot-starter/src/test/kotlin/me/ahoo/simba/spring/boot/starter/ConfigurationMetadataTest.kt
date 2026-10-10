@@ -56,7 +56,8 @@ class ConfigurationMetadataTest {
             Triple("simba.redis.ttl", "java.time.Duration", "\"10s\""),
             Triple("simba.redis.transition", "java.time.Duration", "\"6s\""),
             Triple("simba.zookeeper.enabled", "java.lang.Boolean", "true"),
-            Triple("simba.scheduling.enabled", "java.lang.Boolean", "true")
+            Triple("simba.scheduling.enabled", "java.lang.Boolean", "true"),
+            Triple("simba.metrics.enabled", "java.lang.Boolean", "true")
         )
     }
 }

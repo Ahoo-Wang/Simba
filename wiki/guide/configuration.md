@@ -86,6 +86,12 @@ simba:
     enabled: true
 ```
 
+### Metrics
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `simba.metrics.enabled` | `Boolean` | `true` | Record Micrometer metrics when a `MeterRegistry` bean exists; see [Observability](/guide/observability). |
+
 ### Scheduling
 
 | Property | Type | Default | Description |

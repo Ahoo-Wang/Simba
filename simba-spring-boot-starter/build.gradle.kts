@@ -52,10 +52,13 @@ dependencies {
     "zookeeperSupportImplementation"(project(":simba-zookeeper"))
 
     api("org.springframework.boot:spring-boot-starter")
+    compileOnly("io.micrometer:micrometer-core")
     kapt("org.springframework.boot:spring-boot-configuration-processor")
     kapt("org.springframework.boot:spring-boot-autoconfigure-processor")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation("io.micrometer:micrometer-core")
+    testImplementation("org.springframework.boot:spring-boot-micrometer-metrics")
     testImplementation("com.mysql:mysql-connector-j")
     testImplementation("org.springframework.boot:spring-boot-starter-jdbc")
     testImplementation("org.apache.curator:curator-test")

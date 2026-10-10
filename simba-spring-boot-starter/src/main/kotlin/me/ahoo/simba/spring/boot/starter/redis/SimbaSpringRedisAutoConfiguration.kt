@@ -12,9 +12,12 @@
  */
 package me.ahoo.simba.spring.boot.starter.redis
 
+import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.spring.boot.starter.ContendObservers
 import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 import me.ahoo.simba.spring.redis.SpringRedisMutexContendServiceFactory
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
@@ -61,14 +64,16 @@ class SimbaSpringRedisAutoConfiguration(private val redisProperties: RedisProper
     fun redisMutexContendServiceFactory(
         redisTemplate: StringRedisTemplate,
         listenerContainer: RedisMessageListenerContainer,
-        @Qualifier(SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME) handleExecutor: Executor
+        @Qualifier(SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME) handleExecutor: Executor,
+        observers: ObjectProvider<ContendObserver>
     ): MutexContendServiceFactory {
         return SpringRedisMutexContendServiceFactory(
             ttl = redisProperties.ttl,
             transition = redisProperties.transition,
             redisTemplate = redisTemplate,
             listenerContainer = listenerContainer,
-            handleExecutor = handleExecutor
+            handleExecutor = handleExecutor,
+            observer = ContendObservers.of(observers)
         )
     }
 }

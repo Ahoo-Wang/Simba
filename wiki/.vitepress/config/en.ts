@@ -28,6 +28,7 @@ export const en: DefaultTheme.Config = {
             { text: 'Introduction', link: '/guide/' },
             { text: 'Quick Start', link: '/guide/quick-start' },
             { text: 'Configuration', link: '/guide/configuration' },
+            { text: 'Observability', link: '/guide/observability' },
           ],
         },
       ],

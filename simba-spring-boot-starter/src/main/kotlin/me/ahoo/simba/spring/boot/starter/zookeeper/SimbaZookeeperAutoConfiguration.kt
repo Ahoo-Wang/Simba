@@ -12,10 +12,13 @@
  */
 package me.ahoo.simba.spring.boot.starter.zookeeper
 
+import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.spring.boot.starter.ContendObservers
 import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 import me.ahoo.simba.zookeeper.ZookeeperMutexContendServiceFactory
 import org.apache.curator.framework.CuratorFramework
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
@@ -42,8 +45,9 @@ class SimbaZookeeperAutoConfiguration {
     @ConditionalOnMissingBean
     fun zookeeperMutexContendServiceFactory(
         curatorFramework: CuratorFramework,
-        @Qualifier(SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME) handleExecutor: Executor
+        @Qualifier(SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME) handleExecutor: Executor,
+        observers: ObjectProvider<ContendObserver>
     ): MutexContendServiceFactory {
-        return ZookeeperMutexContendServiceFactory(handleExecutor, curatorFramework)
+        return ZookeeperMutexContendServiceFactory(handleExecutor, curatorFramework, ContendObservers.of(observers))
     }
 }
