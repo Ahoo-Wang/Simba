@@ -71,7 +71,7 @@ Fencing 需要 `fencing_token` 列，因此需要显式开启：新安装会通�
 
 ```kotlin
 interface MutexOwnerRepository {
-    fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwnerEntity
+    fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwner
     fun release(mutex: String, contenderId: String): Boolean
 }
 ```
@@ -116,26 +116,9 @@ WHERE mutex = ?
 1. **无活跃所有者**：`transition_at` 已过期 -- 任何竞争者都可以获取。
 2. **同一所有者续期**：当前所有者可以在转换期（领导权稳定性的宽限期）内续期。
 
-### MutexOwnerEntity
+### 数据库时间
 
-**源码：** [simba-jdbc/.../MutexOwnerEntity.kt:22](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/MutexOwnerEntity.kt#L22)
-
-扩展 `MutexOwner`，增加 JDBC 特有字段：
-
-```kotlin
-class MutexOwnerEntity(
-    val mutex: String,
-    ownerId: String, acquiredAt: Long, ttlAt: Long, transitionAt: Long
-) : MutexOwner(ownerId, acquiredAt, ttlAt, transitionAt) {
-    var version: Int = 0
-    var currentDbAt: Long = 0
-}
-```
-
-| 字段 | 描述 |
-|---|---|
-| `version` | 来自数据库的状态变更计数器。不用于并发控制决策。 |
-| `currentDbAt` | 数据库服务器的当前时间戳，用于防止应用服务器之间的时钟偏移问题。 |
+仓库返回普通的 `MutexOwner`，其 `observedAt` 是数据库服务器的 `current_timestamp(3)`。`currentAt` 用本地 monotonic 时钟推进这个值，因此每个节点都按数据库时钟判断租约。如果 MySQL 返回 0（8.0.28 之前的版本在 2038 年之后 `UNIX_TIMESTAMP` 超出范围），则改用 JVM 时间。
 
 ### JdbcMutexContendService
 
@@ -195,8 +178,8 @@ autonumber
         Repo->>DB: UPDATE simba_mutex SET ... WHERE transition_at < NOW OR (owner_id = self AND ...)
         Repo->>DB: SELECT ... FROM simba_mutex WHERE mutex = ?
         Repo->>DB: COMMIT
-        DB-->>Repo: MutexOwnerEntity
-        Repo-->>Service: MutexOwnerEntity
+        DB-->>Repo: MutexOwner
+        Repo-->>Service: MutexOwner
 
         Service->>Service: notifyOwner(mutexOwner)
         Service->>Executor: runAsync(dispatch)

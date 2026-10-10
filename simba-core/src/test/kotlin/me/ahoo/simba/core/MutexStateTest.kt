@@ -76,19 +76,19 @@ class MutexStateTest {
 
     @Test
     fun `isInTtl is true when owner and after in ttl`() {
-        val inTtl = FixedClockOwner("B", ttlAt = 200, transitionAt = 300, fixedCurrentAt = 100)
+        val inTtl = observedOwner("B", ttlAt = 200, transitionAt = 300, observedAt = 100)
         assertThat(MutexState(ownerA, inTtl).isInTtl("B"), equalTo(true))
     }
 
     @Test
     fun `isInTtl is false when owner but after expired`() {
-        val expired = FixedClockOwner("B", ttlAt = 50, transitionAt = 300, fixedCurrentAt = 100)
+        val expired = observedOwner("B", ttlAt = 50, transitionAt = 300, observedAt = 100)
         assertThat(MutexState(ownerA, expired).isInTtl("B"), equalTo(false))
     }
 
     @Test
     fun `isInTtl is false when not owner`() {
-        val inTtl = FixedClockOwner("B", ttlAt = 200, transitionAt = 300, fixedCurrentAt = 100)
+        val inTtl = observedOwner("B", ttlAt = 200, transitionAt = 300, observedAt = 100)
         assertThat(MutexState(ownerA, inTtl).isInTtl("A"), equalTo(false))
     }
 

@@ -12,6 +12,8 @@
  */
 package me.ahoo.simba.jdbc
 
+import me.ahoo.simba.core.MutexOwner
+
 /**
  * Mutex Owner Repository.
  *
@@ -24,7 +26,7 @@ interface MutexOwnerRepository {
      * @param ttl [java.util.concurrent.TimeUnit.MILLISECONDS]
      * @param transition [java.util.concurrent.TimeUnit.MILLISECONDS]
      */
-    fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwnerEntity
+    fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwner
 
     /**
      * Releases the lease when held by [contenderId].

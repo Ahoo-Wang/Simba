@@ -53,8 +53,10 @@ classDiagram
         +ttlAt: Long
         +transitionAt: Long
         +isOwner(contenderId: String): Boolean
+        +fencingToken: Long
+        +observedAt: Long
+        +currentAt: Long
         +isInTtl: Boolean
-        +isInTransition: Boolean
         +hasOwner(): Boolean
     }
     class MutexState {
@@ -286,17 +288,19 @@ abstract class AbstractMutexContendService(
 
 ## MutexOwner
 
-一个不可变值对象，表示某个时间点的互斥锁所有权快照。
+一个不可变值：对租约的一次观测。相等性只比较租约事实（`ownerId`、`acquiredAt`、`ttlAt`、`transitionAt`、`fencingToken`），不比较观测时间。
 
 **源码：** [simba-core/.../MutexOwner.kt:23](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt#L23)
 
 ```kotlin
-@Immutable
-open class MutexOwner(
+class MutexOwner(
     val ownerId: String,
     val acquiredAt: Long = System.currentTimeMillis(),
     val ttlAt: Long = Long.MAX_VALUE,
-    val transitionAt: Long = Long.MAX_VALUE
+    val transitionAt: Long = Long.MAX_VALUE,
+    val fencingToken: Long = NO_FENCING_TOKEN,
+    val observedAt: Long = System.currentTimeMillis(),
+    observedNanos: Long = System.nanoTime()
 )
 ```
 
@@ -306,15 +310,16 @@ open class MutexOwner(
 | `acquiredAt` | `Long` | 获取锁时的时间戳（纪元毫秒） |
 | `ttlAt` | `Long` | TTL 到期的时间戳。此后所有者应续期，或其他竞争者可能接管。 |
 | `transitionAt` | `Long` | 转换/宽限期结束时间。在此窗口期间，当前所有者可以优先续期。 |
+| `observedAt` | `Long` | 观测到该持有者时的后端时间（JDBC 为数据库时间）。 |
 | `fencingToken` | `Long` | 按持有任期严格递增，任期内保持不变。后端不签发 token 时为 `NO_FENCING_TOKEN`（`0`），Zookeeper 和 Redis 始终签发，JDBC 需开启 `simba.jdbc.fencing`。 |
 
 | 方法 | 返回值 | 描述 |
 |---|---|---|
 | `isOwner(contenderId)` | `Boolean` | 检查给定 ID 是否匹配 `ownerId` |
-| `isInTtl` | `Boolean` | 如果 `ttlAt > System.currentTimeMillis()` 则为 `true` |
+| `currentAt` | `Long` | 当前后端时间：`observedAt` 加上本地 monotonic 时钟经过的时间 |
+| `isInTtl` | `Boolean` | 如果 `ttlAt > currentAt` 则为 `true` |
 | `isInTtl(contenderId)` | `Boolean` | 如果是所有者且在 TTL 内则为 `true` |
-| `isInTransition` | `Boolean` | 如果 `transitionAt >= System.currentTimeMillis()` 则为 `true` |
-| `hasOwner()` | `Boolean` | 如果 `transitionAt >= System.currentTimeMillis()` 则为 `true` |
+| `hasOwner()` | `Boolean` | 租约仍在进行时为 `true`（`transitionAt >= currentAt`） |
 | `MutexOwner.NONE` | `MutexOwner` | 哨兵值：`ownerId = ""`，所有时间戳为 `0` |
 
 ## MutexState

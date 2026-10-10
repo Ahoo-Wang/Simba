@@ -38,7 +38,7 @@ erDiagram
     }
 ```
 
-`MutexOwnerEntity` 类（[`JdbcMutexOwnerRepository.kt`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/MutexOwnerRepository.kt)）在 `MutexOwner` 的基础上扩展了 `version` 状态变更计数字段，以及一个 `currentDbAt` 字段来捕获数据库服务器的当前时间戳，从而防止应用节点之间的时钟偏移问题。
+仓库返回的 `MutexOwner` 的 `observedAt` 是数据库服务器的当前时间，因此每个节点都按数据库时钟而不是自己的时钟判断租约。
 
 ### 原子获取（条件更新）
 
@@ -81,7 +81,7 @@ autonumber
     REPO->>DB: UPDATE simba_mutex SET ... WHERE ...
     DB-->>REPO: affected rows (0 or 1)
     REPO->>DB: SELECT ... FROM simba_mutex WHERE mutex = ?
-    DB-->>REPO: MutexOwnerEntity (with version, currentDbAt)
+    DB-->>REPO: MutexOwner (observedAt = database time)
 
     alt acquired=false AND no current owner
         Note over REPO: Initialization edge case — retry acquire
@@ -90,7 +90,7 @@ autonumber
     end
 
     REPO->>DB: COMMIT
-    REPO-->>CS: MutexOwnerEntity
+    REPO-->>CS: MutexOwner
     CS->>CS: notifyOwner(mutexOwner)
     CS->>CS: compute nextDelay via ContendPeriod
     CS->>CS: schedule next contend attempt

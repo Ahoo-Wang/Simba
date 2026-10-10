@@ -71,7 +71,7 @@ Fencing is opt-in because it needs the `fencing_token` column: new installs get 
 
 ```kotlin
 interface MutexOwnerRepository {
-    fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwnerEntity
+    fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwner
     fun release(mutex: String, contenderId: String): Boolean
 }
 ```
@@ -116,26 +116,11 @@ This ensures:
 1. **No active owner**: `transition_at` has passed -- any contender can acquire.
 2. **Same owner renewing**: The current owner can renew even during the transition period (grace period for leadership stability).
 
-### MutexOwnerEntity
+### Database Time
 
-**Source:** [simba-jdbc/.../MutexOwnerEntity.kt:22](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/MutexOwnerEntity.kt#L22)
-
-Extends `MutexOwner` with JDBC-specific fields:
-
-```kotlin
-class MutexOwnerEntity(
-    val mutex: String,
-    ownerId: String, acquiredAt: Long, ttlAt: Long, transitionAt: Long
-) : MutexOwner(ownerId, acquiredAt, ttlAt, transitionAt) {
-    var version: Int = 0
-    var currentDbAt: Long = 0
-}
-```
-
-| Field | Description |
-|---|---|
-| `version` | State-change counter from the database. Not used for concurrency decisions. |
-| `currentDbAt` | The database server's current timestamp, used to prevent clock skew issues between application servers. |
+The repository returns a plain `MutexOwner` whose `observedAt` is the database server's `current_timestamp(3)`.
+Its `currentAt` advances that value with the local monotonic clock, so lease decisions on every node use the database clock.
+If MySQL returns 0 (`UNIX_TIMESTAMP` out of range on versions before 8.0.28 after 2038), JVM time is used instead.
 
 ### JdbcMutexContendService
 
@@ -195,8 +180,8 @@ autonumber
         Repo->>DB: UPDATE simba_mutex SET ... WHERE transition_at < NOW OR (owner_id = self AND ...)
         Repo->>DB: SELECT ... FROM simba_mutex WHERE mutex = ?
         Repo->>DB: COMMIT
-        DB-->>Repo: MutexOwnerEntity
-        Repo-->>Service: MutexOwnerEntity
+        DB-->>Repo: MutexOwner
+        Repo-->>Service: MutexOwner
 
         Service->>Service: notifyOwner(mutexOwner)
         Service->>Executor: runAsync(dispatch)

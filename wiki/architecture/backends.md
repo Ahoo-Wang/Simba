@@ -44,10 +44,8 @@ erDiagram
     }
 ```
 
-The `MutexOwnerEntity` class ([`JdbcMutexOwnerRepository.kt`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/MutexOwnerRepository.kt))
-extends `MutexOwner` with a `version` state-change counter and a `currentDbAt`
-field that captures the database server's current timestamp, preventing clock skew issues
-between application nodes.
+The repository returns a `MutexOwner` whose `observedAt` is the database server's current timestamp, so every
+node judges the lease on the database clock instead of its own.
 
 ### Atomic Acquire (Conditional Update)
 
@@ -94,7 +92,7 @@ autonumber
     REPO->>DB: UPDATE simba_mutex SET ... WHERE ...
     DB-->>REPO: affected rows (0 or 1)
     REPO->>DB: SELECT ... FROM simba_mutex WHERE mutex = ?
-    DB-->>REPO: MutexOwnerEntity (with version, currentDbAt)
+    DB-->>REPO: MutexOwner (observedAt = database time)
 
     alt acquired=false AND no current owner
         Note over REPO: Initialization edge case — retry acquire
@@ -103,7 +101,7 @@ autonumber
     end
 
     REPO->>DB: COMMIT
-    REPO-->>CS: MutexOwnerEntity
+    REPO-->>CS: MutexOwner
     CS->>CS: notifyOwner(mutexOwner)
     CS->>CS: compute nextDelay via ContendPeriod
     CS->>CS: schedule next contend attempt

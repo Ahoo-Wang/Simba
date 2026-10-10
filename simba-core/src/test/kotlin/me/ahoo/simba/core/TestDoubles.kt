@@ -17,17 +17,11 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
 
 /**
- * [MutexOwner] with a fixed [currentAt] for deterministic time-based tests.
+ * [MutexOwner] observed at backend time [observedAt]: its `currentAt` starts there and advances only by the time
+ * that really elapses during the test (usually 0-1 ms).
  */
-class FixedClockOwner(
-    ownerId: String,
-    ttlAt: Long,
-    transitionAt: Long,
-    private val fixedCurrentAt: Long
-) : MutexOwner(ownerId = ownerId, acquiredAt = 0, ttlAt = ttlAt, transitionAt = transitionAt) {
-    override val currentAt: Long
-        get() = fixedCurrentAt
-}
+fun observedOwner(ownerId: String, ttlAt: Long, transitionAt: Long, observedAt: Long): MutexOwner =
+    MutexOwner(ownerId = ownerId, acquiredAt = 0, ttlAt = ttlAt, transitionAt = transitionAt, observedAt = observedAt)
 
 /**
  * [MutexContender] that records [onAcquired]/[onReleased] calls.

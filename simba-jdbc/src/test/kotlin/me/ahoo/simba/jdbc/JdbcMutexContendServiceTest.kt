@@ -15,6 +15,7 @@ package me.ahoo.simba.jdbc
 import com.zaxxer.hikari.HikariDataSource
 import me.ahoo.simba.core.AbstractMutexContender
 import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.core.MutexOwner
 import me.ahoo.simba.core.MutexState
 import me.ahoo.simba.test.MutexContendServiceSpec
 import org.hamcrest.MatcherAssert.assertThat
@@ -74,7 +75,7 @@ internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
                 contenderId: String,
                 ttl: Long,
                 transition: Long
-            ): MutexOwnerEntity {
+            ): MutexOwner {
                 if (attempts.getAndIncrement() == 0) {
                     return jdbcMutexOwnerRepository.acquireAndGetOwner(mutex, contenderId, ttl, transition)
                 }

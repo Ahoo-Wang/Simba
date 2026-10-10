@@ -1113,7 +1113,7 @@ acquiredAt ---- ttlAt ---- transitionAt ---- now (expired)
 
 Each backend constructs `MutexOwner` differently:
 
-**JDBC**: The repository returns a `MutexOwnerEntity` from the database row, which is mapped to `MutexOwner(ownerId, acquiredAt, ttlAt, transitionAt)`.
+**JDBC**: The repository maps the database row to `MutexOwner(ownerId, acquiredAt, ttlAt, transitionAt, fencingToken, observedAt = database time)`.
 
 **Redis**: The Lua script returns `{ownerId}@@{transitionAt}`. The service computes `ttlAt = transitionAt - transition` and `acquiredAt = ttlAt - ttl`.
 
@@ -2987,7 +2987,7 @@ base classes that handle scheduling, notification dispatch, and lifecycle manage
 
 [`MutexOwner`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt)
 is an immutable value object that represents the current holder of a distributed mutex. It
-carries four fields:
+carries the lease facts and when they were observed:
 
 | Field | Type | Description |
 |---|---|---|
@@ -2995,12 +2995,17 @@ carries four fields:
 | `acquiredAt` | `Long` | Epoch millis when the lock was acquired |
 | `ttlAt` | `Long` | Epoch millis when the lock's TTL expires (owner must renew before this) |
 | `transitionAt` | `Long` | Epoch millis when the transition period ends (other contenders may attempt acquisition after this) |
+| `fencingToken` | `Long` | Strictly increasing per ownership term (ADR 0002); `0` when not issued |
+| `observedAt` | `Long` | Backend time at which the owner was observed |
+
+Timestamps are in the backend's clock. `currentAt` advances `observedAt` with the local monotonic clock, so lease
+decisions never compare wall clocks of different nodes; for JDBC `observedAt` is database time. Equality covers the
+lease facts only.
 
 Key derived properties and methods:
 
-- **`isInTtl`** — returns `true` when `ttlAt > currentTimeMillis()`, meaning the owner still has a valid TTL.
-- **`isInTransition`** — returns `true` when `transitionAt >= currentTimeMillis()`, meaning no other contender should attempt acquisition yet.
-- **`hasOwner()`** — returns `true` when `transitionAt >= currentTimeMillis()`, indicating that an active leader exists (even if TTL has expired, the transition window still counts as "owned").
+- **`isInTtl`** — `ttlAt > currentAt`: the owner still has a valid TTL.
+- **`hasOwner()`** — `transitionAt >= currentAt`: the lease is still running (the transition window still counts as owned).
 - **`isOwner(contenderId)`** — checks whether the given contender ID matches `ownerId`.
 
 **NONE sentinel:** The companion object provides `MutexOwner.NONE` ([line 85](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt#L85)),
@@ -3010,26 +3015,18 @@ represents the absence of any owner and is used as the initial and terminal stat
 ```mermaid
 classDiagram
     class MutexOwner {
-        <<@Immutable>>
         +ownerId: String
         +acquiredAt: Long
         +ttlAt: Long
         +transitionAt: Long
+        +fencingToken: Long
+        +observedAt: Long
+        +currentAt: Long
         +isInTtl: Boolean
-        +isInTransition: Boolean
         +hasOwner(): Boolean
         +isOwner(contenderId: String): Boolean
         +isInTtl(contenderId: String): Boolean
-        +isInTransitionOf(contenderId: String): Boolean
     }
-
-    class MutexOwnerEntity {
-        +mutex: String
-        +version: int
-        +currentDbAt: Long
-    }
-
-    MutexOwner <|-- MutexOwnerEntity
 ```
 
 ### MutexState
@@ -3789,10 +3786,8 @@ erDiagram
     }
 ```
 
-The `MutexOwnerEntity` class ([`JdbcMutexOwnerRepository.kt`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/MutexOwnerRepository.kt))
-extends `MutexOwner` with a `version` state-change counter and a `currentDbAt`
-field that captures the database server's current timestamp, preventing clock skew issues
-between application nodes.
+The repository returns a `MutexOwner` whose `observedAt` is the database server's current timestamp, so every
+node judges the lease on the database clock instead of its own.
 
 ### Atomic Acquire (Conditional Update)
 
@@ -3839,7 +3834,7 @@ autonumber
     REPO->>DB: UPDATE simba_mutex SET ... WHERE ...
     DB-->>REPO: affected rows (0 or 1)
     REPO->>DB: SELECT ... FROM simba_mutex WHERE mutex = ?
-    DB-->>REPO: MutexOwnerEntity (with version, currentDbAt)
+    DB-->>REPO: MutexOwner (observedAt = database time)
 
     alt acquired=false AND no current owner
         Note over REPO: Initialization edge case — retry acquire
@@ -3848,7 +3843,7 @@ autonumber
     end
 
     REPO->>DB: COMMIT
-    REPO-->>CS: MutexOwnerEntity
+    REPO-->>CS: MutexOwner
     CS->>CS: notifyOwner(mutexOwner)
     CS->>CS: compute nextDelay via ContendPeriod
     CS->>CS: schedule next contend attempt
@@ -5701,8 +5696,10 @@ classDiagram
         +ttlAt: Long
         +transitionAt: Long
         +isOwner(contenderId: String): Boolean
+        +fencingToken: Long
+        +observedAt: Long
+        +currentAt: Long
         +isInTtl: Boolean
-        +isInTransition: Boolean
         +hasOwner(): Boolean
     }
     class MutexState {
@@ -5934,17 +5931,19 @@ Backend modules (`simba-jdbc`, `simba-spring-redis`, `simba-zookeeper`) extend t
 
 ## MutexOwner
 
-An immutable value object that represents a snapshot of mutex ownership at a point in time.
+An immutable value: one observation of the lease. Equality covers the lease facts (`ownerId`, `acquiredAt`, `ttlAt`, `transitionAt`, `fencingToken`), not the observation time.
 
 **Source:** [simba-core/.../MutexOwner.kt:23](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt#L23)
 
 ```kotlin
-@Immutable
-open class MutexOwner(
+class MutexOwner(
     val ownerId: String,
     val acquiredAt: Long = System.currentTimeMillis(),
     val ttlAt: Long = Long.MAX_VALUE,
-    val transitionAt: Long = Long.MAX_VALUE
+    val transitionAt: Long = Long.MAX_VALUE,
+    val fencingToken: Long = NO_FENCING_TOKEN,
+    val observedAt: Long = System.currentTimeMillis(),
+    observedNanos: Long = System.nanoTime()
 )
 ```
 
@@ -5954,15 +5953,16 @@ open class MutexOwner(
 | `acquiredAt` | `Long` | Timestamp (epoch millis) when the lock was acquired |
 | `ttlAt` | `Long` | Timestamp when the TTL expires. After this, the owner should renew or another contender may take over. |
 | `transitionAt` | `Long` | End of the transition/grace period. During this window the current owner can preferentially renew. |
+| `observedAt` | `Long` | Backend time at which the owner was observed (database time for JDBC). |
 | `fencingToken` | `Long` | Strictly increasing per ownership term, stable within one. `NO_FENCING_TOKEN` (`0`) when the backend does not issue tokens (Zookeeper and Redis always; JDBC with `simba.jdbc.fencing`). |
 
 | Method | Return | Description |
 |---|---|---|
 | `isOwner(contenderId)` | `Boolean` | Checks if the given ID matches `ownerId` |
-| `isInTtl` | `Boolean` | `true` if `ttlAt > System.currentTimeMillis()` |
+| `currentAt` | `Long` | Backend time now: `observedAt` advanced by the local monotonic clock |
+| `isInTtl` | `Boolean` | `true` if `ttlAt > currentAt` |
 | `isInTtl(contenderId)` | `Boolean` | `true` if is owner AND within TTL |
-| `isInTransition` | `Boolean` | `true` if `transitionAt >= System.currentTimeMillis()` |
-| `hasOwner()` | `Boolean` | `true` if `transitionAt >= System.currentTimeMillis()` |
+| `hasOwner()` | `Boolean` | `true` while the lease runs (`transitionAt >= currentAt`) |
 | `MutexOwner.NONE` | `MutexOwner` | Sentinel: `ownerId = ""`, all timestamps `0` |
 
 ## MutexState
@@ -7172,7 +7172,7 @@ Fencing is opt-in because it needs the `fencing_token` column: new installs get 
 
 ```kotlin
 interface MutexOwnerRepository {
-    fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwnerEntity
+    fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwner
     fun release(mutex: String, contenderId: String): Boolean
 }
 ```
@@ -7217,26 +7217,11 @@ This ensures:
 1. **No active owner**: `transition_at` has passed -- any contender can acquire.
 2. **Same owner renewing**: The current owner can renew even during the transition period (grace period for leadership stability).
 
-### MutexOwnerEntity
+### Database Time
 
-**Source:** [simba-jdbc/.../MutexOwnerEntity.kt:22](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/MutexOwnerEntity.kt#L22)
-
-Extends `MutexOwner` with JDBC-specific fields:
-
-```kotlin
-class MutexOwnerEntity(
-    val mutex: String,
-    ownerId: String, acquiredAt: Long, ttlAt: Long, transitionAt: Long
-) : MutexOwner(ownerId, acquiredAt, ttlAt, transitionAt) {
-    var version: Int = 0
-    var currentDbAt: Long = 0
-}
-```
-
-| Field | Description |
-|---|---|
-| `version` | State-change counter from the database. Not used for concurrency decisions. |
-| `currentDbAt` | The database server's current timestamp, used to prevent clock skew issues between application servers. |
+The repository returns a plain `MutexOwner` whose `observedAt` is the database server's `current_timestamp(3)`.
+Its `currentAt` advances that value with the local monotonic clock, so lease decisions on every node use the database clock.
+If MySQL returns 0 (`UNIX_TIMESTAMP` out of range on versions before 8.0.28 after 2038), JVM time is used instead.
 
 ### JdbcMutexContendService
 
@@ -7296,8 +7281,8 @@ autonumber
         Repo->>DB: UPDATE simba_mutex SET ... WHERE transition_at < NOW OR (owner_id = self AND ...)
         Repo->>DB: SELECT ... FROM simba_mutex WHERE mutex = ?
         Repo->>DB: COMMIT
-        DB-->>Repo: MutexOwnerEntity
-        Repo-->>Service: MutexOwnerEntity
+        DB-->>Repo: MutexOwner
+        Repo-->>Service: MutexOwner
 
         Service->>Service: notifyOwner(mutexOwner)
         Service->>Executor: runAsync(dispatch)
@@ -8868,12 +8853,12 @@ class MutexOwnerTest {
     }
 
     @Test
-    fun `isInTransitionOf returns false for non-owner`() {
+    fun `isInTtl returns false for non-owner`() {
         val owner = MutexOwner(
             ownerId = "c1",
-            transitionAt = System.currentTimeMillis() + 10_000
+            ttlAt = System.currentTimeMillis() + 10_000
         )
-        owner.isInTransitionOf("c2").assert().isFalse()
+        owner.isInTtl("c2").assert().isFalse()
     }
 }
 ```

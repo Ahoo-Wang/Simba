@@ -11,7 +11,7 @@ description: 深入了解 Simba 的核心接口和值对象 — MutexOwner、Mut
 
 ### MutexOwner
 
-[`MutexOwner`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt) 是一个不可变的值对象，表示分布式互斥锁的当前持有者。它携带四个字段：
+[`MutexOwner`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt) 是一个不可变的值对象，表示分布式互斥锁的当前持有者。它携带租约事实以及观测时间：
 
 | 字段 | 类型 | 描述 |
 |---|---|---|
@@ -19,12 +19,15 @@ description: 深入了解 Simba 的核心接口和值对象 — MutexOwner、Mut
 | `acquiredAt` | `Long` | 获取锁时的纪元毫秒数 |
 | `ttlAt` | `Long` | 锁的 TTL 到期时的纪元毫秒数（所有者必须在此之前续约） |
 | `transitionAt` | `Long` | 过渡期结束时的纪元毫秒数（其他竞争者可在此之后尝试获取） |
+| `fencingToken` | `Long` | 按持有任期严格递增（ADR 0002）；未签发时为 `0` |
+| `observedAt` | `Long` | 观测到该持有者时的后端时间 |
+
+时间戳都使用后端的时钟。`currentAt` 用本地 monotonic 时钟推进 `observedAt`，因此租约判断从不比较不同节点的墙钟；JDBC 的 `observedAt` 是数据库时间。相等性只比较租约事实。
 
 关键派生属性和方法：
 
-- **`isInTtl`** — 当 `ttlAt > currentTimeMillis()` 时返回 `true`，表示所有者仍拥有有效的 TTL。
-- **`isInTransition`** — 当 `transitionAt >= currentTimeMillis()` 时返回 `true`，表示其他竞争者尚不应尝试获取。
-- **`hasOwner()`** — 当 `transitionAt >= currentTimeMillis()` 时返回 `true`，表示存在活跃的领导者（即使 TTL 已过期，过渡窗口仍算作"已拥有"）。
+- **`isInTtl`** — `ttlAt > currentAt`：所有者仍拥有有效的 TTL。
+- **`hasOwner()`** — `transitionAt >= currentAt`：租约仍在进行（过渡窗口仍算作"已拥有"）。
 - **`isOwner(contenderId)`** — 检查给定的竞争者 ID 是否与 `ownerId` 匹配。
 
 **NONE 哨兵值：** 伴生对象提供了 `MutexOwner.NONE`（[第 85 行](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt#L85)），这是一个 `ownerId = ""`、`acquiredAt = 0`、`ttlAt = 0`、`transitionAt = 0` 的单例。它表示不存在任何所有者，用作初始和终止状态。
@@ -32,26 +35,18 @@ description: 深入了解 Simba 的核心接口和值对象 — MutexOwner、Mut
 ```mermaid
 classDiagram
     class MutexOwner {
-        <<@Immutable>>
         +ownerId: String
         +acquiredAt: Long
         +ttlAt: Long
         +transitionAt: Long
+        +fencingToken: Long
+        +observedAt: Long
+        +currentAt: Long
         +isInTtl: Boolean
-        +isInTransition: Boolean
         +hasOwner(): Boolean
         +isOwner(contenderId: String): Boolean
         +isInTtl(contenderId: String): Boolean
-        +isInTransitionOf(contenderId: String): Boolean
     }
-
-    class MutexOwnerEntity {
-        +mutex: String
-        +version: int
-        +currentDbAt: Long
-    }
-
-    MutexOwner <|-- MutexOwnerEntity
 ```
 
 ### MutexState
