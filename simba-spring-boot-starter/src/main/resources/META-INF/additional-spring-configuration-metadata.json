@@ -8,6 +8,12 @@
       "defaultValue": true
     },
     {
+      "name": "simba.backend",
+      "type": "java.lang.String",
+      "description": "Backend to configure: jdbc, redis or zookeeper. Required when more than one backend module is active.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.SimbaBackend"
+    },
+    {
       "name": "simba.jdbc.enabled",
       "type": "java.lang.Boolean",
       "description": "Whether the JDBC backend is enabled.",
@@ -69,6 +75,25 @@
       "description": "Whether the Zookeeper backend is enabled.",
       "sourceType": "me.ahoo.simba.spring.boot.starter.zookeeper.ZookeeperProperties",
       "defaultValue": true
+    }
+  ],
+  "hints": [
+    {
+      "name": "simba.backend",
+      "values": [
+        {
+          "value": "jdbc",
+          "description": "JDBC (MySQL) backend."
+        },
+        {
+          "value": "redis",
+          "description": "Spring Data Redis backend."
+        },
+        {
+          "value": "zookeeper",
+          "description": "Zookeeper (Curator LeaderLatch) backend."
+        }
+      ]
     }
   ]
 }

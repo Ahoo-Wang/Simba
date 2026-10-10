@@ -37,6 +37,7 @@ import java.util.concurrent.Executor
 @AutoConfiguration(after = [DataRedisAutoConfiguration::class, SimbaAutoConfiguration::class])
 @ConditionalOnSimbaRedisEnabled
 @ConditionalOnClass(
+    SpringRedisMutexContendServiceFactory::class,
     StringRedisTemplate::class
 )
 @EnableConfigurationProperties(

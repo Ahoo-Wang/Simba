@@ -27,6 +27,7 @@ import java.util.concurrent.ForkJoinPool
 internal class SimbaAutoConfigurationTest {
     private val contextRunner = ApplicationContextRunner()
         .withConfiguration(AutoConfigurations.of(SimbaAutoConfiguration::class.java))
+        .withPropertyValues("simba.backend=zookeeper")
 
     @Test
     fun `provides a dedicated callback executor`() {

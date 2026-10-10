@@ -12,6 +12,7 @@
  */
 package me.ahoo.simba.spring.boot.starter.jdbc
 
+import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaBackend
 import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled
 import me.ahoo.simba.spring.boot.starter.EnabledSuffix
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
@@ -22,6 +23,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
  * @author ahoo wang
  */
 @ConditionalOnSimbaEnabled
+@ConditionalOnSimbaBackend("jdbc")
 @ConditionalOnProperty(value = [ConditionalOnSimbaJdbcEnabled.ENABLED_KEY], matchIfMissing = true, havingValue = "true")
 annotation class ConditionalOnSimbaJdbcEnabled {
     companion object {

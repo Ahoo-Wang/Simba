@@ -16,6 +16,8 @@ import me.ahoo.simba.core.ContendExecutors
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean
+import org.springframework.core.env.Environment
+import org.springframework.core.io.ResourceLoader
 import java.util.concurrent.ExecutorService
 
 /**
@@ -34,6 +36,30 @@ class SimbaAutoConfiguration {
     }
 
     /**
+     * Fails startup when the backend is ambiguous: several active backend modules and no `simba.backend`,
+     * or a `simba.backend` that names an unavailable backend.
+     */
+    @Bean
+    fun simbaBackendSelection(environment: Environment, resourceLoader: ResourceLoader): SimbaBackendSelection {
+        // The context class loader, as used by @ConditionalOnClass on the backend auto-configurations.
+        val classLoader = resourceLoader.classLoader
+        val active = SimbaBackend.entries.filter { it.isActive(environment, classLoader) }.map { it.id }
+        val selected = SimbaBackend.selected(environment)
+        if (selected == null) {
+            check(active.size <= 1) {
+                "Multiple Simba backends are active $active; set ${SimbaBackend.KEY} to one of them, " +
+                    "or disable the others with simba.<backend>.enabled=false."
+            }
+            return SimbaBackendSelection(active.singleOrNull())
+        }
+        val backend = active.firstOrNull { it.equals(selected, ignoreCase = true) }
+        checkNotNull(backend) {
+            "${SimbaBackend.KEY}=$selected is not an active Simba backend; active backends: $active."
+        }
+        return SimbaBackendSelection(backend)
+    }
+
+    /**
      * Dedicated daemon executor, so blocking callbacks cannot starve `ForkJoinPool.commonPool()`.
      */
     @Bean(name = [HANDLE_EXECUTOR_BEAN_NAME], destroyMethod = "shutdown")
@@ -42,3 +68,10 @@ class SimbaAutoConfiguration {
         return ContendExecutors.newCallbackExecutor("simba-callback")
     }
 }
+
+/**
+ * The backend the starter configures, `null` when no backend module is active.
+ *
+ * @author ahoo wang
+ */
+data class SimbaBackendSelection(val backend: String?)

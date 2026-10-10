@@ -27,6 +27,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner
  */
 internal class SimbaZookeeperAutoConfigurationTest {
     private val contextRunner = ApplicationContextRunner()
+        .withPropertyValues("simba.backend=zookeeper")
 
     @Test
     fun contextLoads() {

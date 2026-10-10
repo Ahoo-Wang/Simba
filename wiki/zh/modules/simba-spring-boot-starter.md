@@ -271,6 +271,7 @@ simba:
 | 属性 | 来源类 | 默认值 |
 |---|---|---|
 | `simba.enabled` | `ConditionalOnSimbaEnabled` | `true` |
+| `simba.backend` | `SimbaBackend` | — |
 | `simba.jdbc.enabled` | `JdbcProperties` | `true` |
 | `simba.jdbc.initial-delay` | `JdbcProperties` | `0s` |
 | `simba.jdbc.ttl` | `JdbcProperties` | `10s` |
@@ -386,19 +387,19 @@ simba:
     enabled: false
 ```
 
-### 仅启用一个后端
+### 选择后端
+
+每个后端的自动配置还要求 `simba.backend` 未设置或指向它自己。当有多个后端模块处于活跃状态（在 classpath 上且未被禁用）时，必须设置 `simba.backend`；否则启动会失败，并列出所有活跃的后端，而不是取决于自动配置的加载顺序。
 
 ```yaml
 simba:
-  jdbc:
-    enabled: false
+  backend: redis
   redis:
-    enabled: true
     ttl: 15s
     transition: 8s
-  zookeeper:
-    enabled: false
 ```
+
+禁用其他后端（`simba.<backend>.enabled=false`）同样可以消除歧义。
 
 ## 另请参阅
 

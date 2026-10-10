@@ -29,6 +29,7 @@ import javax.sql.DataSource
  */
 internal class SimbaJdbcAutoConfigurationTest {
     private val contextRunner = ApplicationContextRunner()
+        .withPropertyValues("simba.backend=jdbc")
 
     @Test
     fun contextLoads() {
@@ -81,7 +82,7 @@ internal class SimbaJdbcAutoConfigurationTest {
     fun contextLoadsWithDisable() {
         contextRunner
             .withBean(DataSource::class.java, { mockk() })
-            .withPropertyValues("simba.jdbc.enabled=false")
+            .withPropertyValues("simba.jdbc.enabled=false", "simba.backend=redis")
             .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
             .run {
                 assertThat(it)

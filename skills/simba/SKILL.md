@@ -239,7 +239,7 @@ simba:
     enabled: true                  # enable Zookeeper backend (default: true)
 ```
 
-Enable exactly one backend per application. The auto-configurations define no supported cross-backend precedence: with multiple backend modules, one factory may silently back off or Spring may expose multiple `MutexContendServiceFactory` beans. Disable unused backends instead of relying on evaluation order; use `@Primary` or `@Qualifier` only when multiple factories are intentional.
+Use one backend per application. With a single backend module nothing else is needed; with several active modules set `simba.backend: jdbc|redis|zookeeper` (or disable the others with `simba.<backend>.enabled: false`), otherwise startup fails listing the active backends.
 
 ### TTL and Transition Tuning
 
@@ -272,7 +272,7 @@ For tests, use the `simba-testing` skill. In short:
 
 1. **Forgetting to stop the service**: Always call `stop()` or `close()` — otherwise the contender keeps polling/subscribing and may hold the lock.
 2. **Blocking callbacks**: Long-running callbacks delay later notifications for that service. Queued callbacks occupy a shared worker with the default executor or block the producer with a direct executor; release callbacks can delay `stop()` regardless of which thread executes them.
-3. **Multiple backends enabled**: The result depends on condition evaluation and inferred bean return types; a backend may silently win or multiple factories may be registered. Enable exactly one backend unless ambiguity is intentional.
+3. **Multiple backends active**: Startup fails until `simba.backend` names one of them or the others are disabled.
 4. **Clock skew with JDBC**: The JDBC backend uses DB server time (`MutexOwner.observedAt` from `current_timestamp(3)`) to avoid clock skew across application nodes. Ensure all nodes point to the same DB.
-5. **Redis release vs expiration**: Explicit release wakes the oldest queued contender through its personal Pub/Sub channel. Natural key expiration publishes nothing; contenders retry on their existing schedule around hard expiry.
+5. **Redis release vs expiration**: Explicit release broadcasts `released` on the mutex channel, so every live contender contends immediately. Natural key expiration publishes nothing; contenders retry on their existing schedule around hard expiry.
 6. **Zookeeper path conflicts**: The Zookeeper backend creates paths at `/simba/{mutex}`. Don't use the same mutex name for unrelated locks.

@@ -16,6 +16,7 @@ description: Simba 配置的完整参考 -- Spring Boot 属性、编程式工厂
 | 属性 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `simba.enabled` | `Boolean` | `true` | 所有 Simba 自动配置的主开关。 |
+| `simba.backend` | `String` | — | `jdbc`、`redis` 或 `zookeeper`。当有多个后端模块处于活跃状态时必须设置，否则启动失败。 |
 
 ### JDBC 后端
 

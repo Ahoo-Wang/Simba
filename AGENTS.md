@@ -105,8 +105,9 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
   and all three scripts together; keep mixed-version nodes working or document the upgrade order.
 - **JDBC SQL / schema:** only compatible widening without asking; update the init script, README/wiki schema
   snippets, and consider DB time vs JVM time.
-- **Starter:** each backend activates on `simba.enabled` and `simba.<backend>.enabled` (both default `true`) plus
-  its bean conditions. Keep `META-INF/spring/...AutoConfiguration.imports` and
+- **Starter:** each backend activates on `simba.enabled`, `simba.<backend>.enabled` (both default `true`) and
+  `simba.backend` (unset or naming it), plus its bean conditions; `SimbaAutoConfiguration` fails startup when several
+  backends are active without `simba.backend`. Keep `META-INF/spring/...AutoConfiguration.imports` and
   `additional-spring-configuration-metadata.json` in sync with properties.
 
 ## Code Conventions
