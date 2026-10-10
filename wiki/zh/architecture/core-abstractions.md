@@ -27,8 +27,6 @@ description: 深入了解 Simba 的核心接口和值对象 — MutexOwner、Mut
 - **`hasOwner()`** — 当 `transitionAt >= currentTimeMillis()` 时返回 `true`，表示存在活跃的领导者（即使 TTL 已过期，过渡窗口仍算作"已拥有"）。
 - **`isOwner(contenderId)`** — 检查给定的竞争者 ID 是否与 `ownerId` 匹配。
 
-该类使用 Guava 的 `@Immutable` 注解（[第 22 行](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt#L22)）。
-
 **NONE 哨兵值：** 伴生对象提供了 `MutexOwner.NONE`（[第 85 行](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt#L85)），这是一个 `ownerId = ""`、`acquiredAt = 0`、`ttlAt = 0`、`transitionAt = 0` 的单例。它表示不存在任何所有者，用作初始和终止状态。
 
 ```mermaid

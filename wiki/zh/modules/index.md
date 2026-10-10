@@ -70,7 +70,7 @@ graph TB
 
 | 模块 | 职责 | 关键类型 | 依赖 |
 |---|---|---|---|
-| **simba-core** | 核心接口、抽象类、值对象 | `MutexContender`、`MutexContendService`、`SimbaLocker`、`AbstractScheduler` | kotlin-logging、cosid-core、guava |
+| **simba-core** | 核心接口、抽象类、值对象 | `MutexContender`、`MutexContendService`、`SimbaLocker`、`AbstractScheduler` | kotlin-logging |
 | **simba-jdbc** | JDBC/MySQL 后端，使用原子条件更新 | `JdbcMutexContendService`、`JdbcMutexOwnerRepository` | simba-core、JDBC 驱动 |
 | **simba-spring-redis** | Redis 后端，使用 Lua 脚本和发布/订阅 | `SpringRedisMutexContendService`、Lua 脚本 | simba-core、spring-data-redis |
 | **simba-zookeeper** | Zookeeper 后端，使用 Curator LeaderLatch | `ZookeeperMutexContendService` | simba-core、curator-recipes |

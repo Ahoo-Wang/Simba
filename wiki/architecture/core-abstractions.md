@@ -31,8 +31,6 @@ Key derived properties and methods:
 - **`hasOwner()`** — returns `true` when `transitionAt >= currentTimeMillis()`, indicating that an active leader exists (even if TTL has expired, the transition window still counts as "owned").
 - **`isOwner(contenderId)`** — checks whether the given contender ID matches `ownerId`.
 
-The class is annotated with Guava's `@Immutable` ([line 22](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt#L22)).
-
 **NONE sentinel:** The companion object provides `MutexOwner.NONE` ([line 85](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt#L85)),
 a singleton with `ownerId = ""`, `acquiredAt = 0`, `ttlAt = 0`, `transitionAt = 0`. This
 represents the absence of any owner and is used as the initial and terminal state.

@@ -124,7 +124,7 @@ graph TB
 |---|---|---|---|
 | `SimbaException` | 开放类 | `me.ahoo.simba` | Simba 错误的根异常类型 |
 | `Simba` | 对象 | `me.ahoo.simba` | 品牌常量：`SIMBA = "simba"`、`SIMBA_PREFIX = "simba."` |
-| `Threads` | 对象 | `me.ahoo.simba.util` | `defaultFactory(domain)` 通过 Guava 构建命名的 `ThreadFactory` |
+| `Threads` | 对象 | `me.ahoo.simba.util` | `defaultFactory(domain)` 构建命名的 `ThreadFactory` |
 
 ## 竞争协议概览
 

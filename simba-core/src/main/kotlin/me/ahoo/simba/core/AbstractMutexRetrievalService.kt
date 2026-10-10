@@ -12,9 +12,9 @@
  */
 package me.ahoo.simba.core
 
-import com.google.common.util.concurrent.MoreExecutors
 import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.core.MutexRetrievalService.Status
+import me.ahoo.simba.util.SequentialExecutor
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicLong
@@ -53,7 +53,7 @@ abstract class AbstractMutexRetrievalService protected constructor(
      * owner and dispatch duplicate owner-change events for one transition.
      */
     private val notifyLock = Any()
-    private val notifyExecutor = MoreExecutors.newSequentialExecutor(handleExecutor)
+    private val notifyExecutor = SequentialExecutor(handleExecutor)
     private val lifecycleGeneration = AtomicLong()
 
     /**

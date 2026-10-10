@@ -70,7 +70,7 @@ graph TB
 
 | Module | Role | Key Types | Dependencies |
 |---|---|---|---|
-| **simba-core** | Core interfaces, abstract classes, value objects | `MutexContender`, `MutexContendService`, `SimbaLocker`, `AbstractScheduler` | kotlin-logging, cosid-core, guava |
+| **simba-core** | Core interfaces, abstract classes, value objects | `MutexContender`, `MutexContendService`, `SimbaLocker`, `AbstractScheduler` | kotlin-logging |
 | **simba-jdbc** | JDBC/MySQL backend with atomic conditional updates | `JdbcMutexContendService`, `JdbcMutexOwnerRepository` | simba-core, JDBC driver |
 | **simba-spring-redis** | Redis backend with Lua scripts and pub/sub | `SpringRedisMutexContendService`, Lua scripts | simba-core, spring-data-redis |
 | **simba-zookeeper** | Zookeeper backend using Curator LeaderLatch | `ZookeeperMutexContendService` | simba-core, curator-recipes |

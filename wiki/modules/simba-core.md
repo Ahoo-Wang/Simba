@@ -185,7 +185,7 @@ The jitter range (`-200ms` to `+1000ms`) prevents thundering herd among contende
 
 | Strategy | Format | Source |
 |---|---|---|
-| `HOST` (default) | `{counter}:{pid}@{host}` | `HostContenderIdGenerator` -- uses `cosid-core` for host address and `ProcessId` |
+| `HOST` (default) | `{counter}:{pid}@{host}` | `HostContenderIdGenerator` -- JDK `ProcessHandle` for the pid and the last IPv4 non-loopback interface address for the host |
 | `UUID` | UUID without hyphens | `UUIDContenderIdGenerator` |
 
 The `HOST` strategy is human-readable and aids debugging. Example: `0:12345@192.168.1.100`.
@@ -216,8 +216,6 @@ graph LR
     subgraph sg_39 ["External Dependencies"]
 
         KL["kotlin-logging-jvm"]
-        COSID["cosid-core"]
-        GUAVA["guava"]
     end
     subgraph sg_40 ["simba-core"]
 
@@ -225,20 +223,14 @@ graph LR
     end
 
     CORE --> KL
-    CORE --> COSID
-    CORE --> GUAVA
 
     style KL fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style COSID fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style GUAVA fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style CORE fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 
 | Dependency | Usage |
 |---|---|
 | `kotlin-logging-jvm` | Logging throughout abstract classes (`KotlinLogging.logger`) |
-| `cosid-core` | `LocalHostAddressSupplier` and `ProcessId` for `HostContenderIdGenerator` |
-| `guava` | `ThreadFactoryBuilder` in `Threads.defaultFactory`, `@Immutable` annotation on `MutexOwner` |
 
 ## Exception Hierarchy
 

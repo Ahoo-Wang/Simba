@@ -12,14 +12,11 @@
  */
 package me.ahoo.simba.core
 
-import com.google.errorprone.annotations.Immutable
-
 /**
  * Mutex Owner.
  *
  * @author ahoo wang
  */
-@Immutable
 open class MutexOwner @JvmOverloads constructor(
     /**
      * 持有者Id.

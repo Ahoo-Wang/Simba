@@ -185,7 +185,7 @@ graph LR
 
 | 策略 | 格式 | 来源 |
 |---|---|---|
-| `HOST`（默认） | `{counter}:{pid}@{host}` | `HostContenderIdGenerator` -- 使用 `cosid-core` 获取主机地址和 `ProcessId` |
+| `HOST`（默认） | `{counter}:{pid}@{host}` | `HostContenderIdGenerator` -- 使用 JDK `ProcessHandle` 获取 pid，主机地址取最后一个 IPv4 非回环网卡地址 |
 | `UUID` | 不带连字符的 UUID | `UUIDContenderIdGenerator` |
 
 `HOST` 策略人类可读，便于调试。示例：`0:12345@192.168.1.100`。
@@ -216,8 +216,6 @@ graph LR
     subgraph sg_97 ["External Dependencies"]
 
         KL["kotlin-logging-jvm"]
-        COSID["cosid-core"]
-        GUAVA["guava"]
     end
     subgraph sg_98 ["simba-core"]
 
@@ -225,20 +223,14 @@ graph LR
     end
 
     CORE --> KL
-    CORE --> COSID
-    CORE --> GUAVA
 
     style KL fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style COSID fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style GUAVA fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style CORE fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 
 | 依赖 | 用途 |
 |---|---|
 | `kotlin-logging-jvm` | 抽象类中的日志记录（`KotlinLogging.logger`） |
-| `cosid-core` | `HostContenderIdGenerator` 使用的 `LocalHostAddressSupplier` 和 `ProcessId` |
-| `guava` | `Threads.defaultFactory` 中的 `ThreadFactoryBuilder`、`MutexOwner` 上的 `@Immutable` 注解 |
 
 ## 异常层次结构
 
