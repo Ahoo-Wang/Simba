@@ -23,6 +23,12 @@
       "description": "engines declares the minimum supported runtime; raising it would exclude users, so never bump it automatically",
       "matchDepTypes": ["engines"],
       "enabled": false
+    },
+    {
+      "description": "Wiki majors (VitePress pins vite ^5, mermaid 12 needs a deliberate migration) wait for approval on the Dependency Dashboard",
+      "matchFileNames": ["wiki/**"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
     }
   ]
 }
