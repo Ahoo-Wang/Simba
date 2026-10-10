@@ -271,6 +271,14 @@ abstract class MutexContendServiceSpec {
     open fun observer() {
         val events = LinkedBlockingQueue<String>()
         val observer = object : ContendObserver {
+            override fun onStarted(service: MutexContendService) {
+                events.add("started:${service.mutex}")
+            }
+
+            override fun onStopped(service: MutexContendService) {
+                events.add("stopped:${service.mutex}")
+            }
+
             override fun onContend(mutex: String, renew: Boolean, durationNanos: Long, outcome: ContendOutcome) {
                 events.add("contend:$outcome")
             }
@@ -299,8 +307,11 @@ abstract class MutexContendServiceSpec {
             contendService.stop()
 
             val recorded = events.toList()
-            recorded.filter { !it.startsWith("contend:") }.assert()
+            // An acquisition may be reported before start() returns, so only the order of each pair is fixed.
+            recorded.filter { it.startsWith("acquired:") || it.startsWith("released:") }.assert()
                 .containsExactly("acquired:$OBSERVER_MUTEX", "released:$OBSERVER_MUTEX")
+            recorded.filter { it.startsWith("started:") }.assert().containsExactly("started:$OBSERVER_MUTEX")
+            recorded.last().assert().isEqualTo("stopped:$OBSERVER_MUTEX")
             if (reportsContention) {
                 recorded.assert().contains("contend:${ContendOutcome.OWNER}")
             } else {

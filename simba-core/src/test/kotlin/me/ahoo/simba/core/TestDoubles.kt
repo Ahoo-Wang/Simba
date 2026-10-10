@@ -116,6 +116,10 @@ class RecordingObserver(private val failing: Boolean = false) : ContendObserver 
         record("contend:$mutex:${if (renew) "renew" else "acquire"}:$outcome")
     }
 
+    override fun onStarted(service: MutexContendService) = record("started:${service.mutex}")
+
+    override fun onStopped(service: MutexContendService) = record("stopped:${service.mutex}")
+
     override fun onAcquired(mutex: String) = record("acquired:$mutex")
 
     override fun onReleased(mutex: String) = record("released:$mutex")

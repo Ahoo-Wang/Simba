@@ -33,6 +33,27 @@ class AbstractMutexRetrievalServiceTest {
     }
 
     @Test
+    fun `a retrieval service without lifecycle hooks starts and stops`() {
+        val calls = mutableListOf<String>()
+        val service = object : AbstractMutexRetrievalService(FakeMutexContender("m", "c1"), SameThreadExecutor) {
+            override fun startRetrieval() {
+                calls += "start"
+            }
+
+            override fun stopRetrieval() {
+                calls += "stop"
+            }
+        }
+
+        service.start()
+        service.status.assert().isEqualTo(MutexRetrievalService.Status.RUNNING)
+        service.stop()
+
+        service.status.assert().isEqualTo(MutexRetrievalService.Status.INITIAL)
+        calls.assert().containsExactly("start", "stop")
+    }
+
+    @Test
     fun `start transitions INITIAL to RUNNING and calls startContend`() {
         val service = newService()
 

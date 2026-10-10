@@ -14,6 +14,7 @@ package me.ahoo.simba.spring.boot.starter
 
 import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.ContendOutcome
+import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.WorkOutcome
 import org.springframework.beans.factory.ObjectProvider
 
@@ -48,6 +49,10 @@ internal class CompositeContendObserver(private val observers: List<ContendObser
         }
         failure?.let { throw it }
     }
+
+    override fun onStarted(service: MutexContendService) = each { it.onStarted(service) }
+
+    override fun onStopped(service: MutexContendService) = each { it.onStopped(service) }
 
     override fun onContend(mutex: String, renew: Boolean, durationNanos: Long, outcome: ContendOutcome) =
         each { it.onContend(mutex, renew, durationNanos, outcome) }

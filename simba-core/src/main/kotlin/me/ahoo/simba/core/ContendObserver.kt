@@ -23,6 +23,16 @@ package me.ahoo.simba.core
  */
 interface ContendObserver {
     /**
+     * [service] started contending (its `start()` succeeded); e.g. to track the services of this process.
+     */
+    fun onStarted(service: MutexContendService) = Unit
+
+    /**
+     * [service] stopped, after its release was delivered.
+     */
+    fun onStopped(service: MutexContendService) = Unit
+
+    /**
      * A contention round trip to the backend: acquiring when [renew] is `false`, renewing a held lease otherwise.
      */
     fun onContend(mutex: String, renew: Boolean, durationNanos: Long, outcome: ContendOutcome) = Unit
