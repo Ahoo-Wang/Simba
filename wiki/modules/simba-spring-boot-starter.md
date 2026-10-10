@@ -273,6 +273,7 @@ simba:
 | Property | Source Class | Default |
 |---|---|---|
 | `simba.enabled` | `ConditionalOnSimbaEnabled` | `true` |
+| `simba.backend` | `SimbaBackend` | — |
 | `simba.jdbc.enabled` | `JdbcProperties` | `true` |
 | `simba.jdbc.initial-delay` | `JdbcProperties` | `0s` |
 | `simba.jdbc.ttl` | `JdbcProperties` | `10s` |
@@ -388,19 +389,21 @@ simba:
     enabled: false
 ```
 
-### Enable Only One Backend
+### Select the Backend
+
+Each backend auto-configuration also requires `simba.backend` to be unset or to name it. When more than one backend
+module is active (on the classpath and not disabled), set `simba.backend`; otherwise startup fails with a message
+listing the active backends, instead of depending on auto-configuration order.
 
 ```yaml
 simba:
-  jdbc:
-    enabled: false
+  backend: redis
   redis:
-    enabled: true
     ttl: 15s
     transition: 8s
-  zookeeper:
-    enabled: false
 ```
+
+Disabling the other backends (`simba.<backend>.enabled=false`) also resolves the ambiguity.
 
 ## See Also
 

@@ -12,6 +12,7 @@
  */
 package me.ahoo.simba.spring.boot.starter.redis
 
+import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaBackend
 import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled
 import me.ahoo.simba.spring.boot.starter.EnabledSuffix
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
@@ -22,6 +23,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
  * @author ahoo wang
  */
 @ConditionalOnSimbaEnabled
+@ConditionalOnSimbaBackend("redis")
 @ConditionalOnProperty(
     value = [ConditionalOnSimbaRedisEnabled.ENABLED_KEY],
     matchIfMissing = true,

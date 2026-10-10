@@ -27,6 +27,7 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer
  */
 internal class SimbaSpringRedisAutoConfigurationTest {
     private val contextRunner = ApplicationContextRunner()
+        .withPropertyValues("simba.backend=redis")
 
     @Test
     fun contextLoads() {

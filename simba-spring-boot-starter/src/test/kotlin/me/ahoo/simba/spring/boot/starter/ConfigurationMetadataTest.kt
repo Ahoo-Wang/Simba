@@ -13,9 +13,9 @@
 package me.ahoo.simba.spring.boot.starter
 
 import org.hamcrest.MatcherAssert.assertThat
-import org.hamcrest.Matchers.allOf
 import org.hamcrest.Matchers.containsInAnyOrder
 import org.hamcrest.Matchers.containsString
+import org.hamcrest.Matchers.not
 import org.junit.jupiter.api.Test
 
 class ConfigurationMetadataTest {
@@ -32,20 +32,21 @@ class ConfigurationMetadataTest {
             containsInAnyOrder(*EXPECTED_PROPERTIES.map { it.first }.toTypedArray())
         )
         EXPECTED_PROPERTIES.forEach { (name, type, defaultValue) ->
-            assertThat(
-                propertyItems.getValue(name),
-                allOf(
-                    containsString("\"type\": \"$type\""),
-                    containsString("\"defaultValue\": $defaultValue")
-                )
-            )
+            val item = propertyItems.getValue(name)
+            assertThat(item, containsString("\"type\": \"$type\""))
+            if (defaultValue == null) {
+                assertThat(item, not(containsString("\"defaultValue\"")))
+            } else {
+                assertThat(item, containsString("\"defaultValue\": $defaultValue"))
+            }
         }
     }
 
     companion object {
         private val PROPERTY = Regex("""\{[^{}]*"name"\s*:\s*"([^"]+)"[^{}]*}""")
-        private val EXPECTED_PROPERTIES = listOf(
+        private val EXPECTED_PROPERTIES: List<Triple<String, String, String?>> = listOf(
             Triple("simba.enabled", "java.lang.Boolean", "true"),
+            Triple<String, String, String?>("simba.backend", "java.lang.String", null),
             Triple("simba.jdbc.enabled", "java.lang.Boolean", "true"),
             Triple("simba.jdbc.initial-delay", "java.time.Duration", "\"0s\""),
             Triple("simba.jdbc.ttl", "java.time.Duration", "\"10s\""),

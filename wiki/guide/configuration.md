@@ -16,6 +16,7 @@ All properties are prefixed with `simba.`. The starter auto-configures the corre
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `simba.enabled` | `Boolean` | `true` | Master switch for all Simba auto-configuration. |
+| `simba.backend` | `String` | — | `jdbc`, `redis` or `zookeeper`. Required when more than one backend module is active; startup fails otherwise. |
 
 ### JDBC Backend
 
