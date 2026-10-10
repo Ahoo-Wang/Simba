@@ -225,7 +225,9 @@ abstract class MutexContendServiceSpec {
         testScheduler.running.assert().isFalse()
         testScheduler.start()
         testScheduler.running.assert().isTrue()
-        countDownLatch.await(5, TimeUnit.SECONDS).assert().isTrue()
+        // A failure detector, not a performance bound: backends wait their initialDelay before contending, and
+        // shared CI runners add latency. await() returns as soon as work() runs.
+        countDownLatch.await(30, TimeUnit.SECONDS).assert().isTrue()
         testScheduler.stop()
         testScheduler.running.assert().isFalse()
     }

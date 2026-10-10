@@ -36,6 +36,14 @@ jobs:
       - name: Test Simba-Core
         run: ./gradlew simba-core:clean simba-core:check
 
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-reports-core
+          path: '**/build/reports/tests/'
+          retention-days: 7
+
   simba-example-test:
     name: Simba Example (${{ matrix.backend }})
     needs: [ simba-core-test ]
@@ -59,6 +67,14 @@ jobs:
       - name: Test Simba-Example
         run: ./gradlew simba-example:clean simba-example:check -PexampleBackend=${{ matrix.backend }}
 
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-reports-example-${{ matrix.backend }}
+          path: '**/build/reports/tests/'
+          retention-days: 7
+
   simba-spring-redis-test:
     name: Simba Spring Redis Test
     needs: [ simba-core-test ]
@@ -79,6 +95,14 @@ jobs:
       - name: Test Simba-Spring-Redis
         run: ./gradlew simba-spring-redis:clean simba-spring-redis:check
 
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-reports-redis
+          path: '**/build/reports/tests/'
+          retention-days: 7
+
   simba-zookeeper-test:
     name: Simba Zookeeper Test
     needs: [ simba-core-test ]
@@ -97,6 +121,14 @@ jobs:
 
       - name: Test Simba-Zookeeper
         run: ./gradlew simba-zookeeper:clean simba-zookeeper:check
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-reports-zookeeper
+          path: '**/build/reports/tests/'
+          retention-days: 7
 
   simba-jdbc-test:
     name: Simba Jdbc Test
@@ -117,3 +149,11 @@ jobs:
 
       - name: Test Simba-Jdbc
         run: ./gradlew simba-jdbc:clean simba-jdbc:check
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-reports-jdbc
+          path: '**/build/reports/tests/'
+          retention-days: 7
