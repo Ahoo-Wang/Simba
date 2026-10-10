@@ -124,7 +124,7 @@ graph TB
 |---|---|---|---|
 | `SimbaException` | Open Class | `me.ahoo.simba` | Root exception type for Simba errors |
 | `Simba` | Object | `me.ahoo.simba` | Brand constants: `SIMBA = "simba"`, `SIMBA_PREFIX = "simba."` |
-| `Threads` | Object | `me.ahoo.simba.util` | `defaultFactory(domain)` builds a named `ThreadFactory` via Guava |
+| `Threads` | Object | `me.ahoo.simba.util` | `defaultFactory(domain)` builds a named `ThreadFactory` |
 
 ## Contention Protocol Overview
 

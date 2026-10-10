@@ -29,7 +29,7 @@ checks and the `simba-example` backend matrix. Wiki commands: see `wiki/AGENTS.m
 ## Modules
 
 `simba-core` ← `simba-jdbc` / `simba-spring-redis` / `simba-zookeeper` ← `simba-spring-boot-starter`.
-`simba-core` must not know any backend; backend-specific behavior stays in its module. `simba-test` is the
+`simba-core` must not know any backend and depends only on kotlin-logging; backend-specific behavior stays in its module. `simba-test` is the
 backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are publication metadata.
 
 ## Core Invariants

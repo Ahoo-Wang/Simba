@@ -12,8 +12,8 @@
  */
 package me.ahoo.simba.util
 
-import com.google.common.util.concurrent.ThreadFactoryBuilder
 import java.util.concurrent.ThreadFactory
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Threads tool.
@@ -24,10 +24,9 @@ object Threads {
     @JvmStatic
     @JvmOverloads
     fun defaultFactory(domain: String, daemon: Boolean = false): ThreadFactory {
-        val nameFormat = "$domain-%d"
-        return ThreadFactoryBuilder()
-            .setDaemon(daemon)
-            .setNameFormat(nameFormat)
-            .build()
+        val counter = AtomicInteger()
+        return ThreadFactory { runnable ->
+            Thread(runnable, "$domain-${counter.getAndIncrement()}").also { it.isDaemon = daemon }
+        }
     }
 }

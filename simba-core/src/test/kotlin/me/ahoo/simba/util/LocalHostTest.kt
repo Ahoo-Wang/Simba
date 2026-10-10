@@ -10,16 +10,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package me.ahoo.simba.util
 
-dependencies {
-    api(platform(libs.spring.boot.dependencies))
-    api(platform(libs.spring.cloud.dependencies))
-    api(platform(libs.testcontainers.bom))
-    constraints {
-        api(libs.commons.io)
-        api(libs.kotlin.logging)
-        api(libs.hamcrest)
-        api(libs.mockk)
-        api(libs.detekt.formatting)
+import me.ahoo.test.asserts.assert
+import org.junit.jupiter.api.Test
+import java.net.InetAddress
+
+class LocalHostTest {
+    @Test
+    fun `host address is a resolvable IP literal`() {
+        val address = LocalHost.hostAddress
+
+        address.assert().isNotBlank()
+        InetAddress.getByName(address).hostAddress.assert().isEqualTo(address)
     }
 }

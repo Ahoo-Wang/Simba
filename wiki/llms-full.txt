@@ -3002,8 +3002,6 @@ Key derived properties and methods:
 - **`hasOwner()`** — returns `true` when `transitionAt >= currentTimeMillis()`, indicating that an active leader exists (even if TTL has expired, the transition window still counts as "owned").
 - **`isOwner(contenderId)`** — checks whether the given contender ID matches `ownerId`.
 
-The class is annotated with Guava's `@Immutable` ([line 22](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt#L22)).
-
 **NONE sentinel:** The companion object provides `MutexOwner.NONE` ([line 85](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt#L85)),
 a singleton with `ownerId = ""`, `acquiredAt = 0`, `ttlAt = 0`, `transitionAt = 0`. This
 represents the absence of any owner and is used as the initial and terminal state.
@@ -5565,7 +5563,7 @@ graph TB
 |---|---|---|---|
 | `SimbaException` | Open Class | `me.ahoo.simba` | Root exception type for Simba errors |
 | `Simba` | Object | `me.ahoo.simba` | Brand constants: `SIMBA = "simba"`, `SIMBA_PREFIX = "simba."` |
-| `Threads` | Object | `me.ahoo.simba.util` | `defaultFactory(domain)` builds a named `ThreadFactory` via Guava |
+| `Threads` | Object | `me.ahoo.simba.util` | `defaultFactory(domain)` builds a named `ThreadFactory` |
 
 ## Contention Protocol Overview
 
@@ -6800,7 +6798,7 @@ graph TB
 
 | Module | Role | Key Types | Dependencies |
 |---|---|---|---|
-| **simba-core** | Core interfaces, abstract classes, value objects | `MutexContender`, `MutexContendService`, `SimbaLocker`, `AbstractScheduler` | kotlin-logging, cosid-core, guava |
+| **simba-core** | Core interfaces, abstract classes, value objects | `MutexContender`, `MutexContendService`, `SimbaLocker`, `AbstractScheduler` | kotlin-logging |
 | **simba-jdbc** | JDBC/MySQL backend with atomic conditional updates | `JdbcMutexContendService`, `JdbcMutexOwnerRepository` | simba-core, JDBC driver |
 | **simba-spring-redis** | Redis backend with Lua scripts and pub/sub | `SpringRedisMutexContendService`, Lua scripts | simba-core, spring-data-redis |
 | **simba-zookeeper** | Zookeeper backend using Curator LeaderLatch | `ZookeeperMutexContendService` | simba-core, curator-recipes |
@@ -7066,7 +7064,7 @@ The jitter range (`-200ms` to `+1000ms`) prevents thundering herd among contende
 
 | Strategy | Format | Source |
 |---|---|---|
-| `HOST` (default) | `{counter}:{pid}@{host}` | `HostContenderIdGenerator` -- uses `cosid-core` for host address and `ProcessId` |
+| `HOST` (default) | `{counter}:{pid}@{host}` | `HostContenderIdGenerator` -- JDK `ProcessHandle` for the pid and the last IPv4 non-loopback interface address for the host |
 | `UUID` | UUID without hyphens | `UUIDContenderIdGenerator` |
 
 The `HOST` strategy is human-readable and aids debugging. Example: `0:12345@192.168.1.100`.
@@ -7097,8 +7095,6 @@ graph LR
     subgraph sg_39 ["External Dependencies"]
 
         KL["kotlin-logging-jvm"]
-        COSID["cosid-core"]
-        GUAVA["guava"]
     end
     subgraph sg_40 ["simba-core"]
 
@@ -7106,20 +7102,14 @@ graph LR
     end
 
     CORE --> KL
-    CORE --> COSID
-    CORE --> GUAVA
 
     style KL fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style COSID fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style GUAVA fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style CORE fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 
 | Dependency | Usage |
 |---|---|
 | `kotlin-logging-jvm` | Logging throughout abstract classes (`KotlinLogging.logger`) |
-| `cosid-core` | `LocalHostAddressSupplier` and `ProcessId` for `HostContenderIdGenerator` |
-| `guava` | `ThreadFactoryBuilder` in `Threads.defaultFactory`, `@Immutable` annotation on `MutexOwner` |
 
 ## Exception Hierarchy
 
