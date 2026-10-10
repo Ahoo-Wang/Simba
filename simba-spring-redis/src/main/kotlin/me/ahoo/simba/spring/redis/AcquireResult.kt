@@ -41,25 +41,5 @@ data class AcquireResult @JvmOverloads constructor(
             val fencingToken = (reply[2] as Number).toLong()
             return AcquireResult(ownerId, System.currentTimeMillis() + remaining, fencingToken)
         }
-
-        /**
-         * build [AcquireResult] from resultStr.
-         *
-         * @param resultStr {ownerId}:{transitionAt}.
-         * @return AcquireResult
-         */
-        fun of(resultStr: String): AcquireResult {
-            if (OwnerEvent.DELIMITER == resultStr) {
-                return NONE
-            }
-            val msgs: Array<String> =
-                resultStr.split(OwnerEvent.DELIMITER.toRegex()).dropLastWhile { it.isEmpty() }
-                    .toTypedArray()
-            check(msgs.size == 2) { "Incorrect resultStr format:[$resultStr]" }
-            val ownerId = msgs[0]
-            val keyTtl = msgs[1].toLong()
-            val transitionAt = System.currentTimeMillis() + keyTtl
-            return AcquireResult(ownerId, transitionAt)
-        }
     }
 }

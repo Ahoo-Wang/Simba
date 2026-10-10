@@ -51,7 +51,7 @@ internal class SpringRedisMutexLeaseStore(private val redisTemplate: StringRedis
         val keys = RedisMutexKeys(mutex)
         return redisTemplate.execute(
             SCRIPT_RELEASE,
-            listOf(keys.mutexKey, keys.legacyQueueKey, keys.tokenKey),
+            listOf(keys.mutexKey, keys.tokenKey),
             contenderId
         )
     }

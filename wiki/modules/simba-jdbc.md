@@ -71,25 +71,19 @@ Fencing is opt-in because it needs the `fencing_token` column: new installs get 
 
 ```kotlin
 interface MutexOwnerRepository {
-    fun initMutex(mutex: String): Boolean
-    fun tryInitMutex(mutex: String): Boolean
-    fun getOwner(mutex: String): MutexOwnerEntity
-    fun acquire(mutex: String, contenderId: String, ttl: Long, transition: Long): Boolean
     fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwnerEntity
     fun release(mutex: String, contenderId: String): Boolean
-    fun ensureOwner(mutex: String): MutexOwnerEntity
 }
 ```
 
+The interface holds exactly what the contention engine needs:
+
 | Method | Description |
 |---|---|
-| `initMutex` | Inserts the mutex row. Throws `SQLIntegrityConstraintViolationException` if already exists. |
-| `tryInitMutex` | Safe wrapper: returns `false` on any exception. |
-| `getOwner` | Reads the current owner. Throws `NotFoundMutexOwnerException` if the row does not exist. |
-| `acquire` | Attempts to acquire the mutex via `UPDATE ... WHERE`. Returns `true` if affected rows > 0. |
-| `acquireAndGetOwner` | Atomic transaction: acquires the mutex and reads back the full owner state. |
+| `acquireAndGetOwner` | Atomic transaction: acquires (or renews) the mutex, creating its row if missing, and reads back the full owner state. |
 | `release` | Releases the mutex by resetting the row. Only succeeds if `owner_id` matches. |
-| `ensureOwner` | Gets the owner, auto-initializing the row if it does not exist. |
+
+`JdbcMutexOwnerRepository` additionally offers `initMutex`, `tryInitMutex`, `getOwner`, `ensureOwner` and `acquire` for provisioning and inspection.
 
 ### JdbcMutexOwnerRepository
 

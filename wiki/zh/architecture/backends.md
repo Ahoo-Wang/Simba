@@ -169,24 +169,22 @@ return { ownerId, redis.call('pttl', mutexKey), tonumber(redis.call('get', token
 
 ```lua
 if redis.call('get', mutexKey) ~= contenderId then
-    redis.call('zrem', legacyQueueKey, contenderId)
     return 0;
 end
-redis.call('del', mutexKey, legacyQueueKey, tokenKey)
+redis.call('del', mutexKey, tokenKey)
 redis.call('publish', mutexKey, 'released@@' .. contenderId)
 return 1;
 ```
 
-所有存活的竞争者都会收到广播并立即竞争，只有一个能 `SET NX` 成功。与定向唤醒不同，释放通知不会因为某个竞争者崩溃而丢失。`legacyQueueKey`（`simba:{mutex}:contender`）只由 Simba < 3.2 写入，在这里被删除。
+所有存活的竞争者都会收到广播并立即竞争，只有一个能 `SET NX` 成功。与定向唤醒不同，释放通知不会因为某个竞争者崩溃而丢失。
 
 ### 发布/订阅频道
 
 | 频道 | 用途 |
 |---|---|
 | `simba:{mutex}` | 所有竞争者订阅，承载 `acquired@@{id}` 和 `released@@{id}`。 |
-| `simba:{mutex}:{contenderId}` | 为滚动升级保留：Simba < 3.2 的持有者会把释放消息发到这里。 |
 
-`{mutex}` 哈希标签让租约键和两个频道落在同一个 Redis Cluster 槽位。[`RedisMutexKeys`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/RedisMutexKeys.kt) 是 Kotlin 侧这些名称的唯一来源。
+`{mutex}` 哈希标签让租约键、fencing 相关键和频道落在同一个 Redis Cluster 槽位。[`RedisMutexKeys`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/RedisMutexKeys.kt) 是 Kotlin 侧这些名称的唯一来源。
 
 ### OwnerEvent 协议
 

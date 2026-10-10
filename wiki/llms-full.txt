@@ -344,7 +344,7 @@ flowchart TB
 
 - [`SpringRedisMutexContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendService.kt) uses atomic Lua scripts for lock operations
 - Pub/sub via `RedisMessageListenerContainer` provides real-time notifications when locks are released
-- Two channel types: global (`simba:{mutex}`) for ownership broadcasts, per-contender (`simba:{mutex}:{contenderId}`) for targeted messages
+- One channel per mutex (`simba:{mutex}`) broadcasting acquisitions and releases to every contender
 
 #### Zookeeper Backend
 
@@ -1434,7 +1434,7 @@ Services created by `JdbcMutexContendServiceFactory` share one trigger thread an
 
 Each mutex in Redis uses:
 - 1 string key (the mutex name -> owner ID, ~50 bytes)
-- Pub/sub subscriptions per contender: the mutex channel, plus the per-contender channel kept for rolling upgrades from Simba < 3.2
+- One pub/sub subscription per contender: the mutex channel
 
 For 100 mutexes with 10 contenders each, this is approximately 100KB of Redis memory -- negligible.
 
@@ -1665,7 +1665,7 @@ Zookeeper guarantees causal ordering of events within a session. The `LeaderLatc
 
 Redis pub/sub provides **at-most-once** delivery semantics. If a subscriber is disconnected when a message is published, it will not receive that message. Simba compensates for this:
 
-1. Each contender subscribes to both the global mutex channel and its own per-contender channel
+1. Each contender subscribes to the mutex channel, which carries every acquisition and release
 2. Even if a pub/sub message is missed, the scheduled contention cycle (via `ContendPeriod`) will detect the ownership change on the next poll
 3. The guard mechanism ensures the owner renews before TTL expiry regardless of pub/sub state
 
@@ -3166,17 +3166,6 @@ interface MutexContendService : MutexRetrievalService {
 
 ## Factory Interfaces
 
-### MutexRetrievalServiceFactory
-
-[`MutexRetrievalServiceFactory`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexRetrievalServiceFactory.kt)
-creates retrieval services (observation-only, no contention):
-
-```kotlin
-interface MutexRetrievalServiceFactory {
-    fun createMutexRetrievalService(retrievalListener: MutexRetriever): MutexRetrievalService
-}
-```
-
 ### MutexContendServiceFactory
 
 [`MutexContendServiceFactory`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexContendServiceFactory.kt)
@@ -3340,7 +3329,6 @@ flowchart TD
         MC["MutexContender"]
         MRS["MutexRetrievalService"]
         MCS["MutexContendService"]
-        MRSF["MutexRetrievalServiceFactory"]
         MCSF["MutexContendServiceFactory"]
         LOCKER["Locker"]
         CID["ContenderIdGenerator"]
@@ -3953,26 +3941,23 @@ releases only the caller's own lease and broadcasts the release:
 
 ```lua
 if redis.call('get', mutexKey) ~= contenderId then
-    redis.call('zrem', legacyQueueKey, contenderId)
     return 0;
 end
-redis.call('del', mutexKey, legacyQueueKey, tokenKey)
+redis.call('del', mutexKey, tokenKey)
 redis.call('publish', mutexKey, 'released@@' .. contenderId)
 return 1;
 ```
 
 Every live contender receives the broadcast and contends at once; exactly one wins the `SET NX`. Unlike a
-targeted wake-up, no release can be lost to a crashed contender. `legacyQueueKey` (`simba:{mutex}:contender`)
-is only written by Simba < 3.2 and is deleted here.
+targeted wake-up, no release can be lost to a crashed contender.
 
 ### Pub/Sub Channels
 
 | Channel | Purpose |
 |---|---|
 | `simba:{mutex}` | All contenders subscribe. Carries `acquired@@{id}` and `released@@{id}`. |
-| `simba:{mutex}:{contenderId}` | Kept for rolling upgrades: Simba < 3.2 owners address releases here. |
 
-The `{mutex}` hash tag keeps the lease key and both channels in one Redis Cluster slot.
+The `{mutex}` hash tag keeps the lease key, the fencing keys and the channel in one Redis Cluster slot.
 [`RedisMutexKeys`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/RedisMutexKeys.kt) is the
 single Kotlin source of these names.
 
@@ -5464,7 +5449,6 @@ graph TB
         MC["MutexContender"]
         MRS["MutexRetrievalService"]
         MCS["MutexContendService"]
-        MRF["MutexRetrievalServiceFactory"]
         MCF["MutexContendServiceFactory"]
         AMCS["AbstractMutexContendService"]
         AMC["AbstractMutexContender"]
@@ -5489,7 +5473,6 @@ graph TB
     AMRS -->|implements| MRS
     AMCS -->|implements| MCS
     MCF -->|creates| MCS
-    MRF -->|creates| MRS
     AMCS -->|uses| MO
     AMRS -->|produces| MS
     CP -->|uses| MO
@@ -5502,7 +5485,6 @@ graph TB
     style MC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MRS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MCS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style MRF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MCF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style AMCS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style AMC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
@@ -5523,7 +5505,6 @@ graph TB
 | [`MutexContender`](./core-interfaces#mutexcontender) | Interface | `me.ahoo.simba.core` | Extends `MutexRetriever` with `contenderId` and `onAcquired`/`onReleased` lifecycle |
 | [`MutexRetrievalService`](./core-interfaces#mutexretrievalservice) | Interface | `me.ahoo.simba.core` | Lifecycle-managed retrieval service with `start()`/`stop()` and status tracking |
 | [`MutexContendService`](./core-interfaces#mutexcontendservice) | Interface | `me.ahoo.simba.core` | Extends retrieval with contender-bound ownership queries (`isOwner`, `isInTtl`) |
-| [`MutexRetrievalServiceFactory`](./core-interfaces#mutexretrievalservicefactory) | Interface | `me.ahoo.simba.core` | Factory for creating `MutexRetrievalService` instances |
 | [`MutexContendServiceFactory`](./core-interfaces#mutexcontendservicefactory) | Interface | `me.ahoo.simba.core` | Factory for creating `MutexContendService` instances |
 
 ### Abstract Base Classes
@@ -5709,10 +5690,6 @@ classDiagram
         +isOwner: Boolean
         +isInTtl: Boolean
     }
-    class MutexRetrievalServiceFactory {
-        <<interface>>
-        +createMutexRetrievalService(retrievalListener: MutexRetriever): MutexRetrievalService
-    }
     class MutexContendServiceFactory {
         <<interface>>
         +createMutexContendService(mutexContender: MutexContender): MutexContendService
@@ -5874,16 +5851,6 @@ interface MutexContendService : MutexRetrievalService {
 | `isOwner` | `Boolean` | `true` if `afterOwner.ownerId == contenderId` |
 | `isInTtl` | `Boolean` | `true` if the contender is the owner AND the lock has not expired its TTL |
 | `fencingToken` | `Long` | Fencing token of the current term while this contender owns the mutex, otherwise `0`. See [ADR 0002](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md). |
-
-## MutexRetrievalServiceFactory
-
-**Source:** [simba-core/.../MutexRetrievalServiceFactory.kt:20](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexRetrievalServiceFactory.kt#L20)
-
-```kotlin
-interface MutexRetrievalServiceFactory {
-    fun createMutexRetrievalService(retrievalListener: MutexRetriever): MutexRetrievalService
-}
-```
 
 ## MutexContendServiceFactory
 
@@ -6126,7 +6093,6 @@ graph LR
     end
     subgraph sg_2 ["Factory Pattern"]
 
-        RF["MutexRetrievalServiceFactory"] -->|"creates"| RS
         CF["MutexContendServiceFactory"] -->|"creates"| CS
     end
     subgraph sg_3 ["Template Method"]
@@ -6143,7 +6109,6 @@ graph LR
     style CS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style ARS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style ACS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style RF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style CF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style SC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style STC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
@@ -6897,7 +6862,6 @@ me.ahoo.simba.core
     MutexContender         -- Contender with lifecycle callbacks
     MutexRetrievalService  -- Lifecycle-managed retrieval
     MutexContendService    -- Contender-bound retrieval with ownership queries
-    MutexRetrievalServiceFactory
     MutexContendServiceFactory
     AbstractMutexRetriever (via MutexRetriever)
     AbstractMutexContender -- Default logging contender
@@ -6930,7 +6894,6 @@ graph TB
         MC["MutexContender"]
         MRS["MutexRetrievalService"]
         MCS["MutexContendService"]
-        MRF["MutexRetrievalServiceFactory"]
         MCF["MutexContendServiceFactory"]
         AMRS["AbstractMutexRetrievalService"]
         AMCS["AbstractMutexContendService"]
@@ -6965,7 +6928,6 @@ graph TB
     AMCS --> MC
     MRS --> MR
     MCS --> MC
-    MRF --> MRS
     MCF --> MCS
     MS --> MO
     AMRS --> MS
@@ -6983,7 +6945,6 @@ graph TB
     style MC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MRS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MCS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style MRF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MCF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style AMRS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style AMCS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
@@ -7082,7 +7043,7 @@ The `HOST` strategy is human-readable and aids debugging. Example: `0:12345@192.
 | Pattern | Where Used |
 |---|---|
 | **Template Method** | `AbstractMutexContendService` defines `startRetrieval`/`stopRetrieval`; backends implement `startContend`/`stopContend` |
-| **Abstract Factory** | `MutexContendServiceFactory` / `MutexRetrievalServiceFactory` create service instances |
+| **Abstract Factory** | `MutexContendServiceFactory` create service instances |
 | **Observer / Callback** | `MutexRetriever.notifyOwner` / `MutexContender.onAcquired`/`onReleased` |
 | **RAII** | `SimbaLocker` uses `AutoCloseable` for automatic lock release |
 | **Strategy** | `ContenderIdGenerator.HOST` / `ContenderIdGenerator.UUID` |
@@ -7210,25 +7171,19 @@ Fencing is opt-in because it needs the `fencing_token` column: new installs get 
 
 ```kotlin
 interface MutexOwnerRepository {
-    fun initMutex(mutex: String): Boolean
-    fun tryInitMutex(mutex: String): Boolean
-    fun getOwner(mutex: String): MutexOwnerEntity
-    fun acquire(mutex: String, contenderId: String, ttl: Long, transition: Long): Boolean
     fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwnerEntity
     fun release(mutex: String, contenderId: String): Boolean
-    fun ensureOwner(mutex: String): MutexOwnerEntity
 }
 ```
 
+The interface holds exactly what the contention engine needs:
+
 | Method | Description |
 |---|---|
-| `initMutex` | Inserts the mutex row. Throws `SQLIntegrityConstraintViolationException` if already exists. |
-| `tryInitMutex` | Safe wrapper: returns `false` on any exception. |
-| `getOwner` | Reads the current owner. Throws `NotFoundMutexOwnerException` if the row does not exist. |
-| `acquire` | Attempts to acquire the mutex via `UPDATE ... WHERE`. Returns `true` if affected rows > 0. |
-| `acquireAndGetOwner` | Atomic transaction: acquires the mutex and reads back the full owner state. |
+| `acquireAndGetOwner` | Atomic transaction: acquires (or renews) the mutex, creating its row if missing, and reads back the full owner state. |
 | `release` | Releases the mutex by resetting the row. Only succeeds if `owner_id` matches. |
-| `ensureOwner` | Gets the owner, auto-initializing the row if it does not exist. |
+
+`JdbcMutexOwnerRepository` additionally offers `initMutex`, `tryInitMutex`, `getOwner`, `ensureOwner` and `acquire` for provisioning and inspection.
 
 ### JdbcMutexOwnerRepository
 
@@ -7460,10 +7415,8 @@ All names share the `{mutex}` hash tag, so they land on one Redis Cluster slot. 
 |---|---|---|
 | `simba:{mutex}` | String | `contenderId` of the current owner, expiring after `ttl + transition` (`PX`). |
 | `simba:{mutex}` | Pub/Sub channel | Broadcasts `acquired@@{ownerId}` and `released@@{ownerId}` to every contender. |
-| `simba:{mutex}:{contenderId}` | Pub/Sub channel | Still subscribed so that Simba < 3.2 owners, which address releases to one queued contender, can wake this node during a rolling upgrade. |
 | `simba:{mutex}:fence` | String (counter) | Fencing counter, incremented once per ownership term; never expires. |
 | `simba:{mutex}:token` | String | Fencing token of the current term; expires with the lease. |
-| `simba:{mutex}:contender` | Sorted set (legacy) | Wait queue written only by Simba < 3.2; deleted on every release. |
 
 ## Lua Scripts
 
@@ -7499,10 +7452,9 @@ return { ownerId, redis.call('pttl', mutexKey), tonumber(redis.call('get', token
 
 ```lua
 if redis.call('get', mutexKey) ~= contenderId then
-    redis.call('zrem', legacyQueueKey, contenderId)
     return 0;
 end
-redis.call('del', mutexKey, legacyQueueKey, tokenKey)
+redis.call('del', mutexKey, tokenKey)
 redis.call('publish', mutexKey, 'released@@' .. contenderId)
 return 1;
 ```
@@ -7584,9 +7536,9 @@ A node ignores the `acquired@@{ownerId}` broadcast for its own acquisition: the 
 Monotonicity requires Redis to persist the counter (AOF with `appendfsync always`, or equivalent). If Redis restarts without it, the counter resets and tokens can go backwards.
 :::
 
-## Rolling Upgrade from Simba < 3.2
+## Upgrading to 4.0
 
-Key and channel names are unchanged. Older nodes keep receiving releases because they subscribe to the mutex channel and handle `released` from any channel; newer nodes keep their per-contender channel for releases sent by older owners. Older contenders that are only in the legacy queue may wait for their next poll until all nodes are upgraded.
+All nodes must run Simba 3.2 or later before upgrading to 4.0: 4.0 no longer subscribes to the per-contender channels or cleans up the contender queue that Simba 3.1 relied on. Mixed 3.2/3.3/4.0 nodes are compatible.
 
 ## Dependencies
 
@@ -9615,7 +9567,6 @@ flowchart TD
     subgraph channels["Pub/Sub Channels"]
         style channels fill:#161b22,stroke:#30363d,color:#e6edf3
         MC["simba:{mutex}<br>Global channel"]
-        CC["simba:{mutex}:{id}<br>Per-contender channel (legacy)"]
     end
 
     subgraph state["State"]
@@ -9633,7 +9584,6 @@ flowchart TD
     style GUARD fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style RELEASE fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style CC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style KEY fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 

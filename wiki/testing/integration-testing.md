@@ -175,7 +175,6 @@ flowchart TD
     subgraph channels["Pub/Sub Channels"]
         style channels fill:#161b22,stroke:#30363d,color:#e6edf3
         MC["simba:{mutex}<br>Global channel"]
-        CC["simba:{mutex}:{id}<br>Per-contender channel (legacy)"]
     end
 
     subgraph state["State"]
@@ -193,7 +192,6 @@ flowchart TD
     style GUARD fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style RELEASE fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style CC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style KEY fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 

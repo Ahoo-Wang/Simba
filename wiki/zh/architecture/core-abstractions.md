@@ -180,16 +180,6 @@ interface MutexContendService : MutexRetrievalService {
 
 ## 工厂接口
 
-### MutexRetrievalServiceFactory
-
-[`MutexRetrievalServiceFactory`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexRetrievalServiceFactory.kt) 创建检索服务（仅观察，不争用）：
-
-```kotlin
-interface MutexRetrievalServiceFactory {
-    fun createMutexRetrievalService(retrievalListener: MutexRetriever): MutexRetrievalService
-}
-```
-
 ### MutexContendServiceFactory
 
 [`MutexContendServiceFactory`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexContendServiceFactory.kt) 创建争用服务（完整的锁获取）：
@@ -337,7 +327,6 @@ flowchart TD
         MC["MutexContender"]
         MRS["MutexRetrievalService"]
         MCS["MutexContendService"]
-        MRSF["MutexRetrievalServiceFactory"]
         MCSF["MutexContendServiceFactory"]
         LOCKER["Locker"]
         CID["ContenderIdGenerator"]

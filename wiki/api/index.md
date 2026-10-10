@@ -25,7 +25,6 @@ graph TB
         MC["MutexContender"]
         MRS["MutexRetrievalService"]
         MCS["MutexContendService"]
-        MRF["MutexRetrievalServiceFactory"]
         MCF["MutexContendServiceFactory"]
         AMCS["AbstractMutexContendService"]
         AMC["AbstractMutexContender"]
@@ -50,7 +49,6 @@ graph TB
     AMRS -->|implements| MRS
     AMCS -->|implements| MCS
     MCF -->|creates| MCS
-    MRF -->|creates| MRS
     AMCS -->|uses| MO
     AMRS -->|produces| MS
     CP -->|uses| MO
@@ -63,7 +61,6 @@ graph TB
     style MC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MRS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MCS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style MRF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MCF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style AMCS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style AMC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
@@ -84,7 +81,6 @@ graph TB
 | [`MutexContender`](./core-interfaces#mutexcontender) | Interface | `me.ahoo.simba.core` | Extends `MutexRetriever` with `contenderId` and `onAcquired`/`onReleased` lifecycle |
 | [`MutexRetrievalService`](./core-interfaces#mutexretrievalservice) | Interface | `me.ahoo.simba.core` | Lifecycle-managed retrieval service with `start()`/`stop()` and status tracking |
 | [`MutexContendService`](./core-interfaces#mutexcontendservice) | Interface | `me.ahoo.simba.core` | Extends retrieval with contender-bound ownership queries (`isOwner`, `isInTtl`) |
-| [`MutexRetrievalServiceFactory`](./core-interfaces#mutexretrievalservicefactory) | Interface | `me.ahoo.simba.core` | Factory for creating `MutexRetrievalService` instances |
 | [`MutexContendServiceFactory`](./core-interfaces#mutexcontendservicefactory) | Interface | `me.ahoo.simba.core` | Factory for creating `MutexContendService` instances |
 
 ### Abstract Base Classes

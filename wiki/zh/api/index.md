@@ -25,7 +25,6 @@ graph TB
         MC["MutexContender"]
         MRS["MutexRetrievalService"]
         MCS["MutexContendService"]
-        MRF["MutexRetrievalServiceFactory"]
         MCF["MutexContendServiceFactory"]
         AMCS["AbstractMutexContendService"]
         AMC["AbstractMutexContender"]
@@ -50,7 +49,6 @@ graph TB
     AMRS -->|implements| MRS
     AMCS -->|implements| MCS
     MCF -->|creates| MCS
-    MRF -->|creates| MRS
     AMCS -->|uses| MO
     AMRS -->|produces| MS
     CP -->|uses| MO
@@ -63,7 +61,6 @@ graph TB
     style MC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MRS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MCS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style MRF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style MCF fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style AMCS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style AMC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
@@ -84,7 +81,6 @@ graph TB
 | [`MutexContender`](./core-interfaces#mutexcontender) | 接口 | `me.ahoo.simba.core` | 扩展 `MutexRetriever`，增加 `contenderId` 和 `onAcquired`/`onReleased` 生命周期 |
 | [`MutexRetrievalService`](./core-interfaces#mutexretrievalservice) | 接口 | `me.ahoo.simba.core` | 具有生命周期管理的检索服务，支持 `start()`/`stop()` 和状态跟踪 |
 | [`MutexContendService`](./core-interfaces#mutexcontendservice) | 接口 | `me.ahoo.simba.core` | 扩展检索功能，提供绑定到竞争者的所有权查询（`isOwner`、`isInTtl`） |
-| [`MutexRetrievalServiceFactory`](./core-interfaces#mutexretrievalservicefactory) | 接口 | `me.ahoo.simba.core` | 用于创建 `MutexRetrievalService` 实例的工厂 |
 | [`MutexContendServiceFactory`](./core-interfaces#mutexcontendservicefactory) | 接口 | `me.ahoo.simba.core` | 用于创建 `MutexContendService` 实例的工厂 |
 
 ### 抽象基类

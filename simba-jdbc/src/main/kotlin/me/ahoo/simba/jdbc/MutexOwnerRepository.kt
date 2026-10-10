@@ -12,30 +12,22 @@
  */
 package me.ahoo.simba.jdbc
 
-import java.sql.SQLException
-import java.sql.SQLIntegrityConstraintViolationException
-
 /**
  * Mutex Owner Repository.
  *
  * @author ahoo wang
  */
 interface MutexOwnerRepository {
-    @Throws(SQLException::class, SQLIntegrityConstraintViolationException::class)
-    fun initMutex(mutex: String): Boolean
-    fun tryInitMutex(mutex: String): Boolean
+    /**
+     * Acquires the lease (or renews it when held by [contenderId]) and returns the owner observed afterwards.
+     *
+     * @param ttl [java.util.concurrent.TimeUnit.MILLISECONDS]
+     * @param transition [java.util.concurrent.TimeUnit.MILLISECONDS]
+     */
+    fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwnerEntity
 
     /**
-     * get Owner.
-     *
-     * @param mutex mutex
-     * @return when result is null throw [NotFoundMutexOwnerException]
-     * @throws NotFoundMutexOwnerException not found mutex
+     * Releases the lease when held by [contenderId].
      */
-    @Throws(NotFoundMutexOwnerException::class)
-    fun getOwner(mutex: String): MutexOwnerEntity
-    fun acquire(mutex: String, contenderId: String, ttl: Long, transition: Long): Boolean
-    fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwnerEntity
     fun release(mutex: String, contenderId: String): Boolean
-    fun ensureOwner(mutex: String): MutexOwnerEntity
 }

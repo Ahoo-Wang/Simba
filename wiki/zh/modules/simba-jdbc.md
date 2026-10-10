@@ -71,25 +71,19 @@ Fencing 需要 `fencing_token` 列，因此需要显式开启：新安装会通�
 
 ```kotlin
 interface MutexOwnerRepository {
-    fun initMutex(mutex: String): Boolean
-    fun tryInitMutex(mutex: String): Boolean
-    fun getOwner(mutex: String): MutexOwnerEntity
-    fun acquire(mutex: String, contenderId: String, ttl: Long, transition: Long): Boolean
     fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwnerEntity
     fun release(mutex: String, contenderId: String): Boolean
-    fun ensureOwner(mutex: String): MutexOwnerEntity
 }
 ```
 
+该接口只包含竞争引擎需要的方法：
+
 | 方法 | 描述 |
 |---|---|
-| `initMutex` | 插入互斥锁行。如果已存在则抛出 `SQLIntegrityConstraintViolationException`。 |
-| `tryInitMutex` | 安全包装：任何异常时返回 `false`。 |
-| `getOwner` | 读取当前所有者。如果行不存在则抛出 `NotFoundMutexOwnerException`。 |
-| `acquire` | 通过 `UPDATE ... WHERE` 尝试获取互斥锁。如果受影响行数 > 0 则返回 `true`。 |
-| `acquireAndGetOwner` | 原子事务：获取互斥锁并回读完整的所有者状态。 |
+| `acquireAndGetOwner` | 原子事务：获取（或续期）互斥锁，行不存在时自动创建，并回读完整的所有者状态。 |
 | `release` | 通过重置行来释放互斥锁。仅在 `owner_id` 匹配时成功。 |
-| `ensureOwner` | 获取所有者，如果行不存在则自动初始化。 |
+
+`JdbcMutexOwnerRepository` 另外提供 `initMutex`、`tryInitMutex`、`getOwner`、`ensureOwner` 和 `acquire`，用于初始化与排查。
 
 ### JdbcMutexOwnerRepository
 

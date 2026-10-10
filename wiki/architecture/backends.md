@@ -197,26 +197,23 @@ releases only the caller's own lease and broadcasts the release:
 
 ```lua
 if redis.call('get', mutexKey) ~= contenderId then
-    redis.call('zrem', legacyQueueKey, contenderId)
     return 0;
 end
-redis.call('del', mutexKey, legacyQueueKey, tokenKey)
+redis.call('del', mutexKey, tokenKey)
 redis.call('publish', mutexKey, 'released@@' .. contenderId)
 return 1;
 ```
 
 Every live contender receives the broadcast and contends at once; exactly one wins the `SET NX`. Unlike a
-targeted wake-up, no release can be lost to a crashed contender. `legacyQueueKey` (`simba:{mutex}:contender`)
-is only written by Simba < 3.2 and is deleted here.
+targeted wake-up, no release can be lost to a crashed contender.
 
 ### Pub/Sub Channels
 
 | Channel | Purpose |
 |---|---|
 | `simba:{mutex}` | All contenders subscribe. Carries `acquired@@{id}` and `released@@{id}`. |
-| `simba:{mutex}:{contenderId}` | Kept for rolling upgrades: Simba < 3.2 owners address releases here. |
 
-The `{mutex}` hash tag keeps the lease key and both channels in one Redis Cluster slot.
+The `{mutex}` hash tag keeps the lease key, the fencing keys and the channel in one Redis Cluster slot.
 [`RedisMutexKeys`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/RedisMutexKeys.kt) is the
 single Kotlin source of these names.
 

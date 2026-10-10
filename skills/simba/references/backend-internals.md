@@ -23,14 +23,13 @@ For the current owner to renew (extend TTL):
 ### mutex_release.lua
 
 Releases the lock and wakes every waiting contender:
-1. If the lock is not held by this contender: removes it from the legacy queue and returns `0`.
-2. Otherwise `DEL key legacyQueueKey` (`simba:{mutex}:contender`, written only by Simba < 3.2).
+1. If the lock is not held by this contender: returns `0`.
+2. Otherwise `DEL key tokenKey`.
 3. Publishes `released@@releasedOwnerId` on the mutex channel, so all live contenders contend immediately and one wins.
 
 ### Pub/Sub Channels
 
 - **Mutex channel** (`simba:{mutex}`): All contenders subscribe. Receives `acquired@@ownerId` and `released@@ownerId`.
-- **Per-contender channel** (`simba:{mutex}:{contenderId}`): Still subscribed so Simba < 3.2 owners, which address releases to one queued contender, can wake newer nodes during a rolling upgrade.
 
 ### Message Format
 

@@ -17,13 +17,11 @@ import org.junit.jupiter.api.Test
 
 class RedisMutexKeysTest {
     @Test
-    fun `names share the mutex hash tag and stay compatible with earlier nodes`() {
+    fun `names share the mutex hash tag`() {
         val keys = RedisMutexKeys("naming")
 
         keys.mutexKey.assert().isEqualTo("simba:{naming}")
         keys.fenceKey.assert().isEqualTo("simba:{naming}:fence")
         keys.tokenKey.assert().isEqualTo("simba:{naming}:token")
-        keys.legacyQueueKey.assert().isEqualTo("simba:{naming}:contender")
-        keys.contenderChannel("c1").assert().isEqualTo("simba:{naming}:c1")
     }
 }

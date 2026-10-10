@@ -75,7 +75,7 @@ class SpringRedisMutexLeaseStoreTest {
         every {
             redisTemplate.execute(
                 any<RedisScript<Boolean>>(),
-                listOf("simba:{m}", "simba:{m}:contender", "simba:{m}:token"),
+                listOf("simba:{m}", "simba:{m}:token"),
                 "c1"
             )
         } returns true

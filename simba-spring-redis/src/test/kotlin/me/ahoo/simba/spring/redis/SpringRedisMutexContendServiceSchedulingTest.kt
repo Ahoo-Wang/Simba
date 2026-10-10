@@ -100,7 +100,7 @@ class SpringRedisMutexContendServiceSchedulingTest {
         scheduler.run(0)
         service.MutexMessageListener().onMessage(
             DefaultMessage(
-                "simba:{released}:${contender.contenderId}".toByteArray(),
+                "simba:{released}".toByteArray(),
                 "released@@other".toByteArray()
             ),
             null
@@ -129,7 +129,7 @@ class SpringRedisMutexContendServiceSchedulingTest {
         scheduler.run(0)
         service.MutexMessageListener().onMessage(
             DefaultMessage(
-                "simba:{stopped}:${contender.contenderId}".toByteArray(),
+                "simba:{stopped}".toByteArray(),
                 "released@@other".toByteArray()
             ),
             null
