@@ -40,6 +40,12 @@
       "matchDepNames": ["java-jdk"],
       "matchUpdateTypes": ["major"],
       "enabled": false
+    },
+    {
+      "description": "Security override targets are the smallest compatible fix (VitePress 1.6 cannot run on newer vite majors); keep minor and patch updates, never bump their major",
+      "matchDepTypes": ["pnpm-workspace.overrides"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
     }
   ]
 }
