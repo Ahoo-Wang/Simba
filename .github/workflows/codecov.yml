@@ -8,21 +8,8 @@ jobs:
   codecov:
     name: Codecov
     runs-on: ubuntu-latest
-    services:
-      redis:
-        image: redis
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
-
+    # MySQL and Redis run through Testcontainers (Docker is available on GitHub-hosted runners).
     steps:
-      - name: Start Mysql
-        run: sudo /etc/init.d/mysql start
-
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -33,9 +20,6 @@ jobs:
           distribution: 'temurin'
           server-id: github
           settings-path: ${{ github.workspace }}
-
-      - name: Init Simba-Db
-        run: mysql -vvv -h localhost -uroot -proot < simba-jdbc/src/init-script/init-simba-mysql.sql
 
       - name: Build Code Coverage Report
         run: ./gradlew codeCoverageReport --stacktrace

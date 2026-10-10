@@ -20,8 +20,8 @@ not as it is planned to be; design direction belongs in `docs/adr/`.
 | Module check | Needs |
 |---|---|
 | `simba-core`, `simba-zookeeper` | Nothing (Zookeeper uses embedded Curator `TestingServer`) |
-| `simba-spring-redis` | Redis on `localhost:6379` |
-| `simba-jdbc` | MySQL on `localhost:3306` (`root`/`root`) initialized with `simba-jdbc/src/init-script/init-simba-mysql.sql` |
+| `simba-spring-redis` | Docker (Testcontainers `redis:7.4-alpine` via `RedisFixture`) |
+| `simba-jdbc` | Docker (Testcontainers `mysql:8.4` via `MySqlFixture`, initialized with `simba-jdbc/src/init-script/init-simba-mysql.sql`) |
 
 CI (`.github/workflows/integration-test.yml`) runs `simba-core` first, then the Redis, Zookeeper, JDBC module
 checks and the `simba-example` backend matrix. Wiki commands: see `wiki/AGENTS.md`.
@@ -29,8 +29,9 @@ checks and the `simba-example` backend matrix. Wiki commands: see `wiki/AGENTS.m
 ## Modules
 
 `simba-core` ← `simba-jdbc` / `simba-spring-redis` / `simba-zookeeper` ← `simba-spring-boot-starter`.
-`simba-core` must not know any backend and depends only on kotlin-logging; backend-specific behavior stays in its module. `simba-test` is the
-backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are publication metadata.
+`simba-core` must not know any backend and depends only on kotlin-logging; backend-specific behavior stays in its
+module. `simba-test` is the backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are
+publication metadata.
 
 ## Core Invariants
 
@@ -46,8 +47,8 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
 - Fencing tokens (ADR 0002): `MutexOwner.fencingToken` increases strictly per ownership term and stays stable within
   it; `0` means none. Zookeeper uses the winning latch node's czxid, never its sequence (container parents get reaped
   and restart sequences). Redis: `INCR simba:{mutex}:fence` on `SET NX`, term token in `simba:{mutex}:token`; nodes
-  ignore broadcasts of their own acquisition. JDBC (`simba.jdbc.fencing`, on by default): `fencing_token` advanced in the
-  acquire `UPDATE` only on a new term; that assignment must stay first in `SET` (MySQL evaluates left to right).
+  ignore broadcasts of their own acquisition. JDBC (`simba.jdbc.fencing`, on by default): `fencing_token` advanced in
+  the acquire `UPDATE` only on a new term; that assignment must stay first in `SET` (MySQL evaluates left to right).
 - JDBC and Redis share the polling loop in `LeaseContendService`; a backend only implements `MutexLeaseStore`
   (one atomic call, no scheduling or notification). `LeaseConfig` is the single place for duration validation.
 
@@ -128,7 +129,7 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
 
 - Commit and PR titles: `category: summary` or `category(scope): summary`, lowercase category, no trailing period.
 - Never push to `main`; use a branch and a PR. Stage only task-relevant files.
-- Before pushing: targeted module checks plus `git diff --check`; full `./gradlew check` only when services exist.
+- Before pushing: targeted module checks plus `git diff --check`; full `./gradlew check` needs only Docker.
 
 ## Boundaries
 

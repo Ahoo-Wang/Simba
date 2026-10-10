@@ -32,10 +32,7 @@ class JdbcMutexOwnerRepositoryFencingTest {
 
     @BeforeAll
     fun setup() {
-        dataSource = HikariDataSource()
-        dataSource.jdbcUrl = "jdbc:mysql://localhost:3306/simba_db"
-        dataSource.username = "root"
-        dataSource.password = "root"
+        dataSource = MySqlFixture.newDataSource()
         repository = JdbcMutexOwnerRepository(dataSource)
     }
 

@@ -63,16 +63,7 @@ jobs:
     name: Simba Spring Redis Test
     needs: [ simba-core-test ]
     runs-on: ubuntu-latest
-    services:
-      redis:
-        image: redis
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
+    # Redis runs through Testcontainers (Docker is available on GitHub-hosted runners).
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -107,16 +98,12 @@ jobs:
       - name: Test Simba-Zookeeper
         run: ./gradlew simba-zookeeper:clean simba-zookeeper:check
 
-  # https://github.com/actions/virtual-environments/issues/375
-  # https://github.blog/changelog/2020-02-21-github-actions-breaking-change-ubuntu-virtual-environments-will-no-longer-start-the-mysql-service-automatically/
   simba-jdbc-test:
     name: Simba Jdbc Test
     needs: [ simba-core-test ]
     runs-on: ubuntu-latest
+    # MySQL runs through Testcontainers, initialized with simba-jdbc/src/init-script/init-simba-mysql.sql.
     steps:
-      - name: Start Mysql
-        run: sudo /etc/init.d/mysql start
-
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -127,9 +114,6 @@ jobs:
           distribution: 'temurin'
           server-id: github
           settings-path: ${{ github.workspace }}
-
-      - name: Init Simba-Db
-        run: mysql -vvv -h localhost -uroot -proot < simba-jdbc/src/init-script/init-simba-mysql.sql
 
       - name: Test Simba-Jdbc
         run: ./gradlew simba-jdbc:clean simba-jdbc:check

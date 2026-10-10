@@ -81,10 +81,7 @@ internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
 
     @BeforeAll
     fun setup() {
-        val hikariDataSource = HikariDataSource()
-        hikariDataSource.jdbcUrl = "jdbc:mysql://localhost:3306/simba_db"
-        hikariDataSource.username = "root"
-        hikariDataSource.password = "root"
+        val hikariDataSource = MySqlFixture.newDataSource()
         jdbcMutexOwnerRepository = JdbcMutexOwnerRepository(hikariDataSource)
         mutexContendServiceFactory = JdbcMutexContendServiceFactory(
             mutexOwnerRepository = jdbcMutexOwnerRepository,
@@ -128,33 +125,12 @@ autonumber
     CS->>CS: notifyOwner(MutexOwner.NONE)
 ```
 
-### 通过 Docker Compose 使用 MySQL
+### 通过 Testcontainers 使用 MySQL
 
-```yaml
-# docker-compose-test.yml
-services:
-  mysql:
-    image: mysql:8.0
-    ports:
-      - "3306:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: simba_db
-    volumes:
-      - ./simba-jdbc/src/init-script/init-simba-mysql.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-```
+[`MySqlFixture`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/test/kotlin/me/ahoo/simba/jdbc/MySqlFixture.kt) 每个测试 JVM 启动一个 `mysql:8.4` 容器，并用发布的 `init-simba-mysql.sql` 初始化，测试和用户共用同一份表结构定义。测试只需调用 `MySqlFixture.newDataSource()`，不需要本地 MySQL、账号或手工建表。
 
 ```bash
-docker compose -f docker-compose-test.yml up -d mysql
-# 等待健康检查通过
-docker compose -f docker-compose-test.yml exec mysql mysqladmin ping -h localhost
-# 运行测试
-./gradlew simba-jdbc:check
+./gradlew simba-jdbc:check   # 需要 Docker
 ```
 
 ## Redis 后端
@@ -213,9 +189,7 @@ internal class SpringRedisMutexContendServiceTest : MutexContendServiceSpec() {
 
     @BeforeAll
     fun setup() {
-        val redisStandaloneConfiguration = RedisStandaloneConfiguration()
-        lettuceConnectionFactory = LettuceConnectionFactory(redisStandaloneConfiguration)
-        lettuceConnectionFactory.afterPropertiesSet()
+        lettuceConnectionFactory = RedisFixture.newConnectionFactory()
         val stringRedisTemplate = StringRedisTemplate(lettuceConnectionFactory)
         listenerContainer = RedisMessageListenerContainer()
         listenerContainer.setConnectionFactory(lettuceConnectionFactory)
@@ -233,25 +207,12 @@ internal class SpringRedisMutexContendServiceTest : MutexContendServiceSpec() {
 }
 ```
 
-### 通过 Docker Compose 使用 Redis
+### 通过 Testcontainers 使用 Redis
 
-```yaml
-# docker-compose-test.yml（添加到现有文件）
-services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-```
+[`RedisFixture`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/test/kotlin/me/ahoo/simba/spring/redis/RedisFixture.kt) 每个测试 JVM 启动一个 `redis:7.4-alpine` 容器；测试调用 `RedisFixture.newConnectionFactory()`。
 
 ```bash
-docker compose -f docker-compose-test.yml up -d redis
-./gradlew simba-spring-redis:check
+./gradlew simba-spring-redis:check   # 需要 Docker
 ```
 
 ## Zookeeper 后端
@@ -325,91 +286,42 @@ autonumber
 ./gradlew simba-zookeeper:check
 ```
 
-## 所有后端的完整 Docker Compose
+## 所有后端的运行要求
 
-```yaml
-# docker-compose-test.yml
-services:
-  mysql:
-    image: mysql:8.0
-    ports:
-      - "3306:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: simba_db
-    volumes:
-      - ./simba-jdbc/src/init-script/init-simba-mysql.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-```
-
-启动所有服务并运行所有测试：
+只需要 Docker（用于 JDBC 和 Redis 容器）和 JDK 17。Zookeeper 使用内嵌的 Curator `TestingServer`。容器在首次使用时懒启动，测试 JVM 退出时由 Testcontainers 清理。
 
 ```bash
-docker compose -f docker-compose-test.yml up -d
 ./gradlew check
-docker compose -f docker-compose-test.yml down
 ```
 
 ## CI 配置
 
 ### GitHub Actions 示例
 
-```yaml
-# .github/workflows/test.yml
-name: Tests
-on: [push, pull_request]
+GitHub 托管的 runner 自带 Docker，因此工作流不需要服务容器或数据库初始化步骤：
 
+```yaml
+# .github/workflows/integration-test.yml (excerpt)
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: simba_db
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h localhost"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
+  simba-jdbc-test:
+    runs-on: ubuntu-latest   # Docker is available; Testcontainers starts MySQL
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: 17
-      - name: Init MySQL
-        run: mysql -h 127.0.0.1 -u root -proot < simba-jdbc/src/init-script/init-simba-mysql.sql
-      - name: Run tests
-        run: ./gradlew check
-      - name: Coverage report
-        run: ./gradlew codeCoverageReport
+          java-version: '17'
+          distribution: 'temurin'
+      - run: ./gradlew simba-jdbc:check
+
+  simba-spring-redis-test:
+    runs-on: ubuntu-latest   # Testcontainers starts Redis
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - run: ./gradlew simba-spring-redis:check
 ```
 
 ## 时序注意事项
@@ -428,13 +340,9 @@ jobs:
 
 ## 故障排除
 
-### JDBC："Connection refused"
+### JDBC / Redis："Could not find a valid Docker environment"
 
-确保 MySQL 正在运行，并且 `simba_db` 数据库已存在且 `simba_mutex` 表已初始化。验证凭据与测试配置匹配（`root`/`root`）。
-
-### Redis："Connection refused"
-
-确保 Redis 在 `localhost:6379` 上运行。测试使用默认的 `RedisStandaloneConfiguration`，不进行认证。
+Testcontainers 需要一个运行中的 Docker 守护进程（Docker Desktop、Colima 或远程 `DOCKER_HOST`）。启动后重试即可；首次运行会拉取 `mysql:8.4` 和 `redis:7.4-alpine` 镜像。
 
 ### Zookeeper：单独测试通过但套件中失败
 

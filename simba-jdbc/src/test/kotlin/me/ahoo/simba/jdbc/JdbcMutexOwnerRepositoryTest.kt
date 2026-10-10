@@ -12,7 +12,6 @@
  */
 package me.ahoo.simba.jdbc
 
-import com.zaxxer.hikari.HikariDataSource
 import me.ahoo.simba.core.ContenderIdGenerator
 import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.BeforeAll
@@ -28,10 +27,7 @@ internal class JdbcMutexOwnerRepositoryTest {
 
     @BeforeAll
     fun setup() {
-        val hikariDataSource = HikariDataSource()
-        hikariDataSource.jdbcUrl = "jdbc:mysql://localhost:3306/simba_db"
-        hikariDataSource.username = "root"
-        hikariDataSource.password = "root"
+        val hikariDataSource = MySqlFixture.newDataSource()
         jdbcMutexOwnerRepository = JdbcMutexOwnerRepository(hikariDataSource)
     }
 

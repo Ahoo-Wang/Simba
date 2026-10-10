@@ -242,7 +242,7 @@ class ZookeeperMutexContendServiceSpec : MutexContendServiceSpec() {
 graph TD
     subgraph sg_112 ["Test Environment"]
 
-        J_ENV["simba-jdbc tests<br>Requires running MySQL<br>Init script: init-simba-mysql.sql"]
+        J_ENV["simba-jdbc tests<br>Testcontainers MySQL<br>Init script: init-simba-mysql.sql"]
         R_ENV["simba-spring-redis tests<br>Requires running Redis"]
         Z_ENV["simba-zookeeper tests<br>Uses Curator embedded test server<br>(no external dependency)"]
     end
@@ -254,7 +254,7 @@ graph TD
 
 | 后端 | 测试基础设施 |
 |---|---|
-| `simba-jdbc` | 运行中的 MySQL 实例。模式必须通过 `init-simba-mysql.sql` 初始化。 |
+| `simba-jdbc` | Docker：`MySqlFixture` 通过 Testcontainers 启动 MySQL，并用 `init-simba-mysql.sql` 初始化。 |
 | `simba-spring-redis` | 运行中的 Redis 实例。 |
 | `simba-zookeeper` | Curator 的嵌入式测试服务器（无需外部 ZK）。 |
 
