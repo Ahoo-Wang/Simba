@@ -46,7 +46,8 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
 - Fencing tokens (ADR 0002): `MutexOwner.fencingToken` increases strictly per ownership term and stays stable within
   it; `0` means none. Zookeeper uses the winning latch node's czxid, never its sequence (container parents get reaped
   and restart sequences). Redis: `INCR simba:{mutex}:fence` on `SET NX`, term token in `simba:{mutex}:token`; nodes
-  ignore broadcasts of their own acquisition. JDBC does not issue tokens yet.
+  ignore broadcasts of their own acquisition. JDBC (opt-in `simba.jdbc.fencing`): `fencing_token` advanced in the
+  acquire `UPDATE` only on a new term; that assignment must stay first in `SET` (MySQL evaluates left to right).
 - JDBC and Redis share the polling loop in `LeaseContendService`; a backend only implements `MutexLeaseStore`
   (one atomic call, no scheduling or notification). `LeaseConfig` is the single place for duration validation.
 
@@ -88,7 +89,8 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
 - Redis key and channel names are built in both Kotlin (`RedisMutexKeys`) and Lua: `simba:{mutex}`,
   `simba:{mutex}:{contenderId}` (kept for releases from Simba < 3.2 owners), legacy queue `simba:{mutex}:contender`
   (only deleted). Pub/sub messages use `{event}@@{ownerId}`; Lua scripts take keys via `KEYS` and return arrays.
-- JDBC schema: `simba_mutex(mutex, acquired_at, ttl_at, transition_at, owner_id varchar(128), version)`; the SQL is
+- JDBC schema: `simba_mutex(mutex, acquired_at, ttl_at, transition_at, owner_id varchar(128), version, fencing_token)`;
+  the column is added to existing tables by `upgrade-simba-mysql-fencing-token.sql`. The SQL is
   MySQL-specific.
 
 ## Change Playbooks

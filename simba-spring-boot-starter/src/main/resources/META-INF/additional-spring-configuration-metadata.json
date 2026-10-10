@@ -36,6 +36,13 @@
       "defaultValue": "6s"
     },
     {
+      "name": "simba.jdbc.fencing",
+      "type": "java.lang.Boolean",
+      "description": "Whether the JDBC backend issues fencing tokens from the fencing_token column.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.jdbc.JdbcProperties",
+      "defaultValue": false
+    },
+    {
       "name": "simba.redis.enabled",
       "type": "java.lang.Boolean",
       "description": "Whether the Redis backend is enabled.",

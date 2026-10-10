@@ -11,16 +11,8 @@
  * limitations under the License.
  */
 
-create database if not exists simba_db;
+-- Adds the fencing token column to an existing simba_mutex table (Simba >= 3.3, simba.jdbc.fencing=true).
 use simba_db;
 
-create table if not exists simba_mutex
-(
-    mutex         varchar(66) not null primary key comment 'mutex name',
-    acquired_at   bigint unsigned not null,
-    ttl_at        bigint unsigned not null,
-    transition_at bigint unsigned not null,
-    owner_id      varchar(128) not null,
-    version       int unsigned not null,
-    fencing_token bigint unsigned not null default 0 comment 'incremented once per ownership term (simba.jdbc.fencing)'
-);
+alter table simba_mutex
+    add column fencing_token bigint unsigned not null default 0 comment 'incremented once per ownership term (simba.jdbc.fencing)';

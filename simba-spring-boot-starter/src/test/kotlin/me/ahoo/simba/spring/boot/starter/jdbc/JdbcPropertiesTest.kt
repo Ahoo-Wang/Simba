@@ -31,6 +31,7 @@ internal class JdbcPropertiesTest {
         assertThat(properties.initialDelay, equalTo(Duration.ofSeconds(0)))
         assertThat(properties.ttl, equalTo(Duration.ofSeconds(10)))
         assertThat(properties.transition, equalTo(Duration.ofSeconds(6)))
+        assertThat(properties.fencing, equalTo(false))
     }
 
     @Test

@@ -1,6 +1,6 @@
 # ADR 0002: Fencing Tokens
 
-- Status: Accepted — steps 1–2 (core API, Zookeeper, Redis) implemented; JDBC pending
+- Status: Accepted — implemented for Zookeeper, Redis and JDBC (opt-in `simba.jdbc.fencing`)
 - Date: 2026-10-09
 
 ## Context

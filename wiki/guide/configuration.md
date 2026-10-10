@@ -29,6 +29,7 @@ Defined in [`JdbcProperties`]([file_path:simba-spring-boot-starter/src/main/kotl
 | `simba.jdbc.initial-delay` | `Duration` | `0s` | Delay before the first contention attempt after `start()`. |
 | `simba.jdbc.ttl` | `Duration` | `10s` | Time-to-live for the owner lease. The owner must renew before this expires. |
 | `simba.jdbc.transition` | `Duration` | `6s` | Grace period after TTL expires. The incumbent owner can renew preferentially during this window. |
+| `simba.jdbc.fencing` | `Boolean` | `false` | Issue fencing tokens from the `fencing_token` column. Existing tables need `upgrade-simba-mysql-fencing-token.sql` first. |
 
 **Example `application.yml`:**
 

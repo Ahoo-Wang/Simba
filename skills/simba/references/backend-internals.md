@@ -49,7 +49,8 @@ CREATE TABLE simba_mutex (
     ttl_at bigint unsigned not null,
     transition_at bigint unsigned not null,
     owner_id varchar(128) not null,
-    version int unsigned not null
+    version int unsigned not null,
+    fencing_token bigint unsigned not null default 0 -- simba.jdbc.fencing; see upgrade-simba-mysql-fencing-token.sql
 );
 ```
 
