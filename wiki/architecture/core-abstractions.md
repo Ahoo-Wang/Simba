@@ -218,7 +218,7 @@ is the base class for all retrieval services. It manages:
 - **Status transitions** — uses `AtomicReferenceFieldUpdater` ([line 32](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/AbstractMutexRetrievalService.kt#L32))
   for lock-free CAS on the `status` field. `start()` requires `INITIAL -> STARTING`, and
   `stop()` requires `RUNNING -> STOPPING`.
-- **Owner state** — the `mutexState` field is `@Volatile` and updated in `safeNotifyOwner()`.
+- **Owner state** — the `mutexState` field is `@Volatile` and updated in `applyAndNotify()` under the state lock.
 - **Async notification** — `notifyOwner(newOwner)` dispatches via `CompletableFuture.runAsync()`
   on the `handleExecutor`, ensuring that slow callbacks never block the contention thread.
 - **Template methods** — subclasses implement `startRetrieval()` and `stopRetrieval()`.
@@ -239,8 +239,8 @@ autonumber
     Note over ARS: ... contention loop runs ...
 
     ARS->>ARS: newOwner detected
-    ARS->>HE: CompletableFuture.runAsync(safeNotifyOwner)
-    HE->>ARS: safeNotifyOwner(newOwner)
+    ARS->>HE: CompletableFuture.runAsync(dispatch)
+    HE->>ARS: dispatch(newOwner)
     ARS->>ARS: mutexState = MutexState(afterOwner, newOwner)
     ARS->>R: notifyOwner(newState)
 
@@ -334,8 +334,8 @@ autonumber
 
     BACKEND->>AMCS: contends and obtains new MutexOwner
     AMCS->>AMCS: notifyOwner(newOwner)
-    AMCS->>HE: CompletableFuture.runAsync(safeNotifyOwner)
-    HE->>AMCS: safeNotifyOwner(newOwner)
+    AMCS->>HE: CompletableFuture.runAsync(dispatch)
+    HE->>AMCS: dispatch(newOwner)
     AMCS->>AMCS: state = MutexState(afterOwner, newOwner)
     AMCS->>AMCS: mutexState = state
     AMCS->>MC: notifyOwner(state)

@@ -239,7 +239,7 @@ The status transitions use `AtomicReferenceFieldUpdater.compareAndSet()` to prev
 ```
 Backend detects ownership change
   -> calls notifyOwner(MutexOwner)
-    -> AbstractMutexRetrievalService.safeNotifyOwner(newOwner)
+    -> AbstractMutexRetrievalService.dispatch(newOwner)
       -> compute MutexState(afterOwner, newOwner)
       -> update mutexState field
       -> CompletableFuture.runAsync({ retriever.notifyOwner(state) }, handleExecutor)
@@ -653,7 +653,7 @@ This means `start()` and `stop()` are thread-safe and will not corrupt state eve
 
 ### Owner State Safety
 
-The `mutexState` field is `@Volatile` with a `protected set`. Updates happen in `safeNotifyOwner()` which is always called from the `handleExecutor` via `CompletableFuture.runAsync()`. This means:
+The `mutexState` field is `@Volatile` with a `protected set`. Updates happen in `applyAndNotify()` under the state lock, which is always called from the `handleExecutor` via `CompletableFuture.runAsync()`. This means:
 
 1. The `mutexState` write happens on the handle executor thread
 2. The `@Volatile` ensures visibility to all threads
@@ -789,7 +789,7 @@ Simba establishes happens-before relationships through:
 
 ### Potential Visibility Gaps
 
-The `mutexOwner` object returned from `MutexOwnerRepository.acquireAndGetOwner()` is created on the backend's scheduling thread but read on the handle executor thread (when the contender callback accesses `mutexState.after`). This is safe because the `@Volatile` write to `mutexState` in `safeNotifyOwner()` establishes the happens-before relationship.
+The `mutexOwner` object returned from `MutexOwnerRepository.acquireAndGetOwner()` is created on the backend's scheduling thread but read on the handle executor thread (when the contender callback accesses `mutexState.after`). This is safe because the `@Volatile` write to `mutexState` in `applyAndNotify()` establishes the happens-before relationship.
 
 ---
 

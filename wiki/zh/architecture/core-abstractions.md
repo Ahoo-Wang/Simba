@@ -199,7 +199,7 @@ interface MutexContendServiceFactory {
 [`AbstractMutexRetrievalService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/AbstractMutexRetrievalService.kt) 是所有检索服务的基类。它管理：
 
 - **状态转换** — 使用 `AtomicReferenceFieldUpdater`（[第 32 行](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/AbstractMutexRetrievalService.kt#L32)）对 `status` 字段进行无锁 CAS 操作。`start()` 要求 `INITIAL -> STARTING`，`stop()` 要求 `RUNNING -> STOPPING`。
-- **所有者状态** — `mutexState` 字段使用 `@Volatile`，在 `safeNotifyOwner()` 中更新。
+- **所有者状态** — `mutexState` 字段使用 `@Volatile`，在 `applyAndNotify()` 中于状态锁内更新。
 - **异步通知** — `notifyOwner(newOwner)` 通过 `CompletableFuture.runAsync()` 在 `handleExecutor` 上分发，确保缓慢的回调永远不会阻塞争用线程。
 - **模板方法** — 子类实现 `startRetrieval()` 和 `stopRetrieval()`。
 
@@ -219,8 +219,8 @@ autonumber
     Note over ARS: ... contention loop runs ...
 
     ARS->>ARS: newOwner detected
-    ARS->>HE: CompletableFuture.runAsync(safeNotifyOwner)
-    HE->>ARS: safeNotifyOwner(newOwner)
+    ARS->>HE: CompletableFuture.runAsync(dispatch)
+    HE->>ARS: dispatch(newOwner)
     ARS->>ARS: mutexState = MutexState(afterOwner, newOwner)
     ARS->>R: notifyOwner(newState)
 
@@ -303,8 +303,8 @@ autonumber
 
     BACKEND->>AMCS: contends and obtains new MutexOwner
     AMCS->>AMCS: notifyOwner(newOwner)
-    AMCS->>HE: CompletableFuture.runAsync(safeNotifyOwner)
-    HE->>AMCS: safeNotifyOwner(newOwner)
+    AMCS->>HE: CompletableFuture.runAsync(dispatch)
+    HE->>AMCS: dispatch(newOwner)
     AMCS->>AMCS: state = MutexState(afterOwner, newOwner)
     AMCS->>AMCS: mutexState = state
     AMCS->>MC: notifyOwner(state)

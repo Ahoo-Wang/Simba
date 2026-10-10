@@ -254,7 +254,7 @@ abstract class AbstractMutexRetrievalService(
 关键行为：
 - `start()` -- 通过 CAS 从 `INITIAL` 转换到 `STARTING`，调用 `startRetrieval()`，设置 `RUNNING`
 - `stop()` -- 通过 CAS 从 `RUNNING` 转换到 `STOPPING`，调用 `stopRetrieval()`，设置 `INITIAL`
-- `notifyOwner(newOwner)` -- 在 `handleExecutor` 上分发 `safeNotifyOwner`，更新 `mutexState` 并调用 `retriever.notifyOwner`
+- `notifyOwner(newOwner)` -- 在基于 `handleExecutor` 的顺序执行器上分发，先在状态锁内更新 `mutexState`，再在锁外调用 `retriever.notifyOwner`
 
 ## AbstractMutexContendService
 
