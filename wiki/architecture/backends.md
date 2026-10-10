@@ -139,12 +139,17 @@ private fun contend(generation: Long) {
             nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
         }
     } catch (throwable: Throwable) {
-        revokeOnFailure(generation)                      // drop local ownership
+        nextDelay = onFailure(generation)                // keep ownership within the lease, else revoke
     } finally {
         complete(generation, nextDelay)                  // schedule the next attempt
     }
 }
 ```
+
+After each successful acquisition or renewal the engine arms a watchdog at the lease end (`transitionAt`,
+measured from when the call was sent). If no renewal succeeds by then, even because the database call hangs,
+local ownership is revoked. A failed renewal keeps ownership while the lease is valid and retries with a halving
+backoff; the starter also sets the repository `queryTimeout` to `ttl`.
 
 Services created by `JdbcMutexContendServiceFactory` share one trigger scheduler and one I/O executor for
 database calls; the factory owns both and shuts them down on `close()`.

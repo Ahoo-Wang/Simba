@@ -720,7 +720,7 @@ private fun contend(generation: Long) {
         }
     } catch (throwable: Throwable) {
         log.error(throwable) { "contend failed" }
-        revokeOnFailure(generation)  // TTL 后重试
+        nextDelay = onFailure(generation)  // 租约内退避重试，否则撤销并在 TTL 后重试
     } finally {
         complete(generation, nextDelay)
     }
@@ -729,7 +729,7 @@ private fun contend(generation: Long) {
 
 关键要点：
 - 竞争中的错误不会停止服务 -- 它们会安排重试
-- 重试延迟默认为 TTL 持续时间，避免紧密的错误循环
+- 持有者在租约有效期内保持持有，并以减半退避（至少 100 ms）重试；租约看门狗在租约结束时撤销持有。非持有者在 TTL 后重试，避免紧密的错误循环
 - `@Suppress("TooGenericExceptionCaught")` 注解用于在生命周期方法中有意捕获 `Throwable`
 
 #### 状态机守卫

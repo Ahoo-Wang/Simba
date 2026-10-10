@@ -122,12 +122,14 @@ private fun contend(generation: Long) {
             nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
         }
     } catch (throwable: Throwable) {
-        revokeOnFailure(generation)                      // 撤销本地持有
+        nextDelay = onFailure(generation)                // 租约内保持持有，否则撤销
     } finally {
         complete(generation, nextDelay)                  // 调度下一次尝试
     }
 }
 ```
+
+每次成功获取或续期后，引擎会在租约结束时刻（`transitionAt`，从发出调用时开始计算）设置看门狗。如果届时仍未续期成功（包括数据库调用卡住），就撤销本地持有。续期失败时，只要租约仍有效就保持持有，并以减半退避重试；starter 还会把仓库的 `queryTimeout` 设为 `ttl`。
 
 由 `JdbcMutexContendServiceFactory` 创建的服务共享一个触发调度器和一个执行数据库调用的 I/O 执行器；工厂持有二者，并在 `close()` 时关闭。
 

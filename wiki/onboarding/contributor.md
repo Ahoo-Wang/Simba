@@ -725,7 +725,7 @@ private fun contend(generation: Long) {
         }
     } catch (throwable: Throwable) {
         log.error(throwable) { "contend failed" }
-        revokeOnFailure(generation)  // retry after TTL
+        nextDelay = onFailure(generation)  // backoff within the lease, else revoke and retry after TTL
     } finally {
         complete(generation, nextDelay)
     }
@@ -734,7 +734,8 @@ private fun contend(generation: Long) {
 
 Key points:
 - Errors in contention do not stop the service -- they schedule a retry
-- The retry delay defaults to the TTL duration, avoiding tight error loops
+- An owner keeps ownership while its lease is valid and retries with a halving backoff (at least 100 ms);
+  the lease watchdog revokes ownership at lease end. Non-owners retry after the TTL, avoiding tight error loops
 - The `@Suppress("TooGenericExceptionCaught")` annotation is used because catching `Throwable` is intentional in lifecycle methods
 
 #### Status Machine Guards

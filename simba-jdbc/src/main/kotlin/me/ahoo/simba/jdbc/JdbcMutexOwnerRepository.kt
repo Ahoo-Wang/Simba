@@ -15,16 +15,24 @@ package me.ahoo.simba.jdbc
 import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.SimbaException
 import java.sql.Connection
+import java.sql.PreparedStatement
 import java.sql.SQLException
 import java.sql.SQLIntegrityConstraintViolationException
+import java.time.Duration
 import javax.sql.DataSource
 
 /**
  * Jdbc Mutex Owner Repository.
  *
+ * @param queryTimeout per-statement timeout, rounded up to whole seconds (JDBC granularity);
+ * [Duration.ZERO] means no limit. Bounds how long a hung database call blocks a contention.
+ *
  * @author ahoo wang
  */
-class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerRepository {
+class JdbcMutexOwnerRepository @JvmOverloads constructor(
+    private val dataSource: DataSource,
+    queryTimeout: Duration = Duration.ZERO
+) : MutexOwnerRepository {
     companion object {
         private val log = KotlinLogging.logger {}
         private const val SQL_INIT_MUTEX =
@@ -67,6 +75,12 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
             """
     }
 
+    private val queryTimeoutSeconds: Int = queryTimeout.toQueryTimeoutSeconds()
+
+    private fun Connection.prepare(sql: String): PreparedStatement {
+        return prepareStatement(sql).also { it.queryTimeout = queryTimeoutSeconds }
+    }
+
     @Throws(SQLException::class, SQLIntegrityConstraintViolationException::class)
     override fun initMutex(mutex: String): Boolean {
         require(mutex.isNotBlank()) { "mutex is blank!" }
@@ -78,7 +92,7 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
 
     @Throws(SQLException::class)
     private fun initMutex(connection: Connection, mutex: String?): Boolean {
-        connection.prepareStatement(SQL_INIT_MUTEX).use { initStatement ->
+        connection.prepare(SQL_INIT_MUTEX).use { initStatement ->
             initStatement.setString(1, mutex)
             val affected = initStatement.executeUpdate()
             return affected > 0
@@ -104,7 +118,7 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
 
     @Throws(SQLException::class)
     private fun getOwner(connection: Connection, mutex: String): MutexOwnerEntity {
-        connection.prepareStatement(SQL_GET).use { getStatement ->
+        connection.prepare(SQL_GET).use { getStatement ->
             getStatement.setString(1, mutex)
             getStatement.executeQuery().use { resultSet ->
                 if (!resultSet.next()) {
@@ -176,7 +190,7 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
         ttl: Long,
         transition: Long
     ): Boolean {
-        connection.prepareStatement(SQL_ACQUIRE).use { acquireStatement ->
+        connection.prepare(SQL_ACQUIRE).use { acquireStatement ->
             acquireStatement.setLong(1, ttl)
             acquireStatement.setLong(2, ttl + transition)
             acquireStatement.setString(3, contenderId)
@@ -233,7 +247,7 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
 
     override fun release(mutex: String, contenderId: String): Boolean {
         dataSource.connection.use { connection ->
-            connection.prepareStatement(SQL_RELEASE).use { initStatement ->
+            connection.prepare(SQL_RELEASE).use { initStatement ->
                 initStatement.setString(1, mutex)
                 initStatement.setString(2, contenderId)
                 val affected = initStatement.executeUpdate()
@@ -241,4 +255,11 @@ class JdbcMutexOwnerRepository(private val dataSource: DataSource) : MutexOwnerR
             }
         }
     }
+}
+
+private fun Duration.toQueryTimeoutSeconds(): Int {
+    require(!isNegative) { "queryTimeout must not be negative: $this" }
+    val seconds = if (nano > 0) seconds + 1 else seconds
+    require(seconds <= Int.MAX_VALUE) { "queryTimeout must fit in Int seconds: $this" }
+    return seconds.toInt()
 }

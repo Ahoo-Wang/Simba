@@ -151,11 +151,17 @@ class SpringRedisMutexContendServiceSchedulingTest {
         )
     }
 
+    /**
+     * Records contention triggers; lease watchdogs (scheduled in nanoseconds) are kept apart and never run.
+     */
     private class ManualScheduledExecutor : ScheduledThreadPoolExecutor(1) {
         private val tasks = mutableListOf<ManualScheduledFuture<*>>()
+        private val watchdogs = mutableListOf<ManualScheduledFuture<*>>()
 
         override fun schedule(command: Runnable, delay: Long, unit: TimeUnit): ScheduledFuture<*> {
-            return ManualScheduledFuture(Executors.callable(command)).also { tasks += it }
+            val task = ManualScheduledFuture(Executors.callable(command))
+            if (unit == TimeUnit.NANOSECONDS) watchdogs += task else tasks += task
+            return task
         }
 
         fun run(index: Int) {

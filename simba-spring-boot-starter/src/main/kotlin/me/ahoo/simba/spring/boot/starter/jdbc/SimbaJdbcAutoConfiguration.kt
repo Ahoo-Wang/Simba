@@ -42,7 +42,8 @@ class SimbaJdbcAutoConfiguration(private val jdbcProperties: JdbcProperties) {
     @ConditionalOnMissingBean
     @ConditionalOnSingleCandidate(DataSource::class)
     fun mutexOwnerRepository(dataSource: DataSource): MutexOwnerRepository {
-        return JdbcMutexOwnerRepository(dataSource)
+        // A database call slower than the lease ttl cannot keep ownership anyway.
+        return JdbcMutexOwnerRepository(dataSource, queryTimeout = jdbcProperties.ttl)
     }
 
     @Bean

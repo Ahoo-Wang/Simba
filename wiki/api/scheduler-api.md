@@ -282,7 +282,7 @@ With `FIXED_RATE` (period = 5s), executions start at 0, 5, 10 regardless of task
 | Situation | Behavior |
 |---|---|
 | `work()` throws an exception | Caught by `safeWork()`, logged at ERROR level, scheduled execution continues |
-| Backend error during contention | Logged internally; contention loop retries after TTL period |
+| Backend error during contention | Logged internally; an owner keeps the lock while its lease is valid and retries with backoff, and loses it at lease end; non-owners retry after TTL |
 | `stop()` called while `work()` is running | Scheduled future is cancelled; `work()` may complete the current iteration |
 
 ## Concurrency Notes

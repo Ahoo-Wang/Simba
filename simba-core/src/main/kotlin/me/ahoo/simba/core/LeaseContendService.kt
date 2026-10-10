@@ -25,8 +25,13 @@ import java.util.concurrent.TimeUnit
  * Owns scheduling, renewal, failure revocation and compensation of acquisitions that complete after their
  * lifecycle ended; the backend only implements [MutexLeaseStore].
  *
- * - [scheduler] only triggers contention and must never block.
+ * - [scheduler] only triggers contention and the lease watchdog, and must never block.
  * - [ioExecutor] runs [MutexLeaseStore] calls; at most one call per service is in flight.
+ *
+ * Local lease guard: after each successful acquisition or renewal, a watchdog is armed at the lease end
+ * (`transitionAt`, measured from when the call was sent). If no renewal succeeds by then — including when the
+ * backend call hangs — local ownership is revoked. A failed renewal keeps ownership while the lease is still
+ * valid and retries with a halving backoff.
  *
  * @author ahoo wang
  */
@@ -41,6 +46,12 @@ open class LeaseContendService(
     companion object {
         private val log = KotlinLogging.logger {}
         private val DIRECT_EXECUTOR = Executor { it.run() }
+        private const val MIN_RETRY_MILLIS = 100L
+
+        /**
+         * Remaining leases at least this long (e.g. `Long.MAX_VALUE` timestamps) are treated as unbounded.
+         */
+        private val UNBOUNDED_LEASE_NANOS = Long.MAX_VALUE / 2
     }
 
     private val contendPeriod: ContendPeriod = ContendPeriod(contenderId)
@@ -53,6 +64,13 @@ open class LeaseContendService(
     private var scheduledFuture: ScheduledFuture<*>? = null
     private var inFlight = false
     private var contendRequested = false
+    private var watchdogToken = 0L
+    private var watchdogFuture: ScheduledFuture<*>? = null
+
+    /**
+     * `System.nanoTime()` at which the held lease ends; `null` when no bounded lease is held.
+     */
+    private var leaseDeadlineNanos: Long? = null
 
     /**
      * Called while starting, before the first contention is scheduled.
@@ -70,6 +88,7 @@ open class LeaseContendService(
             // A contention of the previous lifecycle may still be in flight; it no longer blocks this one.
             inFlight = false
             contendRequested = false
+            disarmWatchdog()
             onStart()
             try {
                 schedule(leaseConfig.initialDelayMillis, currentGeneration)
@@ -87,6 +106,7 @@ open class LeaseContendService(
     final override fun stopContend() {
         synchronized(lock) {
             cancelSchedule()
+            disarmWatchdog()
             try {
                 onStop()
             } finally {
@@ -169,18 +189,19 @@ open class LeaseContendService(
     private fun contend(generation: Long) {
         var nextDelay = leaseConfig.ttlMillis
         try {
+            val sentAtNanos = System.nanoTime()
             val mutexOwner = leaseStore.contend(mutex, contenderId, isOwner, leaseConfig)
             log.debug {
                 "contend - mutex:[$mutex] contenderId:[$contenderId] - owner:[${mutexOwner.ownerId}]."
             }
-            if (adopt(generation, mutexOwner)) {
+            if (adopt(generation, mutexOwner, sentAtNanos)) {
                 nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
             }
         } catch (throwable: Throwable) {
             log.error(throwable) {
                 "contend - mutex:[$mutex] contenderId:[$contenderId] - failed:[${throwable.message}]."
             }
-            revokeOnFailure(generation)
+            nextDelay = onFailure(generation)
         } finally {
             complete(generation, nextDelay)
         }
@@ -205,10 +226,15 @@ open class LeaseContendService(
      * Applies [mutexOwner] to the lifecycle that requested it. An acquisition that completes after its lifecycle
      * ended is released, unless a restarted lifecycle (same contenderId) is active and now relies on that lease.
      */
-    private fun adopt(generation: Long, mutexOwner: MutexOwner): Boolean {
+    private fun adopt(generation: Long, mutexOwner: MutexOwner, sentAtNanos: Long): Boolean {
         synchronized(lock) {
             if (isActive(generation)) {
                 notifyOwner(mutexOwner)
+                if (mutexOwner.isOwner(contenderId)) {
+                    armWatchdog(generation, mutexOwner, sentAtNanos)
+                } else {
+                    disarmWatchdog()
+                }
                 return true
             }
             val restarted = status.isActive && generation != currentGeneration
@@ -219,11 +245,68 @@ open class LeaseContendService(
         }
     }
 
-    private fun revokeOnFailure(generation: Long) {
+    /**
+     * Keeps ownership while the held lease is still valid and returns the retry delay; otherwise revokes local
+     * ownership and retries after `ttl`.
+     */
+    private fun onFailure(generation: Long): Long {
         synchronized(lock) {
-            if (isActive(generation) && isOwner) {
+            if (!isActive(generation)) {
+                return leaseConfig.ttlMillis
+            }
+            val remainingMillis = leaseDeadlineNanos?.let {
+                TimeUnit.NANOSECONDS.toMillis(it - System.nanoTime())
+            } ?: 0
+            if (remainingMillis > 0) {
+                return (remainingMillis / 2).coerceIn(MIN_RETRY_MILLIS, leaseConfig.ttlMillis)
+            }
+            disarmWatchdog()
+            if (isOwner) {
                 notifyOwner(MutexOwner.NONE)
             }
+            return leaseConfig.ttlMillis
+        }
+    }
+
+    private fun armWatchdog(generation: Long, mutexOwner: MutexOwner, sentAtNanos: Long) {
+        disarmWatchdog()
+        val remainingMillis = (mutexOwner.transitionAt - mutexOwner.currentAt).coerceAtLeast(0)
+        val remainingNanos = TimeUnit.MILLISECONDS.toNanos(remainingMillis)
+        if (remainingNanos >= UNBOUNDED_LEASE_NANOS) {
+            return
+        }
+        val deadlineNanos = sentAtNanos + remainingNanos
+        leaseDeadlineNanos = deadlineNanos
+        val token = watchdogToken
+        watchdogFuture = scheduler.schedule(
+            Runnable { onLeaseExpired(generation, token) },
+            (deadlineNanos - System.nanoTime()).coerceAtLeast(0),
+            TimeUnit.NANOSECONDS
+        )
+    }
+
+    private fun disarmWatchdog() {
+        watchdogToken++
+        watchdogFuture?.cancel(false)
+        watchdogFuture = null
+        leaseDeadlineNanos = null
+    }
+
+    private fun onLeaseExpired(generation: Long, token: Long) {
+        synchronized(lock) {
+            if (!isActive(generation) || token != watchdogToken) {
+                return
+            }
+            watchdogFuture = null
+            leaseDeadlineNanos = null
+            log.warn {
+                "onLeaseExpired - mutex:[$mutex] contenderId:[$contenderId] - lease ended without renewal, revoking."
+            }
+            /*
+             * Not gated on isOwner: the acquisition notification may still be queued, and the sequential
+             * notifier applies this release after it; a release while not owner is a no-op.
+             */
+            notifyOwner(MutexOwner.NONE)
         }
     }
 }

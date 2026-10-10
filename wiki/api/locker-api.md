@@ -209,7 +209,7 @@ repeat(5) { runWorker(it) }
 |---|---|
 | Thread already owns this `SimbaLocker` instance | `IllegalMonitorStateException` from `acquire()` |
 | Timeout expires before acquisition | `TimeoutException` from `acquire(timeout)` |
-| Backend error during contention | Logged internally; contention loop retries after TTL period |
+| Backend error during contention | Logged internally; an owner keeps the lock while its lease is valid and retries with backoff, and loses it at lease end; non-owners retry after TTL |
 | `close()` called when not owner | `stop()` on the contend service; safe to call multiple times |
 
 ## Concurrency Notes

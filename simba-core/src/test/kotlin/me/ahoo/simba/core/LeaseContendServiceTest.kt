@@ -73,7 +73,58 @@ class LeaseContendServiceTest {
     }
 
     @Test
-    fun `failure revokes ownership and retries after ttl`() {
+    fun `acquisition arms a watchdog at lease end`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+
+        scheduler.watchdogs.single().delayMillis.assert().isBetween(790, 800)
+    }
+
+    @Test
+    fun `watchdog revokes ownership at lease end`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+
+        scheduler.watchdogs.single().run()
+
+        service.isOwner.assert().isFalse()
+        contender.released.size.assert().isEqualTo(1)
+    }
+
+    @Test
+    fun `watchdog revokes ownership while renewal hangs and renewal success restores it`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+        scheduler.runNext()
+        val hungRenewal = io.take()
+
+        scheduler.watchdogs.single().run()
+        service.isOwner.assert().isFalse()
+
+        hungRenewal.run()
+        service.isOwner.assert().isTrue()
+        contender.acquired.size.assert().isEqualTo(2)
+        scheduler.watchdogs.size.assert().isEqualTo(1)
+    }
+
+    @Test
+    fun `renewal re-arms the watchdog`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+        val first = scheduler.watchdogs.single()
+        scheduler.runNext()
+        io.runNext()
+
+        first.isCancelled.assert().isTrue()
+        (scheduler.watchdogs.single() === first).assert().isFalse()
+    }
+
+    @Test
+    fun `failure within the lease keeps ownership and retries with backoff`() {
         service.start()
         scheduler.runNext()
         io.runNext()
@@ -81,9 +132,71 @@ class LeaseContendServiceTest {
         scheduler.runNext()
         io.runNext()
 
+        service.isOwner.assert().isTrue()
+        contender.released.assert().isEmpty()
+        scheduler.pending.single().delayMillis.assert().isBetween(390, 400)
+        scheduler.watchdogs.size.assert().isEqualTo(1)
+    }
+
+    @Test
+    fun `failure after the lease ended revokes and retries after ttl`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+        scheduler.watchdogs.single().run()
+        store.failNext = IllegalStateException("backend unavailable")
+        scheduler.runNext()
+        io.runNext()
+
         service.isOwner.assert().isFalse()
         contender.released.size.assert().isEqualTo(1)
         scheduler.pending.single().delayMillis.assert().isEqualTo(500)
+    }
+
+    @Test
+    fun `failure while not owner retries after ttl`() {
+        store.failNext = IllegalStateException("backend unavailable")
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+
+        service.isOwner.assert().isFalse()
+        scheduler.pending.single().delayMillis.assert().isEqualTo(500)
+    }
+
+    @Test
+    fun `losing the lease to another owner disarms the watchdog`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+        store.otherOwner = "c2"
+        scheduler.runNext()
+        io.runNext()
+
+        scheduler.watchdogs.assert().isEmpty()
+        service.isOwner.assert().isFalse()
+    }
+
+    @Test
+    fun `unbounded lease arms no watchdog`() {
+        store.unbounded = true
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+
+        service.isOwner.assert().isTrue()
+        scheduler.watchdogs.assert().isEmpty()
+    }
+
+    @Test
+    fun `stop disarms the watchdog`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+
+        service.stop()
+
+        scheduler.watchdogs.assert().isEmpty()
     }
 
     @Test
@@ -250,6 +363,7 @@ class LeaseContendServiceTest {
         var ownerId = ""
         var otherOwner: String? = null
         var failNext: Throwable? = null
+        var unbounded = false
         val renewFlags = mutableListOf<Boolean>()
         var contendCalls = 0
         var releaseCalls = 0
@@ -262,6 +376,9 @@ class LeaseContendServiceTest {
                 throw it
             }
             val holder = otherOwner ?: contenderId.also { ownerId = it }
+            if (unbounded) {
+                return FixedClockOwner(holder, Long.MAX_VALUE, Long.MAX_VALUE, NOW)
+            }
             return FixedClockOwner(holder, NOW + config.ttlMillis, NOW + config.leaseMillis, NOW)
         }
 
@@ -279,18 +396,25 @@ class LeaseContendServiceTest {
         }
     }
 
+    /**
+     * Contention triggers are scheduled in milliseconds and lease watchdogs in nanoseconds;
+     * the time unit tells them apart.
+     */
     private class ManualScheduler : ScheduledThreadPoolExecutor(1) {
         private val tasks = mutableListOf<ManualTask>()
         var reject = false
 
         val pending: List<ManualTask>
-            get() = tasks.filter { !it.isDone }
+            get() = tasks.filter { !it.isDone && !it.watchdog }
+
+        val watchdogs: List<ManualTask>
+            get() = tasks.filter { !it.isDone && it.watchdog }
 
         override fun schedule(command: Runnable, delay: Long, unit: TimeUnit): ScheduledFuture<*> {
             if (reject) {
                 throw RejectedExecutionException("rejected")
             }
-            return ManualTask(command, unit.toMillis(delay)).also { tasks += it }
+            return ManualTask(command, unit.toMillis(delay), unit == TimeUnit.NANOSECONDS).also { tasks += it }
         }
 
         fun runNext() {
@@ -298,7 +422,7 @@ class LeaseContendServiceTest {
         }
     }
 
-    private class ManualTask(command: Runnable, val delayMillis: Long) :
+    private class ManualTask(command: Runnable, val delayMillis: Long, val watchdog: Boolean) :
         FutureTask<Unit>(command, Unit),
         ScheduledFuture<Unit> {
         override fun getDelay(unit: TimeUnit): Long = unit.convert(delayMillis, TimeUnit.MILLISECONDS)
