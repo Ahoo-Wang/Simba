@@ -36,7 +36,7 @@ class JdbcMutexOwnerRepositoryFencingTest {
         dataSource.jdbcUrl = "jdbc:mysql://localhost:3306/simba_db"
         dataSource.username = "root"
         dataSource.password = "root"
-        repository = JdbcMutexOwnerRepository(dataSource, fencing = true)
+        repository = JdbcMutexOwnerRepository(dataSource)
     }
 
     @AfterAll
@@ -78,7 +78,7 @@ class JdbcMutexOwnerRepositoryFencingTest {
     @Test
     fun `fencing disabled reports no token`() {
         val mutex = newMutex()
-        val plain = JdbcMutexOwnerRepository(dataSource)
+        val plain = JdbcMutexOwnerRepository(dataSource, fencing = false)
 
         plain.acquireAndGetOwner(mutex, "a", LONG_TTL, LONG_TRANSITION).fencingToken
             .assert().isEqualTo(MutexOwner.NO_FENCING_TOKEN)

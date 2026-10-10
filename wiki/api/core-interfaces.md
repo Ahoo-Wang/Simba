@@ -311,7 +311,7 @@ class MutexOwner(
 | `ttlAt` | `Long` | Timestamp when the TTL expires. After this, the owner should renew or another contender may take over. |
 | `transitionAt` | `Long` | End of the transition/grace period. During this window the current owner can preferentially renew. |
 | `observedAt` | `Long` | Backend time at which the owner was observed (database time for JDBC). |
-| `fencingToken` | `Long` | Strictly increasing per ownership term, stable within one. `NO_FENCING_TOKEN` (`0`) when the backend does not issue tokens (Zookeeper and Redis always; JDBC with `simba.jdbc.fencing`). |
+| `fencingToken` | `Long` | Strictly increasing per ownership term, stable within one. `NO_FENCING_TOKEN` (`0`) when the backend does not issue tokens (all backends; JDBC unless `simba.jdbc.fencing=false`). |
 
 | Method | Return | Description |
 |---|---|---|

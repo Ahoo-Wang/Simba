@@ -27,15 +27,15 @@ import javax.sql.DataSource
  *
  * @param queryTimeout per-statement timeout, rounded up to whole seconds (JDBC granularity);
  * [Duration.ZERO] means no limit. Bounds how long a hung database call blocks a contention.
- * @param fencing issue fencing tokens from the `fencing_token` column (ADR 0002). Requires that column; see
- * `init-script/upgrade-simba-mysql-fencing-token.sql` for existing tables.
+ * @param fencing issue fencing tokens from the `fencing_token` column (ADR 0002), on by default. Requires that column;
+ * see `init-script/upgrade-simba-mysql-fencing-token.sql` for existing tables, or pass `false`.
  *
  * @author ahoo wang
  */
 class JdbcMutexOwnerRepository @JvmOverloads constructor(
     private val dataSource: DataSource,
     queryTimeout: Duration = Duration.ZERO,
-    private val fencing: Boolean = false
+    private val fencing: Boolean = true
 ) : MutexOwnerRepository {
     companion object {
         private val log = KotlinLogging.logger {}

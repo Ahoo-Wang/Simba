@@ -46,7 +46,7 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
 - Fencing tokens (ADR 0002): `MutexOwner.fencingToken` increases strictly per ownership term and stays stable within
   it; `0` means none. Zookeeper uses the winning latch node's czxid, never its sequence (container parents get reaped
   and restart sequences). Redis: `INCR simba:{mutex}:fence` on `SET NX`, term token in `simba:{mutex}:token`; nodes
-  ignore broadcasts of their own acquisition. JDBC (opt-in `simba.jdbc.fencing`): `fencing_token` advanced in the
+  ignore broadcasts of their own acquisition. JDBC (`simba.jdbc.fencing`, on by default): `fencing_token` advanced in the
   acquire `UPDATE` only on a new term; that assignment must stay first in `SET` (MySQL evaluates left to right).
 - JDBC and Redis share the polling loop in `LeaseContendService`; a backend only implements `MutexLeaseStore`
   (one atomic call, no scheduling or notification). `LeaseConfig` is the single place for duration validation.

@@ -46,7 +46,7 @@
       "type": "java.lang.Boolean",
       "description": "Whether the JDBC backend issues fencing tokens from the fencing_token column.",
       "sourceType": "me.ahoo.simba.spring.boot.starter.jdbc.JdbcProperties",
-      "defaultValue": false
+      "defaultValue": true
     },
     {
       "name": "simba.redis.enabled",

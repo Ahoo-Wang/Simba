@@ -28,10 +28,10 @@ data class JdbcProperties(
     val ttl: Duration = Duration.ofSeconds(10),
     val transition: Duration = Duration.ofSeconds(6),
     /**
-     * Issue fencing tokens from the `fencing_token` column; existing tables need
-     * `init-script/upgrade-simba-mysql-fencing-token.sql` first.
+     * Issue fencing tokens from the `fencing_token` column (on by default); existing tables need
+     * `init-script/upgrade-simba-mysql-fencing-token.sql` first, or set this to `false`.
      */
-    val fencing: Boolean = false
+    val fencing: Boolean = true
 ) {
     companion object {
         const val PREFIX = Simba.SIMBA_PREFIX + "jdbc"

@@ -55,13 +55,13 @@ erDiagram
 | `transition_at` | `BIGINT UNSIGNED` | 宽限期结束的纪元毫秒时间戳。等于 `acquired_at + ttl + transition`。 |
 | `owner_id` | `VARCHAR(128)` | 当前所有者的 `contenderId`。无所有者时为空字符串。 |
 | `version` | `INT UNSIGNED` | 每次获取/释放时递增的状态变更计数器。不参与 `WHERE` 比较——并发由 owner/transition 谓词守卫。 |
-| `fencing_token` | `BIGINT UNSIGNED` | Fencing token，启用 `simba.jdbc.fencing` 时每个持有任期递增一次。 |
+| `fencing_token` | `BIGINT UNSIGNED` | Fencing token，每个持有任期递增一次（`simba.jdbc.fencing`，默认开启）。 |
 
 ### Fencing Token
 
-设置 `simba.jdbc.fencing=true`（或 `JdbcMutexOwnerRepository(dataSource, fencing = true)`）后，获取锁的 `UPDATE` 只在开始新的持有任期时推进 `fencing_token`：被他人接管，或所有者自己的租约结束后重新获取。续期保持不变。该赋值位于 `SET` 列表的第一位，因为 MySQL 按从左到右的顺序、使用已更新的值计算赋值，而条件必须读取之前的持有者。参见 [ADR 0002](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md)。
+开启 fencing 时（默认开启；`simba.jdbc.fencing` / `JdbcMutexOwnerRepository(fencing = ...)`），获取锁的 `UPDATE` 只在开始新的持有任期时推进 `fencing_token`：被他人接管，或所有者自己的租约结束后重新获取。续期保持不变。该赋值位于 `SET` 列表的第一位，因为 MySQL 按从左到右的顺序、使用已更新的值计算赋值，而条件必须读取之前的持有者。参见 [ADR 0002](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md)。
 
-Fencing 需要 `fencing_token` 列，因此需要显式开启：新安装会通过 `init-simba-mysql.sql` 创建该列，已有的表需要先执行 [`upgrade-simba-mysql-fencing-token.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/upgrade-simba-mysql-fencing-token.sql)。
+Fencing 需要 `fencing_token` 列：新安装会通过 `init-simba-mysql.sql` 创建该列；已有的表需要在升级到 4.0 之前执行 [`upgrade-simba-mysql-fencing-token.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/upgrade-simba-mysql-fencing-token.sql)，或设置 `simba.jdbc.fencing=false`。
 
 ## 关键类
 
@@ -203,7 +203,7 @@ simba:
     initial-delay: 0s    # 首次竞争前的延迟
     ttl: 10s             # 锁 TTL
     transition: 6s       # TTL 后的宽限期
-    fencing: false       # 签发 fencing token（需要 fencing_token 列）
+    fencing: true        # 签发 fencing token（需要 fencing_token 列）
 ```
 
 **源码：** [simba-spring-boot-starter/.../JdbcProperties.kt:25](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/jdbc/JdbcProperties.kt#L25)
@@ -215,7 +215,7 @@ simba:
 | `simba.jdbc.initial-delay` | `0s` | 首次竞争尝试前的延迟 |
 | `simba.jdbc.ttl` | `10s` | 锁 TTL -- 锁被持有多长时间后需要续期 |
 | `simba.jdbc.transition` | `6s` | TTL 后用于优先所有者续期的宽限期 |
-| `simba.jdbc.fencing` | `false` | 从 `fencing_token` 列签发 fencing token |
+| `simba.jdbc.fencing` | `true` | 从 `fencing_token` 列签发 fencing token |
 
 ## 错误处理
 

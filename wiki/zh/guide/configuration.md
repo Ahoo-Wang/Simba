@@ -30,7 +30,7 @@ description: Simba 配置的完整参考 -- Spring Boot 属性、编程式工厂
 | `simba.jdbc.initial-delay` | `Duration` | `0s` | `start()` 后首次竞争尝试前的延迟。 |
 | `simba.jdbc.ttl` | `Duration` | `10s` | 所有者租约的生存时间。所有者必须在此到期前续租。 |
 | `simba.jdbc.transition` | `Duration` | `6s` | TTL 到期后的宽限期。现任所有者在此窗口期间可以优先续租。 |
-| `simba.jdbc.fencing` | `Boolean` | `false` | 从 `fencing_token` 列签发 fencing token。已有的表需要先执行 `upgrade-simba-mysql-fencing-token.sql`。 |
+| `simba.jdbc.fencing` | `Boolean` | `true` | 从 `fencing_token` 列签发 fencing token。已有的表需要先执行 `upgrade-simba-mysql-fencing-token.sql`，或设为 `false`。 |
 
 **示例 `application.yml`：**
 
