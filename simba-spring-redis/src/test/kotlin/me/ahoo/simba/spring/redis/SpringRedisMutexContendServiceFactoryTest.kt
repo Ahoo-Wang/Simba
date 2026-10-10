@@ -34,19 +34,22 @@ class SpringRedisMutexContendServiceFactoryTest {
     }
 
     @Test
-    fun `close shuts down the scheduled executor service`() {
+    fun `close shuts down owned executors`() {
         val scheduledExecutorService = Executors.newScheduledThreadPool(1)
+        val ioExecutor = Executors.newCachedThreadPool()
         val factory = SpringRedisMutexContendServiceFactory(
             ttl = Duration.ofSeconds(10),
             transition = Duration.ofSeconds(6),
-            redisTemplate = org.springframework.data.redis.core.StringRedisTemplate(),
+            redisTemplate = StringRedisTemplate(),
             listenerContainer = RedisMessageListenerContainer(),
-            scheduledExecutorService = scheduledExecutorService
+            scheduledExecutorService = scheduledExecutorService,
+            ioExecutor = ioExecutor
         )
 
         factory.close()
 
         assertThat(scheduledExecutorService.isShutdown, equalTo(true))
+        assertThat(ioExecutor.isShutdown, equalTo(true))
     }
 
     private fun newFactory(ttl: Duration, transition: Duration): SpringRedisMutexContendServiceFactory {

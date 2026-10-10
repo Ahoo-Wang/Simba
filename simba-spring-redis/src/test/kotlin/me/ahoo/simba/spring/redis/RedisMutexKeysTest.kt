@@ -10,24 +10,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package me.ahoo.simba.util
+package me.ahoo.simba.spring.redis
 
-import com.google.common.util.concurrent.ThreadFactoryBuilder
-import java.util.concurrent.ThreadFactory
+import me.ahoo.test.asserts.assert
+import org.junit.jupiter.api.Test
 
-/**
- * Threads tool.
- *
- * @author ahoo wang
- */
-object Threads {
-    @JvmStatic
-    @JvmOverloads
-    fun defaultFactory(domain: String, daemon: Boolean = false): ThreadFactory {
-        val nameFormat = "$domain-%d"
-        return ThreadFactoryBuilder()
-            .setDaemon(daemon)
-            .setNameFormat(nameFormat)
-            .build()
+class RedisMutexKeysTest {
+    @Test
+    fun `names use the hash-tagged key that Lua scripts derive from KEYS`() {
+        val keys = RedisMutexKeys("naming")
+
+        keys.keys.assert().containsExactly("{naming}")
+        keys.mutexKey.assert().isEqualTo("simba:{naming}")
+        keys.contenderChannel("c1").assert().isEqualTo("simba:{naming}:c1")
     }
 }

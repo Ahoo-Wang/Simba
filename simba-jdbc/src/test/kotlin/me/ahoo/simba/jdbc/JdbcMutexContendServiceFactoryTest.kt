@@ -12,10 +12,13 @@
  */
 package me.ahoo.simba.jdbc
 
+import org.hamcrest.MatcherAssert.assertThat
+import org.hamcrest.Matchers.equalTo
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.lang.reflect.Proxy
 import java.time.Duration
+import java.util.concurrent.Executors
 
 class JdbcMutexContendServiceFactoryTest {
     private val repository = Proxy.newProxyInstance(
@@ -39,6 +42,25 @@ class JdbcMutexContendServiceFactoryTest {
         assertThrows<IllegalArgumentException> {
             newFactory(Duration.ofSeconds(Long.MAX_VALUE), Duration.ofMillis(1), Duration.ZERO)
         }
+    }
+
+    @Test
+    fun `close shuts down owned executors`() {
+        val scheduledExecutorService = Executors.newScheduledThreadPool(1)
+        val ioExecutor = Executors.newCachedThreadPool()
+        val factory = JdbcMutexContendServiceFactory(
+            mutexOwnerRepository = repository,
+            initialDelay = Duration.ZERO,
+            ttl = Duration.ofSeconds(10),
+            transition = Duration.ofSeconds(6),
+            scheduledExecutorService = scheduledExecutorService,
+            ioExecutor = ioExecutor
+        )
+
+        factory.close()
+
+        assertThat(scheduledExecutorService.isShutdown, equalTo(true))
+        assertThat(ioExecutor.isShutdown, equalTo(true))
     }
 
     private fun newFactory(

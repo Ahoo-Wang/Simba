@@ -12,37 +12,51 @@
  */
 package me.ahoo.simba.jdbc
 
+import me.ahoo.simba.core.ContendExecutors
+import me.ahoo.simba.core.LeaseConfig
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexContender
 import java.time.Duration
 import java.util.concurrent.Executor
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.ForkJoinPool
+import java.util.concurrent.ScheduledExecutorService
 
 /**
  * Jdbc Mutex Contend Service Factory.
  *
+ * All created services share [scheduledExecutorService] (contention triggers) and [ioExecutor]
+ * (database calls). The factory owns both: [close] shuts them down, so pass dedicated executors.
+ *
  * @author ahoo wang
  */
-class JdbcMutexContendServiceFactory(
+class JdbcMutexContendServiceFactory @JvmOverloads constructor(
     private val mutexOwnerRepository: MutexOwnerRepository,
     private val handleExecutor: Executor = ForkJoinPool.commonPool(),
-    private val initialDelay: Duration,
-    private val ttl: Duration,
-    private val transition: Duration
-) : MutexContendServiceFactory {
-    init {
-        validateJdbcDurations(initialDelay, ttl, transition)
-    }
+    initialDelay: Duration,
+    ttl: Duration,
+    transition: Duration,
+    private val scheduledExecutorService: ScheduledExecutorService = ContendExecutors.newScheduler("simba-jdbc"),
+    private val ioExecutor: ExecutorService = ContendExecutors.newIoExecutor("simba-jdbc-io")
+) : MutexContendServiceFactory, AutoCloseable {
+    private val leaseConfig = LeaseConfig(ttl, transition, initialDelay)
 
     override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
         return JdbcMutexContendService(
             mutexContender = mutexContender,
             handleExecutor = handleExecutor,
             mutexOwnerRepository = mutexOwnerRepository,
-            initialDelay = initialDelay,
-            ttl = ttl,
-            transition = transition
+            initialDelay = leaseConfig.initialDelay,
+            ttl = leaseConfig.ttl,
+            transition = leaseConfig.transition,
+            scheduler = scheduledExecutorService,
+            ioExecutor = ioExecutor
         )
+    }
+
+    override fun close() {
+        scheduledExecutorService.shutdown()
+        ioExecutor.shutdown()
     }
 }
