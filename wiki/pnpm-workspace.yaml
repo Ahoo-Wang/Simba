@@ -5,5 +5,5 @@ allowBuilds:
 # upstream ranges move past them. VitePress 1.6 pins vite ^5.4 (all of 5.x is affected; fixed in 6.4.3) and
 # mermaid 11 pins katex ^0.16 (fixed in 0.18.2). Remove an entry when no dependent resolves a vulnerable version.
 overrides:
-  "vite@<6.4.3": ^6.4.4
+  "vite@<6.4.3": ^8.3.4
   "katex@<0.18.2": ^0.18.2
