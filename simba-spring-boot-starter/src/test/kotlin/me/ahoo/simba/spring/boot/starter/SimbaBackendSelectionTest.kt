@@ -41,6 +41,18 @@ internal class SimbaBackendSelectionTest {
     }
 
     @Test
+    fun `ambiguity fails fast even with global lazy initialization`() {
+        contextRunner
+            .withInitializer { context ->
+                (context as org.springframework.context.support.GenericApplicationContext)
+                    .addBeanFactoryPostProcessor(org.springframework.boot.LazyInitializationBeanFactoryPostProcessor())
+            }
+            .run {
+                assertThat(it).hasFailed()
+            }
+    }
+
+    @Test
     fun `simba backend selects one of several`() {
         contextRunner.withPropertyValues("simba.backend=Redis").run {
             assertThat(it).hasNotFailed()

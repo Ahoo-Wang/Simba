@@ -16,6 +16,7 @@ import me.ahoo.simba.core.ContendExecutors
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Lazy
 import org.springframework.core.env.Environment
 import org.springframework.core.io.ResourceLoader
 import java.util.concurrent.ExecutorService
@@ -40,6 +41,7 @@ class SimbaAutoConfiguration {
      * or a `simba.backend` that names an unavailable backend.
      */
     @Bean
+    @Lazy(false) // validate even under spring.main.lazy-initialization=true
     fun simbaBackendSelection(environment: Environment, resourceLoader: ResourceLoader): SimbaBackendSelection {
         // The context class loader, as used by @ConditionalOnClass on the backend auto-configurations.
         val classLoader = resourceLoader.classLoader
