@@ -70,6 +70,13 @@
       "defaultValue": "6s"
     },
     {
+      "name": "simba.metrics.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether Simba records Micrometer metrics when a MeterRegistry bean exists.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.metrics.SimbaMetricsAutoConfiguration",
+      "defaultValue": true
+    },
+    {
       "name": "simba.scheduling.enabled",
       "type": "java.lang.Boolean",
       "description": "Whether @SimbaScheduled methods and SimbaScheduler beans run with the application context.",

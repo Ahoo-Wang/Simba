@@ -234,6 +234,12 @@ repository.save(order, fencingToken = locker.fencingToken)
 
 所有后端的 token 都按持有任期严格递增（`0` 表示没有）。Redis 需要持久化计数器（AOF），重启后才能保持单调。
 
+### 指标
+
+引入 Micrometer（例如 `spring-boot-starter-actuator`）后，starter 会记录 `simba.mutex.owner`、
+`simba.mutex.ownership.changes`、`simba.mutex.contend`、`simba.mutex.lease.expired` 和 `simba.scheduler.work`，
+按 mutex 打标签。告警规则和自定义 `ContendObserver` 参见 [可观测性](https://simba.ahoo.me/zh/guide/observability)。
+
 ## 升级到 4.0
 
 - **Redis：** 推出 4.0 之前，所有节点都必须先运行 Simba 3.2 或更高版本。

@@ -21,6 +21,7 @@
 - [Introduction](wiki/guide/index.md) — What Simba is, core concepts, comparison with alternatives
 - [Quick Start](wiki/guide/quick-start.md) — Dependencies, basic usage, Spring Boot auto-config
 - [Configuration](wiki/guide/configuration.md) — Spring Boot properties, programmatic configuration
+- [Observability](wiki/guide/observability.md) — Micrometer metrics, alert rules, custom ContendObserver
 - [Contributing](wiki/guide/contributing.md) — Development setup, build commands, PR process
 
 ## API Reference

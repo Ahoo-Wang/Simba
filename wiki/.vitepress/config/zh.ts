@@ -28,6 +28,7 @@ export const zh: DefaultTheme.Config = {
             { text: '介绍', link: '/zh/guide/' },
             { text: '快速上手', link: '/zh/guide/quick-start' },
             { text: '配置', link: '/zh/guide/configuration' },
+            { text: '可观测性', link: '/zh/guide/observability' },
           ],
         },
       ],
