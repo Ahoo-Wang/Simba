@@ -146,7 +146,7 @@ acquiredAt ---- ttlAt ---- transitionAt ---- now (expired)
 
 Each backend constructs `MutexOwner` differently:
 
-**JDBC**: The repository returns a `MutexOwnerEntity` from the database row, which is mapped to `MutexOwner(ownerId, acquiredAt, ttlAt, transitionAt)`.
+**JDBC**: The repository maps the database row to `MutexOwner(ownerId, acquiredAt, ttlAt, transitionAt, fencingToken, observedAt = database time)`.
 
 **Redis**: The Lua script returns `{ownerId}@@{transitionAt}`. The service computes `ttlAt = transitionAt - transition` and `acquiredAt = ttlAt - ttl`.
 

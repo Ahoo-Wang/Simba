@@ -93,12 +93,12 @@ class MutexOwnerTest {
     }
 
     @Test
-    fun `isInTransitionOf returns false for non-owner`() {
+    fun `isInTtl returns false for non-owner`() {
         val owner = MutexOwner(
             ownerId = "c1",
-            transitionAt = System.currentTimeMillis() + 10_000
+            ttlAt = System.currentTimeMillis() + 10_000
         )
-        owner.isInTransitionOf("c2").assert().isFalse()
+        owner.isInTtl("c2").assert().isFalse()
     }
 }
 ```

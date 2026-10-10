@@ -273,6 +273,6 @@ For tests, use the `simba-testing` skill. In short:
 1. **Forgetting to stop the service**: Always call `stop()` or `close()` — otherwise the contender keeps polling/subscribing and may hold the lock.
 2. **Blocking callbacks**: Long-running callbacks delay later notifications for that service. Queued callbacks occupy a shared worker with the default executor or block the producer with a direct executor; release callbacks can delay `stop()` regardless of which thread executes them.
 3. **Multiple backends enabled**: The result depends on condition evaluation and inferred bean return types; a backend may silently win or multiple factories may be registered. Enable exactly one backend unless ambiguity is intentional.
-4. **Clock skew with JDBC**: The JDBC backend uses DB server time (`currentDbAt`) to avoid clock skew across application nodes. Ensure all nodes point to the same DB.
+4. **Clock skew with JDBC**: The JDBC backend uses DB server time (`MutexOwner.observedAt` from `current_timestamp(3)`) to avoid clock skew across application nodes. Ensure all nodes point to the same DB.
 5. **Redis release vs expiration**: Explicit release wakes the oldest queued contender through its personal Pub/Sub channel. Natural key expiration publishes nothing; contenders retry on their existing schedule around hard expiry.
 6. **Zookeeper path conflicts**: The Zookeeper backend creates paths at `/simba/{mutex}`. Don't use the same mutex name for unrelated locks.

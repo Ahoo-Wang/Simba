@@ -48,13 +48,13 @@ class JdbcMutexOwnerRepository @JvmOverloads constructor(
             """
         private const val SQL_GET =
             """
-                select acquired_at, ttl_at, transition_at, owner_id, version, cast(unix_timestamp(current_timestamp(3)) * 1000 as unsigned) as current_at 
+                select acquired_at, ttl_at, transition_at, owner_id, cast(unix_timestamp(current_timestamp(3)) * 1000 as unsigned) as current_at
                 from simba_mutex 
                 where mutex = ?;
             """
         private const val SQL_GET_FENCING =
             """
-                select acquired_at, ttl_at, transition_at, owner_id, version, cast(unix_timestamp(current_timestamp(3)) * 1000 as unsigned) as current_at, fencing_token
+                select acquired_at, ttl_at, transition_at, owner_id, cast(unix_timestamp(current_timestamp(3)) * 1000 as unsigned) as current_at, fencing_token
                 from simba_mutex
                 where mutex = ?;
             """
@@ -144,12 +144,12 @@ class JdbcMutexOwnerRepository @JvmOverloads constructor(
         }
     }
 
-    fun getOwner(mutex: String): MutexOwnerEntity {
+    fun getOwner(mutex: String): MutexOwner {
         dataSource.connection.use { connection -> return getOwner(connection, mutex) }
     }
 
     @Throws(SQLException::class)
-    private fun getOwner(connection: Connection, mutex: String): MutexOwnerEntity {
+    private fun getOwner(connection: Connection, mutex: String): MutexOwner {
         connection.prepare(if (fencing) SQL_GET_FENCING else SQL_GET).use { getStatement ->
             getStatement.setString(1, mutex)
             getStatement.executeQuery().use { resultSet ->
@@ -162,24 +162,25 @@ class JdbcMutexOwnerRepository @JvmOverloads constructor(
                 val ttlAt = resultSet.getLong(2)
                 val transitionAt = resultSet.getLong(3)
                 val ownerId = resultSet.getString(4)
-                val version = resultSet.getInt(5)
-                val currentAt = resultSet.getLong(6)
-                val fencingToken = if (fencing) resultSet.getLong(7) else MutexOwner.NO_FENCING_TOKEN
-                val entity = MutexOwnerEntity(mutex, ownerId, acquiredAt, ttlAt, transitionAt, fencingToken)
-                entity.version = version
-                entity.currentDbAt = currentAt
-                return entity
+                val currentDbAt = resultSet.getLong(5)
+                val fencingToken = if (fencing) resultSet.getLong(6) else MutexOwner.NO_FENCING_TOKEN
+                /*
+                 * Database time keeps lease decisions on one clock. UNIX_TIMESTAMP returns 0 when out of range
+                 * (MySQL < 8.0.28 after 2038); fall back to JVM time then.
+                 */
+                val observedAt = if (currentDbAt > 0) currentDbAt else System.currentTimeMillis()
+                return MutexOwner(ownerId, acquiredAt, ttlAt, transitionAt, fencingToken, observedAt)
             }
         }
     }
 
-    fun ensureOwner(mutex: String): MutexOwnerEntity {
+    fun ensureOwner(mutex: String): MutexOwner {
         dataSource.connection.use { connection -> return ensureOwner(connection, mutex) }
     }
 
     @Suppress("SwallowedException")
     @Throws(SQLException::class)
-    private fun ensureOwner(connection: Connection, mutex: String): MutexOwnerEntity {
+    private fun ensureOwner(connection: Connection, mutex: String): MutexOwner {
         return try {
             getOwner(connection, mutex)
         } catch (notFoundMutexOwnerException: NotFoundMutexOwnerException) {
@@ -238,7 +239,7 @@ class JdbcMutexOwnerRepository @JvmOverloads constructor(
         }
     }
 
-    override fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwnerEntity {
+    override fun acquireAndGetOwner(mutex: String, contenderId: String, ttl: Long, transition: Long): MutexOwner {
         try {
             dataSource.connection.use { connection ->
                 val previousAutoCommit = connection.autoCommit

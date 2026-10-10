@@ -15,7 +15,7 @@ base classes that handle scheduling, notification dispatch, and lifecycle manage
 
 [`MutexOwner`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt)
 is an immutable value object that represents the current holder of a distributed mutex. It
-carries four fields:
+carries the lease facts and when they were observed:
 
 | Field | Type | Description |
 |---|---|---|
@@ -23,12 +23,17 @@ carries four fields:
 | `acquiredAt` | `Long` | Epoch millis when the lock was acquired |
 | `ttlAt` | `Long` | Epoch millis when the lock's TTL expires (owner must renew before this) |
 | `transitionAt` | `Long` | Epoch millis when the transition period ends (other contenders may attempt acquisition after this) |
+| `fencingToken` | `Long` | Strictly increasing per ownership term (ADR 0002); `0` when not issued |
+| `observedAt` | `Long` | Backend time at which the owner was observed |
+
+Timestamps are in the backend's clock. `currentAt` advances `observedAt` with the local monotonic clock, so lease
+decisions never compare wall clocks of different nodes; for JDBC `observedAt` is database time. Equality covers the
+lease facts only.
 
 Key derived properties and methods:
 
-- **`isInTtl`** — returns `true` when `ttlAt > currentTimeMillis()`, meaning the owner still has a valid TTL.
-- **`isInTransition`** — returns `true` when `transitionAt >= currentTimeMillis()`, meaning no other contender should attempt acquisition yet.
-- **`hasOwner()`** — returns `true` when `transitionAt >= currentTimeMillis()`, indicating that an active leader exists (even if TTL has expired, the transition window still counts as "owned").
+- **`isInTtl`** — `ttlAt > currentAt`: the owner still has a valid TTL.
+- **`hasOwner()`** — `transitionAt >= currentAt`: the lease is still running (the transition window still counts as owned).
 - **`isOwner(contenderId)`** — checks whether the given contender ID matches `ownerId`.
 
 **NONE sentinel:** The companion object provides `MutexOwner.NONE` ([line 85](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt#L85)),
@@ -38,26 +43,18 @@ represents the absence of any owner and is used as the initial and terminal stat
 ```mermaid
 classDiagram
     class MutexOwner {
-        <<@Immutable>>
         +ownerId: String
         +acquiredAt: Long
         +ttlAt: Long
         +transitionAt: Long
+        +fencingToken: Long
+        +observedAt: Long
+        +currentAt: Long
         +isInTtl: Boolean
-        +isInTransition: Boolean
         +hasOwner(): Boolean
         +isOwner(contenderId: String): Boolean
         +isInTtl(contenderId: String): Boolean
-        +isInTransitionOf(contenderId: String): Boolean
     }
-
-    class MutexOwnerEntity {
-        +mutex: String
-        +version: int
-        +currentDbAt: Long
-    }
-
-    MutexOwner <|-- MutexOwnerEntity
 ```
 
 ### MutexState

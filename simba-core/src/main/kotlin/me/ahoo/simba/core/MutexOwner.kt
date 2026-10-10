@@ -12,45 +12,47 @@
  */
 package me.ahoo.simba.core
 
+import java.util.Objects
+import java.util.concurrent.TimeUnit
+
 /**
- * Mutex Owner.
+ * Mutex Owner: an immutable observation of a lease.
+ *
+ * Equality covers the lease facts ([ownerId], [acquiredAt], [ttlAt], [transitionAt], [fencingToken]); the
+ * observation time does not. Timestamps are epoch milliseconds in the backend's clock. [currentAt] advances that
+ * clock from [observedAt] with the local monotonic clock, so lease decisions never compare wall clocks of
+ * different nodes.
+ *
+ * @param ownerId contender id of the owner; [NONE_OWNER_ID] when there is none.
+ * @param acquiredAt when the lease was acquired.
+ * @param ttlAt when the owner should renew.
+ * @param transitionAt when the lease ends; during `ttlAt..transitionAt` only the owner may renew.
+ * @param fencingToken strictly increasing per ownership term, stable within one; [NO_FENCING_TOKEN] when the
+ * backend does not issue tokens (ADR 0002).
+ * @param observedAt backend time at which this owner was observed.
+ * @param observedNanos local `System.nanoTime()` at the same moment.
  *
  * @author ahoo wang
  */
-open class MutexOwner @JvmOverloads constructor(
-    /**
-     * 持有者Id.
-     */
+class MutexOwner @JvmOverloads constructor(
     val ownerId: String,
-    /**
-     * 获取到互斥锁的时间戳.
-     */
     val acquiredAt: Long = System.currentTimeMillis(),
-    /**
-     * 互斥锁的生存期（Time To Live）.
-     * [java.util.concurrent.TimeUnit.MILLISECONDS]
-     */
     val ttlAt: Long = Long.MAX_VALUE,
-    /**
-     * 缓冲期/过渡期（绝对时间）
-     * 1. 为了使领导权稳定，当前领导者可以在过渡期内优先续期
-     * 2. 用于缓冲领导者任务执行时间
-     * [java.util.concurrent.TimeUnit.MILLISECONDS]
-     */
     val transitionAt: Long = Long.MAX_VALUE,
-    /**
-     * Fencing token of this ownership term: strictly increasing across terms of the mutex and stable within one.
-     * [NO_FENCING_TOKEN] when the backend does not issue tokens. See ADR 0002.
-     */
-    val fencingToken: Long = NO_FENCING_TOKEN
+    val fencingToken: Long = NO_FENCING_TOKEN,
+    val observedAt: Long = System.currentTimeMillis(),
+    private val observedNanos: Long = System.nanoTime()
 ) {
-
     fun isOwner(contenderId: String): Boolean {
         return ownerId == contenderId
     }
 
-    open val currentAt: Long
-        get() = System.currentTimeMillis()
+    /**
+     * The backend's current time, estimated from [observedAt] and the local monotonic clock.
+     */
+    val currentAt: Long
+        get() = observedAt + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - observedNanos)
+
     val isInTtl: Boolean
         get() = ttlAt > currentAt
 
@@ -59,25 +61,27 @@ open class MutexOwner @JvmOverloads constructor(
     }
 
     /**
-     * 判断是否在过渡期内.
-     *
-     * @return boolean
-     */
-    val isInTransition: Boolean
-        get() = transitionAt >= currentAt
-
-    fun isInTransitionOf(contenderId: String): Boolean {
-        return isOwner(contenderId) &&
-            isInTransition
-    }
-
-    /**
-     * 判断 是否当前存在领导者 ([transitionAt] >= [currentAt]).
-     *
-     * @return boolean
+     * Whether the lease is still running (`transitionAt >= currentAt`).
      */
     fun hasOwner(): Boolean {
         return transitionAt >= currentAt
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is MutexOwner) return false
+        return ownerId == other.ownerId &&
+            acquiredAt == other.acquiredAt &&
+            ttlAt == other.ttlAt &&
+            transitionAt == other.transitionAt &&
+            fencingToken == other.fencingToken
+    }
+
+    override fun hashCode(): Int = Objects.hash(ownerId, acquiredAt, ttlAt, transitionAt, fencingToken)
+
+    override fun toString(): String {
+        return "MutexOwner(ownerId='$ownerId', acquiredAt=$acquiredAt, ttlAt=$ttlAt, transitionAt=$transitionAt, " +
+            "fencingToken=$fencingToken, observedAt=$observedAt)"
     }
 
     companion object {

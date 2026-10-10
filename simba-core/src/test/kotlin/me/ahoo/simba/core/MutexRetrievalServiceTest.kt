@@ -51,7 +51,7 @@ class MutexRetrievalServiceTest {
         val service = FakeMutexContendService(contender)
         service.start()
 
-        service.publishOwner(FixedClockOwner("", 0, 0, 1)).join()
+        service.publishOwner(observedOwner("", 0, 0, 1)).join()
 
         assertThat(service.hasOwner(), equalTo(false))
         service.stop()
@@ -63,7 +63,7 @@ class MutexRetrievalServiceTest {
         val service = FakeMutexContendService(contender)
         service.start()
 
-        service.publishOwner(FixedClockOwner("c1", 100, 200, 201)).join()
+        service.publishOwner(observedOwner("c1", 100, 200, 201)).join()
 
         assertThat(service.hasOwner(), equalTo(false))
         service.stop()
@@ -75,7 +75,7 @@ class MutexRetrievalServiceTest {
         val service = FakeMutexContendService(contender)
         service.start()
 
-        service.publishOwner(FixedClockOwner("c1", 100, 200, 150)).join()
+        service.publishOwner(observedOwner("c1", 100, 200, 150)).join()
 
         assertThat(service.hasOwner(), equalTo(true))
         service.stop()

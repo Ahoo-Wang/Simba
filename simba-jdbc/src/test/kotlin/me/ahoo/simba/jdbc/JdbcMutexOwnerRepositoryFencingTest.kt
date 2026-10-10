@@ -88,7 +88,7 @@ class JdbcMutexOwnerRepositoryFencingTest {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
         while (System.nanoTime() < deadline) {
             val owner = repository.getOwner(mutex)
-            if (owner.transitionAt < owner.currentDbAt) {
+            if (owner.transitionAt < owner.currentAt) {
                 return
             }
             Thread.onSpinWait()

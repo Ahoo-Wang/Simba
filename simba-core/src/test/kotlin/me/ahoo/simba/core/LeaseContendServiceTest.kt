@@ -45,7 +45,7 @@ class LeaseContendServiceTest {
 
         service.isOwner.assert().isTrue()
         contender.acquired.size.assert().isEqualTo(1)
-        scheduler.pending.single().delayMillis.assert().isEqualTo(500)
+        scheduler.pending.single().delayMillis.assert().isBetween(495, 500)
         store.renewFlags.assert().containsExactly(false)
     }
 
@@ -69,7 +69,7 @@ class LeaseContendServiceTest {
         io.runNext()
 
         service.isOwner.assert().isFalse()
-        scheduler.pending.single().delayMillis.assert().isBetween(800 - 200, 800 + 1000)
+        scheduler.pending.single().delayMillis.assert().isBetween(800 - 205, 800 + 1000)
     }
 
     @Test
@@ -78,7 +78,7 @@ class LeaseContendServiceTest {
         scheduler.runNext()
         io.runNext()
 
-        scheduler.watchdogs.single().delayMillis.assert().isBetween(790, 800)
+        scheduler.watchdogs.single().delayMillis.assert().isBetween(785, 800)
     }
 
     @Test
@@ -134,7 +134,7 @@ class LeaseContendServiceTest {
 
         service.isOwner.assert().isTrue()
         contender.released.assert().isEmpty()
-        scheduler.pending.single().delayMillis.assert().isBetween(390, 400)
+        scheduler.pending.single().delayMillis.assert().isBetween(385, 400)
         scheduler.watchdogs.size.assert().isEqualTo(1)
     }
 
@@ -419,9 +419,9 @@ class LeaseContendServiceTest {
             }
             val holder = otherOwner ?: contenderId.also { ownerId = it }
             if (unbounded) {
-                return FixedClockOwner(holder, Long.MAX_VALUE, Long.MAX_VALUE, NOW)
+                return observedOwner(holder, Long.MAX_VALUE, Long.MAX_VALUE, NOW)
             }
-            return FixedClockOwner(holder, NOW + config.ttlMillis, NOW + config.leaseMillis, NOW)
+            return observedOwner(holder, NOW + config.ttlMillis, NOW + config.leaseMillis, NOW)
         }
 
         override fun release(mutex: String, contenderId: String): Boolean {

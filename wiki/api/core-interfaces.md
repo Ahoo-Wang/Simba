@@ -53,8 +53,10 @@ classDiagram
         +ttlAt: Long
         +transitionAt: Long
         +isOwner(contenderId: String): Boolean
+        +fencingToken: Long
+        +observedAt: Long
+        +currentAt: Long
         +isInTtl: Boolean
-        +isInTransition: Boolean
         +hasOwner(): Boolean
     }
     class MutexState {
@@ -286,17 +288,19 @@ Backend modules (`simba-jdbc`, `simba-spring-redis`, `simba-zookeeper`) extend t
 
 ## MutexOwner
 
-An immutable value object that represents a snapshot of mutex ownership at a point in time.
+An immutable value: one observation of the lease. Equality covers the lease facts (`ownerId`, `acquiredAt`, `ttlAt`, `transitionAt`, `fencingToken`), not the observation time.
 
 **Source:** [simba-core/.../MutexOwner.kt:23](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexOwner.kt#L23)
 
 ```kotlin
-@Immutable
-open class MutexOwner(
+class MutexOwner(
     val ownerId: String,
     val acquiredAt: Long = System.currentTimeMillis(),
     val ttlAt: Long = Long.MAX_VALUE,
-    val transitionAt: Long = Long.MAX_VALUE
+    val transitionAt: Long = Long.MAX_VALUE,
+    val fencingToken: Long = NO_FENCING_TOKEN,
+    val observedAt: Long = System.currentTimeMillis(),
+    observedNanos: Long = System.nanoTime()
 )
 ```
 
@@ -306,15 +310,16 @@ open class MutexOwner(
 | `acquiredAt` | `Long` | Timestamp (epoch millis) when the lock was acquired |
 | `ttlAt` | `Long` | Timestamp when the TTL expires. After this, the owner should renew or another contender may take over. |
 | `transitionAt` | `Long` | End of the transition/grace period. During this window the current owner can preferentially renew. |
+| `observedAt` | `Long` | Backend time at which the owner was observed (database time for JDBC). |
 | `fencingToken` | `Long` | Strictly increasing per ownership term, stable within one. `NO_FENCING_TOKEN` (`0`) when the backend does not issue tokens (Zookeeper and Redis always; JDBC with `simba.jdbc.fencing`). |
 
 | Method | Return | Description |
 |---|---|---|
 | `isOwner(contenderId)` | `Boolean` | Checks if the given ID matches `ownerId` |
-| `isInTtl` | `Boolean` | `true` if `ttlAt > System.currentTimeMillis()` |
+| `currentAt` | `Long` | Backend time now: `observedAt` advanced by the local monotonic clock |
+| `isInTtl` | `Boolean` | `true` if `ttlAt > currentAt` |
 | `isInTtl(contenderId)` | `Boolean` | `true` if is owner AND within TTL |
-| `isInTransition` | `Boolean` | `true` if `transitionAt >= System.currentTimeMillis()` |
-| `hasOwner()` | `Boolean` | `true` if `transitionAt >= System.currentTimeMillis()` |
+| `hasOwner()` | `Boolean` | `true` while the lease runs (`transitionAt >= currentAt`) |
 | `MutexOwner.NONE` | `MutexOwner` | Sentinel: `ownerId = ""`, all timestamps `0` |
 
 ## MutexState

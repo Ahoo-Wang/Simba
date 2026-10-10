@@ -15,6 +15,7 @@ package me.ahoo.simba.jdbc
 import io.mockk.every
 import io.mockk.mockk
 import me.ahoo.simba.core.LeaseConfig
+import me.ahoo.simba.core.MutexOwner
 import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.Test
 import java.time.Duration
@@ -25,7 +26,7 @@ class JdbcMutexLeaseStoreTest {
     @Test
     fun `contend delegates acquire and renew to acquireAndGetOwner with lease millis`() {
         val repository = mockk<MutexOwnerRepository>()
-        val owner = MutexOwnerEntity("m", "c1", 0, 10_000, 16_000)
+        val owner = MutexOwner("c1", 0, 10_000, 16_000)
         every { repository.acquireAndGetOwner("m", "c1", 10_000, 6_000) } returns owner
         val store = JdbcMutexLeaseStore(repository)
 

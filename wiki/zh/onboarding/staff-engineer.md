@@ -146,7 +146,7 @@ acquiredAt ---- ttlAt ---- transitionAt ---- now (expired)
 
 每个后端以不同方式构造 `MutexOwner`：
 
-**JDBC**：仓库从数据库行返回 `MutexOwnerEntity`，映射为 `MutexOwner(ownerId, acquiredAt, ttlAt, transitionAt)`。
+**JDBC**：仓库把数据库行映射为 `MutexOwner(ownerId, acquiredAt, ttlAt, transitionAt, fencingToken, observedAt = 数据库时间)`。
 
 **Redis**：Lua 脚本返回 `{ownerId}@@{transitionAt}`。服务计算 `ttlAt = transitionAt - transition` 和 `acquiredAt = ttlAt - ttl`。
 

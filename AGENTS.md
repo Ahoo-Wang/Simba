@@ -82,7 +82,8 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
 
 ### Time
 - Lease decisions must use backend time or monotonic offsets, never mixed wall clocks across nodes.
-- JDBC reads database time (`current_at`) and `MutexOwnerEntity` advances it with `System.nanoTime()`.
+- `MutexOwner` records `observedAt` (backend time) and a monotonic anchor; `currentAt` advances it with
+  `System.nanoTime()`. JDBC observes database time (`current_at`).
 - Redis derives `transitionAt` from the local clock plus the key's `PTTL`; `MutexOwner.currentAt` defaults to
   the local wall clock.
 
