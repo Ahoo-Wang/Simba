@@ -13,22 +13,24 @@
 package me.ahoo.simba.spring.boot.starter.zookeeper
 
 import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 import me.ahoo.simba.zookeeper.ZookeeperMutexContendServiceFactory
 import org.apache.curator.framework.CuratorFramework
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
-import java.util.concurrent.ForkJoinPool
+import java.util.concurrent.Executor
 
 /**
  * Simba Zookeeper Auto Configuration.
  *
  * @author ahoo wang
  */
-@AutoConfiguration
+@AutoConfiguration(after = [SimbaAutoConfiguration::class])
 @ConditionalOnSimbaZookeeperEnabled
 @ConditionalOnClass(
     ZookeeperMutexContendServiceFactory::class
@@ -38,7 +40,10 @@ class SimbaZookeeperAutoConfiguration {
     @Bean
     @ConditionalOnBean(CuratorFramework::class)
     @ConditionalOnMissingBean
-    fun zookeeperMutexContendServiceFactory(curatorFramework: CuratorFramework): MutexContendServiceFactory {
-        return ZookeeperMutexContendServiceFactory(ForkJoinPool.commonPool(), curatorFramework)
+    fun zookeeperMutexContendServiceFactory(
+        curatorFramework: CuratorFramework,
+        @Qualifier(SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME) handleExecutor: Executor
+    ): MutexContendServiceFactory {
+        return ZookeeperMutexContendServiceFactory(handleExecutor, curatorFramework)
     }
 }

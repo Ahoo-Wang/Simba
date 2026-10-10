@@ -26,24 +26,25 @@ import org.springframework.data.redis.core.script.RedisScript
  */
 internal class SpringRedisMutexLeaseStore(private val redisTemplate: StringRedisTemplate) : MutexLeaseStore {
     companion object {
-        private val SCRIPT_ACQUIRE = RedisScript.of(ClassPathResource("mutex_acquire.lua"), String::class.java)
-        private val SCRIPT_GUARD = RedisScript.of(ClassPathResource("mutex_guard.lua"), String::class.java)
+        private val SCRIPT_ACQUIRE = RedisScript.of(ClassPathResource("mutex_acquire.lua"), List::class.java)
+        private val SCRIPT_GUARD = RedisScript.of(ClassPathResource("mutex_guard.lua"), List::class.java)
         private val SCRIPT_RELEASE = RedisScript.of(ClassPathResource("mutex_release.lua"), Boolean::class.java)
     }
 
     override fun contend(mutex: String, contenderId: String, renew: Boolean, config: LeaseConfig): MutexOwner {
         val script = if (renew) SCRIPT_GUARD else SCRIPT_ACQUIRE
-        val result = redisTemplate.execute(
+        val reply = redisTemplate.execute(
             script,
-            RedisMutexKeys(mutex).keys,
+            listOf(RedisMutexKeys(mutex).mutexKey),
             contenderId,
             config.leaseMillis.toString()
         )
-        return AcquireResult.of(result).toMutexOwner(config)
+        return AcquireResult.of(checkNotNull(reply) { "No script reply for mutex:[$mutex]" }).toMutexOwner(config)
     }
 
     override fun release(mutex: String, contenderId: String): Boolean {
-        return redisTemplate.execute(SCRIPT_RELEASE, RedisMutexKeys(mutex).keys, contenderId)
+        val keys = RedisMutexKeys(mutex)
+        return redisTemplate.execute(SCRIPT_RELEASE, listOf(keys.mutexKey, keys.legacyQueueKey), contenderId)
     }
 }
 

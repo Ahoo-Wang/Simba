@@ -1,26 +1,17 @@
-local mutex = KEYS[1];
+-- KEYS[1]: lease key `simba:{mutex}`.
+-- ARGV[1]: contenderId; ARGV[2]: lease length in milliseconds (ttl + transition).
+-- Renews the lease only when held by contenderId.
+-- Returns {ownerId, remaining lease in milliseconds}; {'', 0} when there is no owner.
+local mutexKey = KEYS[1];
 local contenderId = ARGV[1];
--- 使用过渡期 ttl+transition
-local transition = ARGV[2];
-local mutexKey = 'simba:' .. mutex;
+local lease = ARGV[2];
 
--- 获取当前持有者 & ttl
-local function getCurrentOwner(mutexKey)
-    local ownerId = redis.call('get', mutexKey)
-    if ownerId then
-        local ttl = redis.call('pttl', mutexKey)
-        return ownerId .. '@@' .. ttl;
-    end
-    return '@@';
+local ownerId = redis.call('get', mutexKey)
+if not ownerId then
+    return { '', 0 };
 end
-
--- 1. 判断当前持有互斥体的是否为自己
-if redis.call('get', mutexKey) ~= contenderId then
-    return getCurrentOwner(mutexKey)
+if ownerId == contenderId then
+    redis.call('set', mutexKey, contenderId, 'xx', 'px', lease)
+    return { contenderId, tonumber(lease) };
 end
-
-if redis.call('set', mutexKey, contenderId, 'xx', 'px', transition) then
-    return contenderId .. '@@' .. transition;
-else
-    return getCurrentOwner(mutexKey)
-end
+return { ownerId, redis.call('pttl', mutexKey) };

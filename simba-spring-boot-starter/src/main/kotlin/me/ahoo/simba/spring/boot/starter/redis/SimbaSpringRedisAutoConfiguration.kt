@@ -13,7 +13,9 @@
 package me.ahoo.simba.spring.boot.starter.redis
 
 import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 import me.ahoo.simba.spring.redis.SpringRedisMutexContendServiceFactory
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
@@ -25,13 +27,14 @@ import org.springframework.context.annotation.Bean
 import org.springframework.data.redis.connection.RedisConnectionFactory
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.listener.RedisMessageListenerContainer
+import java.util.concurrent.Executor
 
 /**
  * Simba Spring Redis AutoConfiguration.
  *
  * @author ahoo wang
  */
-@AutoConfiguration(after = [DataRedisAutoConfiguration::class])
+@AutoConfiguration(after = [DataRedisAutoConfiguration::class, SimbaAutoConfiguration::class])
 @ConditionalOnSimbaRedisEnabled
 @ConditionalOnClass(
     StringRedisTemplate::class
@@ -56,13 +59,15 @@ class SimbaSpringRedisAutoConfiguration(private val redisProperties: RedisProper
     @ConditionalOnBean(StringRedisTemplate::class)
     fun redisMutexContendServiceFactory(
         redisTemplate: StringRedisTemplate,
-        listenerContainer: RedisMessageListenerContainer
+        listenerContainer: RedisMessageListenerContainer,
+        @Qualifier(SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME) handleExecutor: Executor
     ): MutexContendServiceFactory {
         return SpringRedisMutexContendServiceFactory(
-            redisProperties.ttl,
-            redisProperties.transition,
-            redisTemplate,
-            listenerContainer
+            ttl = redisProperties.ttl,
+            transition = redisProperties.transition,
+            redisTemplate = redisTemplate,
+            listenerContainer = listenerContainer,
+            handleExecutor = handleExecutor
         )
     }
 }

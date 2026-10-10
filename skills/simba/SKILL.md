@@ -119,7 +119,7 @@ Key points to explain:
 - `contenderId` defaults to `"{counter}:{pid}@{hostAddress}"` via `ContenderIdGenerator.HOST`. Override to use `ContenderIdGenerator.UUID` or a custom ID.
 - For JDBC, keep `mutex` at most 66 characters and `contenderId` at most 128 characters to fit the schema.
 - For Redis, never include the `@@` wire delimiter in a custom `contenderId`; owner-event parsing requires exactly two fields.
-- `onAcquired` / `onReleased` notifications are serialized. Normal notifications use the configured `handleExecutor`; JDBC/Redis defaults and Spring Boot auto-configuration use `ForkJoinPool.commonPool()`, while a direct executor may run them on the caller thread. When stopping an owned service, `onReleased` may run on the executor or the `stop()` caller, and `stop()` waits for it to complete. Keep callbacks short and do not rely on thread affinity.
+- `onAcquired` / `onReleased` notifications are serialized. Normal notifications use the configured `handleExecutor`; JDBC/Redis factory defaults use `ForkJoinPool.commonPool()`, while Spring Boot auto-configuration uses the dedicated `simbaHandleExecutor` bean (replace it by defining a bean with that name), while a direct executor may run them on the caller thread. When stopping an owned service, `onReleased` may run on the executor or the `stop()` caller, and `stop()` waits for it to complete. Keep callbacks short and do not rely on thread affinity.
 - The service must be started with `start()` and stopped with `stop()` when done.
 
 ### Pattern 2: SimbaLocker (RAII-style blocking lock)

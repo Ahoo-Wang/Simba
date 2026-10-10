@@ -15,24 +15,24 @@ package me.ahoo.simba.spring.redis
 import me.ahoo.simba.Simba
 
 /**
- * Redis key and channel names of a mutex. Must stay aligned with the Lua scripts, which derive
- * `simba:{mutex}`, `simba:{mutex}:contender` and `simba:{mutex}:{contenderId}` from `KEYS[1]`.
+ * Redis key and channel names of a mutex, the single Kotlin source of the naming shared with the Lua scripts
+ * and with other Simba nodes. All names share the `{mutex}` hash tag, so they live in one cluster slot.
  *
  * @author ahoo wang
  */
 internal class RedisMutexKeys(mutex: String) {
     /**
-     * Script keys: the hash-tagged mutex, keeping all derived keys in one cluster slot.
+     * Lease key, also the channel that announces acquisitions and releases.
      */
-    val keys: List<String> = listOf("{$mutex}")
+    val mutexKey: String = "${Simba.SIMBA}:{$mutex}"
 
     /**
-     * Lease key, also the channel that announces acquisitions.
+     * Contender queue written by Simba < 3.2; only deleted on release.
      */
-    val mutexKey: String = "${Simba.SIMBA}:${keys.single()}"
+    val legacyQueueKey: String = "$mutexKey:contender"
 
     /**
-     * Channel on which a releasing owner wakes this queued contender.
+     * Channel on which a Simba < 3.2 owner wakes this contender when releasing.
      */
     fun contenderChannel(contenderId: String): String = "$mutexKey:$contenderId"
 }

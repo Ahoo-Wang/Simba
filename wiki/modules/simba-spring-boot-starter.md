@@ -9,11 +9,12 @@ The `simba-spring-boot-starter` module provides Spring Boot auto-configuration f
 
 ## Auto-Configuration Classes
 
-The module registers three auto-configuration classes via Spring Boot's standard mechanism.
+The module registers four auto-configuration classes via Spring Boot's standard mechanism.
 
 **Source:** [simba-spring-boot-starter/.../org.springframework.boot.autoconfigure.AutoConfiguration.imports](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports)
 
 ```
+me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 me.ahoo.simba.spring.boot.starter.jdbc.SimbaJdbcAutoConfiguration
 me.ahoo.simba.spring.boot.starter.redis.SimbaSpringRedisAutoConfiguration
 me.ahoo.simba.spring.boot.starter.zookeeper.SimbaZookeeperAutoConfiguration
@@ -145,12 +146,31 @@ annotation class ConditionalOnSimbaZookeeperEnabled
 
 ## Auto-Configuration Details
 
+### SimbaAutoConfiguration
+
+**Source:** [simba-spring-boot-starter/.../SimbaAutoConfiguration.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/SimbaAutoConfiguration.kt)
+
+```kotlin
+@AutoConfiguration
+@ConditionalOnSimbaEnabled
+class SimbaAutoConfiguration {
+
+    @Bean(name = ["simbaHandleExecutor"], destroyMethod = "shutdown")
+    @ConditionalOnMissingBean(name = ["simbaHandleExecutor"])
+    fun simbaHandleExecutor(): ExecutorService
+}
+```
+
+Provides the executor that runs `onAcquired` / `onReleased` callbacks for every backend: a dedicated daemon
+pool whose idle threads are reclaimed, so blocking callbacks cannot starve `ForkJoinPool.commonPool()`. Define a
+bean named `simbaHandleExecutor` to replace it.
+
 ### SimbaJdbcAutoConfiguration
 
 **Source:** [simba-spring-boot-starter/.../SimbaJdbcAutoConfiguration.kt:32](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/jdbc/SimbaJdbcAutoConfiguration.kt#L32)
 
 ```kotlin
-@AutoConfiguration
+@AutoConfiguration(after = [SimbaAutoConfiguration::class])
 @ConditionalOnSimbaJdbcEnabled
 @ConditionalOnClass(JdbcMutexContendServiceFactory::class)
 @EnableConfigurationProperties(JdbcProperties::class)
@@ -160,7 +180,10 @@ class SimbaJdbcAutoConfiguration(private val jdbcProperties: JdbcProperties) {
     fun mutexOwnerRepository(dataSource: DataSource): MutexOwnerRepository
 
     @Bean @ConditionalOnMissingBean
-    fun jdbcMutexContendServiceFactory(mutexOwnerRepository: MutexOwnerRepository): MutexContendServiceFactory
+    fun jdbcMutexContendServiceFactory(
+        mutexOwnerRepository: MutexOwnerRepository,
+        @Qualifier("simbaHandleExecutor") handleExecutor: Executor
+    ): MutexContendServiceFactory
 }
 ```
 
@@ -174,7 +197,7 @@ class SimbaJdbcAutoConfiguration(private val jdbcProperties: JdbcProperties) {
 **Source:** [simba-spring-boot-starter/.../SimbaSpringRedisAutoConfiguration.kt:34](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/redis/SimbaSpringRedisAutoConfiguration.kt#L34)
 
 ```kotlin
-@AutoConfiguration(after = [DataRedisAutoConfiguration::class])
+@AutoConfiguration(after = [DataRedisAutoConfiguration::class, SimbaAutoConfiguration::class])
 @ConditionalOnSimbaRedisEnabled
 @ConditionalOnClass(StringRedisTemplate::class)
 @EnableConfigurationProperties(RedisProperties::class)
@@ -186,7 +209,8 @@ class SimbaSpringRedisAutoConfiguration(private val redisProperties: RedisProper
     @Bean @ConditionalOnMissingBean @ConditionalOnBean(StringRedisTemplate::class)
     fun redisMutexContendServiceFactory(
         redisTemplate: StringRedisTemplate,
-        listenerContainer: RedisMessageListenerContainer
+        listenerContainer: RedisMessageListenerContainer,
+        @Qualifier("simbaHandleExecutor") handleExecutor: Executor
     ): MutexContendServiceFactory
 }
 ```
@@ -203,14 +227,17 @@ The configuration runs `after = DataRedisAutoConfiguration` to ensure the Redis 
 **Source:** [simba-spring-boot-starter/.../SimbaZookeeperAutoConfiguration.kt:30](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/zookeeper/SimbaZookeeperAutoConfiguration.kt#L30)
 
 ```kotlin
-@AutoConfiguration
+@AutoConfiguration(after = [SimbaAutoConfiguration::class])
 @ConditionalOnSimbaZookeeperEnabled
 @ConditionalOnClass(ZookeeperMutexContendServiceFactory::class)
 @EnableConfigurationProperties(ZookeeperProperties::class)
 class SimbaZookeeperAutoConfiguration {
 
     @Bean @ConditionalOnBean(CuratorFramework::class) @ConditionalOnMissingBean
-    fun zookeeperMutexContendServiceFactory(curatorFramework: CuratorFramework): ZookeeperMutexContendServiceFactory
+    fun zookeeperMutexContendServiceFactory(
+        curatorFramework: CuratorFramework,
+        @Qualifier("simbaHandleExecutor") handleExecutor: Executor
+    ): MutexContendServiceFactory
 }
 ```
 

@@ -1,25 +1,19 @@
+-- KEYS[1]: lease key `simba:{mutex}`, also the channel announcing acquisitions.
+-- ARGV[1]: contenderId; ARGV[2]: lease length in milliseconds (ttl + transition).
+-- Returns {ownerId, remaining lease in milliseconds}; {'', 0} when there is no owner.
 redis.replicate_commands();
 
-local mutex = KEYS[1];
+local mutexKey = KEYS[1];
 local contenderId = ARGV[1];
--- 使用过渡期 ttl+transition
-local transition = ARGV[2];
-local mutexKey = 'simba:' .. mutex;
--- 1. 尝试获取锁资源，如果获取成功直接返回
-local succeed = redis.call('set', mutexKey, contenderId, 'nx', 'px', transition)
+local lease = ARGV[2];
 
-if succeed then
-    local message = 'acquired@@' .. contenderId;
-    redis.call('publish', mutexKey, message)
-    return contenderId..'@@'..transition;
+if redis.call('set', mutexKey, contenderId, 'nx', 'px', lease) then
+    redis.call('publish', mutexKey, 'acquired@@' .. contenderId)
+    return { contenderId, tonumber(lease) };
 end
 
--- 2. 将自己加入互斥体等待队列
-local contenderQueueKey = mutexKey .. ':contender';
-
-local nowTime = redis.call('time')[1];
-redis.call('zadd', contenderQueueKey, 'nx', nowTime, contenderId)
--- 获取当前持有者 & ttl
-local ownerId=redis.call('get',mutexKey)
-local ttl=redis.call('pttl',mutexKey)
-return ownerId..'@@'..ttl;
+local ownerId = redis.call('get', mutexKey)
+if not ownerId then
+    return { '', 0 };
+end
+return { ownerId, redis.call('pttl', mutexKey) };

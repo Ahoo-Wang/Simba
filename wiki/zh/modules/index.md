@@ -74,7 +74,7 @@ graph TB
 | **simba-jdbc** | JDBC/MySQL 后端，使用原子条件更新 | `JdbcMutexContendService`、`JdbcMutexOwnerRepository` | simba-core、JDBC 驱动 |
 | **simba-spring-redis** | Redis 后端，使用 Lua 脚本和发布/订阅 | `SpringRedisMutexContendService`、Lua 脚本 | simba-core、spring-data-redis |
 | **simba-zookeeper** | Zookeeper 后端，使用 Curator LeaderLatch | `ZookeeperMutexContendService` | simba-core、curator-recipes |
-| **simba-spring-boot-starter** | 所有后端的自动配置 | `SimbaJdbcAutoConfiguration`、`SimbaSpringRedisAutoConfiguration`、`SimbaZookeeperAutoConfiguration` | simba-core + 条件性后端依赖 |
+| **simba-spring-boot-starter** | 所有后端的自动配置 | `SimbaAutoConfiguration`、`SimbaJdbcAutoConfiguration`、`SimbaSpringRedisAutoConfiguration`、`SimbaZookeeperAutoConfiguration` | simba-core + 条件性后端依赖 |
 | **simba-test** | TCK（技术兼容性套件） | `MutexContendServiceSpec`、`LockSpec` | simba-core、JUnit 5 |
 | **simba-bom** | BOM（物料清单），用于版本管理 | -- | -- |
 | **simba-dependencies** | 依赖版本约束 | -- | -- |
@@ -95,7 +95,6 @@ graph LR
 
         R_LUA["Lua Scripts<br>acquire/guard/release"]
         R_PS["Pub/Sub<br>RedisMessageListenerContainer"]
-        R_ZSET["Sorted Set<br>contender queue"]
     end
     subgraph sg_89 ["Zookeeper Backend"]
 
@@ -108,7 +107,6 @@ graph LR
     style J_DDL fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style R_LUA fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style R_PS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style R_ZSET fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style Z_LATCH fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style Z_CUR fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
@@ -117,7 +115,7 @@ graph LR
 |---|---|---|---|
 | **协调机制** | 使用 `ScheduledThreadPoolExecutor` 轮询 | Lua 脚本 + 发布/订阅 | Curator `LeaderLatch` |
 | **锁存储** | `simba_mutex` 表 | Redis 键（`simba:{mutex}`） | ZNode（`/simba/{mutex}`） |
-| **所有权转移** | 由 owner/transition 谓词守卫的原子条件 `UPDATE` | 有序集合等待队列 + 发布/订阅通知 | ZK 对 latch 参与者的 watcher |
+| **所有权转移** | 由 owner/transition 谓词守卫的原子条件 `UPDATE` | `SET NX` + 发布/订阅广播释放 | ZK 对 latch 参与者的 watcher |
 | **时间源** | MySQL `current_timestamp(3)` | 系统时钟（客户端侧） | ZK 服务器时间 |
 | **外部依赖** | MySQL 实例 | Redis 实例 | ZooKeeper 集群 |
 | **最适合** | 已有关系型数据库基础设施 | 高吞吐量、低延迟 | 强一致性保证 |

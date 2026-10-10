@@ -10,6 +10,7 @@ pnpm run dev          # Dev server
 pnpm run build        # Build; run before committing
 pnpm run preview      # Preview the build
 pnpm run fix:mermaid  # Validate and fix Mermaid syntax; run after editing diagrams
+pnpm run sync:llms    # Regenerate llms-full.txt from the English pages
 ```
 
 ## Layout
@@ -17,8 +18,9 @@ pnpm run fix:mermaid  # Validate and fix Mermaid syntax; run after editing diagr
 - English pages live at the root (`guide/`, `architecture/`, `api/`, `modules/`, `testing/`, `onboarding/`);
   Chinese pages mirror the same paths under `zh/`. Every page change is made in both languages.
 - Navigation and sidebars: `.vitepress/config/en.ts` and `zh.ts`; site config: `.vitepress/config/index.ts`.
-- `llms.txt` (page index) and `llms-full.txt` (full content) are maintained by hand: update them when pages are
-  added, renamed, removed, or their substance changes.
+- `llms.txt` (page index) is maintained by hand: update it when pages are added, renamed, or removed.
+- `llms-full.txt` is generated from the English pages: run `pnpm run sync:llms` after editing them
+  (`pnpm run check:llms` verifies it). Add a `<doc title=... path=...>` block by hand for a new page.
 
 ## Content Conventions
 

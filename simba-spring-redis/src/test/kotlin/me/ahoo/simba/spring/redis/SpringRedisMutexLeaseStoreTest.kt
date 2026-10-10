@@ -29,8 +29,7 @@ class SpringRedisMutexLeaseStoreTest {
 
     @Test
     fun `acquire runs the acquire script with the full lease`() {
-        every { redisTemplate.execute(any<RedisScript<String>>(), any<List<String>>(), *anyVararg()) } returns
-            "c1@@16000"
+        stubScriptReply(listOf("c1", 16000L))
 
         val owner = store.contend("m", "c1", renew = false, config = config)
 
@@ -38,34 +37,49 @@ class SpringRedisMutexLeaseStoreTest {
         (owner.transitionAt - owner.ttlAt).assert().isEqualTo(6_000)
         (owner.ttlAt - owner.acquiredAt).assert().isEqualTo(10_000)
         verify {
-            redisTemplate.execute(match<RedisScript<String>> { it.isScript("'nx'") }, listOf("{m}"), "c1", "16000")
+            redisTemplate.execute(
+                match<RedisScript<List<*>>> { it.isScript("'nx'") },
+                listOf("simba:{m}"),
+                "c1",
+                "16000"
+            )
         }
     }
 
     @Test
     fun `renew runs the guard script`() {
-        every { redisTemplate.execute(any<RedisScript<String>>(), any<List<String>>(), *anyVararg()) } returns
-            "c1@@16000"
+        stubScriptReply(listOf("c1", 16000L))
 
         store.contend("m", "c1", renew = true, config = config)
 
         verify {
-            redisTemplate.execute(match<RedisScript<String>> { it.isScript("'xx'") }, listOf("{m}"), "c1", "16000")
+            redisTemplate.execute(
+                match<RedisScript<List<*>>> { it.isScript("'xx'") },
+                listOf("simba:{m}"),
+                "c1",
+                "16000"
+            )
         }
     }
 
     @Test
     fun `no owner maps to an empty owner id`() {
-        every { redisTemplate.execute(any<RedisScript<String>>(), any<List<String>>(), *anyVararg()) } returns "@@"
+        stubScriptReply(listOf("", 0L))
 
         store.contend("m", "c1", renew = true, config = config).ownerId.assert().isEmpty()
     }
 
     @Test
     fun `release runs the release script`() {
-        every { redisTemplate.execute(any<RedisScript<Boolean>>(), listOf("{m}"), "c1") } returns true
+        every {
+            redisTemplate.execute(any<RedisScript<Boolean>>(), listOf("simba:{m}", "simba:{m}:contender"), "c1")
+        } returns true
 
         store.release("m", "c1").assert().isTrue()
+    }
+
+    private fun stubScriptReply(reply: List<Any>) {
+        every { redisTemplate.execute(any<RedisScript<List<*>>>(), any<List<String>>(), *anyVararg()) } returns reply
     }
 
     private fun RedisScript<*>.isScript(marker: String): Boolean = scriptAsString.contains(marker)

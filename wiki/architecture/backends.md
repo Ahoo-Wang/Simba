@@ -156,163 +156,101 @@ database calls; the factory owns both and shuts them down on `close()`.
 
 ## Redis Backend
 
-The Redis backend uses atomic Lua scripts for lock operations and Redis Pub/Sub for instant
-notification of ownership changes. It avoids polling entirely for non-owners.
+The Redis backend uses atomic Lua scripts for lease operations and Redis Pub/Sub broadcasts so that waiting
+contenders react to ownership changes immediately instead of waiting for their next poll.
 
 ### Lua Scripts
 
-Three Lua scripts implement the entire lock protocol:
+All scripts receive their keys through `KEYS` (Redis Cluster compliant). The acquire and guard scripts return
+`{ownerId, remaining lease in ms}`, or `{'', 0}` when there is no owner.
 
 #### mutex_acquire.lua
 
 [`mutex_acquire.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_acquire.lua)
-attempts to acquire the lock via `SET ... NX PX`:
+acquires with `SET ... NX PX` for `ttl + transition` and announces the new owner:
 
 ```lua
--- 1. Try SET NX (atomic acquire)
-local succeed = redis.call('set', mutexKey, contenderId, 'nx', 'px', transition)
-if succeed then
-    -- Publish acquisition event to all listeners
+if redis.call('set', mutexKey, contenderId, 'nx', 'px', lease) then
     redis.call('publish', mutexKey, 'acquired@@' .. contenderId)
-    return contenderId .. '@@' .. transition
+    return { contenderId, tonumber(lease) };
 end
-
--- 2. Failed — add self to wait queue (sorted set, scored by time)
-redis.call('zadd', contenderQueueKey, 'nx', nowTime, contenderId)
--- 3. Return current owner and its remaining TTL
 local ownerId = redis.call('get', mutexKey)
-local ttl = redis.call('pttl', mutexKey)
-return ownerId .. '@@' .. ttl
+if not ownerId then
+    return { '', 0 };
+end
+return { ownerId, redis.call('pttl', mutexKey) };
 ```
-
-Key design decisions:
-- Uses `NX` (only set if key does not exist) for atomic acquisition.
-- The TTL is set to `ttl + transition` (the full lock validity window).
-- On failure, the contender is added to a sorted set (`{mutex}:contender`) scored by timestamp,
-  forming a wait queue.
 
 #### mutex_guard.lua
 
 [`mutex_guard.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_guard.lua)
-renews the lock if the caller is the current owner:
-
-```lua
--- Verify ownership before renewal
-if redis.call('get', mutexKey) ~= contenderId then
-    return getCurrentOwner(mutexKey)  -- not owner, return current state
-end
--- Extend TTL with XX (only if key exists)
-if redis.call('set', mutexKey, contenderId, 'xx', 'px', transition) then
-    return contenderId .. '@@' .. transition
-end
-```
-
-The `XX` flag ensures the renewal only succeeds if the key still exists (preventing
-accidental lock creation after expiry).
+renews the lease with `SET ... XX PX` only when the caller still owns it, otherwise it reports the current
+owner. It never recreates a lease that already expired.
 
 #### mutex_release.lua
 
 [`mutex_release.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_release.lua)
-releases the lock and notifies the next contender in the wait queue:
+releases only the caller's own lease and broadcasts the release:
 
 ```lua
--- 1. Verify ownership
 if redis.call('get', mutexKey) ~= contenderId then
-    redis.call('zrem', contenderQueueKey, contenderId)
-    return 0
+    redis.call('zrem', legacyQueueKey, contenderId)
+    return 0;
 end
--- 2. Delete the lock
-redis.call('del', mutexKey)
--- 3. Dequeue the next contender and notify via Pub/Sub
-local contenderQueue = redis.call('zrevrange', contenderQueueKey, -1, -1)
-if #contenderQueue > 0 then
-    local nextContender = contenderQueue[1]
-    redis.call('zrem', contenderQueueKey, nextContender)
-    local channel = mutexKey .. ':' .. nextContender
-    redis.call('publish', channel, 'released@@' .. contenderId)
-end
+redis.call('del', mutexKey, legacyQueueKey)
+redis.call('publish', mutexKey, 'released@@' .. contenderId)
+return 1;
 ```
 
-The release script uses `ZREVRANGE -1 -1` to get the contender with the *lowest* score
-(earliest join time), implementing FIFO fairness.
+Every live contender receives the broadcast and contends at once; exactly one wins the `SET NX`. Unlike a
+targeted wake-up, no release can be lost to a crashed contender. `legacyQueueKey` (`simba:{mutex}:contender`)
+is only written by Simba < 3.2 and is deleted here.
 
 ### Pub/Sub Channels
 
-The Redis backend uses two types of channels ([SpringRedisMutexContendService, line 67](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendService.kt#L67)):
+| Channel | Purpose |
+|---|---|
+| `simba:{mutex}` | All contenders subscribe. Carries `acquired@@{id}` and `released@@{id}`. |
+| `simba:{mutex}:{contenderId}` | Kept for rolling upgrades: Simba < 3.2 owners address releases here. |
 
-| Channel | Pattern | Purpose |
-|---|---|---|
-| `simba:{mutex}` | Broadcast | All contenders subscribe. Published on acquisition. |
-| `simba:{mutex}:{contenderId}` | Per-contender | Targeted notification. Published on release to the next waiter. |
-
-The `{mutex}` hash tag ensures that in Redis Cluster, both channels and the lock key
-hash to the same slot.
+The `{mutex}` hash tag keeps the lease key and both channels in one Redis Cluster slot.
+[`RedisMutexKeys`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/RedisMutexKeys.kt) is the
+single Kotlin source of these names.
 
 ### OwnerEvent Protocol
 
 Messages are encoded as `{event}@@{ownerId}` ([`OwnerEvent`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/OwnerEvent.kt)):
 
-| Event | Meaning |
+| Event | Reaction |
 |---|---|
-| `acquired@@{id}` | A contender has acquired the lock |
-| `released@@{id}` | The lock has been released; the addressed contender should attempt acquisition |
+| `acquired@@{id}` | Update the observed owner |
+| `released@@{id}` | Clear the observed owner and contend immediately (`contendNow()`) |
 
 ### Redis Contention Flow
 
 ```mermaid
 sequenceDiagram
 autonumber
-    participant CA as Contender A
     participant SA as RedisService A
     participant REDIS as Redis
     participant SB as RedisService B
-    participant CB as Contender B
 
-    CA->>SA: start()
-    SA->>REDIS: SUBSCRIBE simba:{m}, simba:{m}:A
-
-    CB->>SB: start()
-    SB->>REDIS: SUBSCRIBE simba:{m}, simba:{m}:B
-
+    SA->>REDIS: SUBSCRIBE simba:{m}
+    SB->>REDIS: SUBSCRIBE simba:{m}
     SA->>REDIS: EVAL mutex_acquire(A, ttl+transition)
-    REDIS-->>SA: A@@transition (acquired)
-    REDIS->>SA: PUBLISH acquired@@A (via subscription)
-    REDIS->>SB: PUBLISH acquired@@A (via subscription)
-    SA->>CA: onAcquired()
-    SB->>CB: notifyOwner(A)
-
+    REDIS-->>SA: {A, lease}
+    REDIS->>SB: PUBLISH acquired@@A
     SB->>REDIS: EVAL mutex_acquire(B, ttl+transition)
-    REDIS-->>SB: A@@ttl_remaining (failed)
-    REDIS->>REDIS: ZADD contender_queue now B
-    Note over SB: B waits for targeted release notification
-
-    loop Owner renewal
-        SA->>REDIS: EVAL mutex_guard(A, ttl)
-        REDIS-->>SA: A@@transition (renewed)
+    REDIS-->>SB: {A, remaining}
+    loop Owner renewal at ttlAt
+        SA->>REDIS: EVAL mutex_guard(A, ttl+transition)
+        REDIS-->>SA: {A, lease}
     end
-
-    Note over CA: Application stops
-    CA->>SA: close()
     SA->>REDIS: EVAL mutex_release(A)
-    REDIS->>REDIS: DEL mutex key
-    REDIS->>REDIS: ZREVRANGE contender_queue
-    REDIS->>SB: PUBLISH released@@A to channel simba:{m}:B
-    SB->>CB: onMessage(released)
+    REDIS->>SB: PUBLISH released@@A
     SB->>REDIS: EVAL mutex_acquire(B, ttl+transition)
-    REDIS-->>SB: B@@transition (acquired)
-    SB->>CB: onAcquired()
+    REDIS-->>SB: {B, lease}
 ```
-
-### Sorted Set Wait Queue
-
-The wait queue uses a Redis sorted set keyed at `simba:{mutex}:contender`:
-
-- **Score**: the contender's join timestamp (seconds, from `TIME` command).
-- **NX flag**: only adds if the contender is not already in the queue.
-- **Dequeue**: `ZREVRANGE key -1 -1` retrieves the member with the lowest score (earliest join),
-  then `ZREM` removes it.
-
-This gives FIFO ordering among waiting contenders while keeping the queue lightweight.
 
 ## Zookeeper Backend
 
@@ -438,7 +376,7 @@ flowchart LR
 | **Notification** | Polling via `ScheduledThreadPoolExecutor` | Pub/Sub instant notification | ZNode watches (built into Curator) |
 | **Failure detection** | TTL expiry (polling interval) | Key TTL expiry + Pub/Sub | Ephemeral node deletion on session loss |
 | **Latency** | Polling interval (typically ttl-based) | Sub-millisecond (Pub/Sub push) | Session timeout (typically 5-30s) |
-| **Fairness** | First-come-first-served via DB timestamp | FIFO sorted set wait queue | Sequential node ordering |
+| **Fairness** | None; the first contender polling after `transitionAt` (jittered) wins | None; the first contender reacting to the release broadcast wins | Sequential node ordering |
 | **External dependency** | MySQL (or any JDBC database) | Redis | Zookeeper ensemble |
 | **Code complexity** | Medium (~6 Kotlin classes) | High (~5 classes + 3 Lua scripts) | Low (~2 Kotlin classes) |
 | **Cluster support** | Via shared database | Via Redis Cluster (hash tags) | Via Zookeeper ensemble |

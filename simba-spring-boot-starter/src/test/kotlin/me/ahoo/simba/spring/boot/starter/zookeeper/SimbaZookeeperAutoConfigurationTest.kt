@@ -14,6 +14,7 @@ package me.ahoo.simba.spring.boot.starter.zookeeper
 
 import io.mockk.mockk
 import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 import org.apache.curator.framework.CuratorFramework
 import org.assertj.core.api.AssertionsForInterfaceTypes.assertThat
 import org.junit.jupiter.api.Test
@@ -31,7 +32,7 @@ internal class SimbaZookeeperAutoConfigurationTest {
     fun contextLoads() {
         contextRunner
             .withBean(CuratorFramework::class.java, { mockk() })
-            .withUserConfiguration(SimbaZookeeperAutoConfiguration::class.java)
+            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaZookeeperAutoConfiguration::class.java)
             .run {
                 assertThat(it)
                     .hasSingleBean(SimbaZookeeperAutoConfiguration::class.java)
@@ -46,7 +47,7 @@ internal class SimbaZookeeperAutoConfigurationTest {
         contextRunner
             .withBean(CuratorFramework::class.java, { mockk() })
             .withBean(MutexContendServiceFactory::class.java, { userFactory })
-            .withUserConfiguration(SimbaZookeeperAutoConfiguration::class.java)
+            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaZookeeperAutoConfiguration::class.java)
             .run {
                 assertThat(it).hasSingleBean(MutexContendServiceFactory::class.java)
                 assertThat(it.getBean(MutexContendServiceFactory::class.java)).isSameAs(userFactory)

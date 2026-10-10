@@ -1,3 +1,4 @@
+me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 me.ahoo.simba.spring.boot.starter.jdbc.SimbaJdbcAutoConfiguration
 me.ahoo.simba.spring.boot.starter.redis.SimbaSpringRedisAutoConfiguration
 me.ahoo.simba.spring.boot.starter.zookeeper.SimbaZookeeperAutoConfiguration

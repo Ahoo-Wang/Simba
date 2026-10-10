@@ -467,8 +467,7 @@ TCK 方法（共享抽象测试类，按后端具体测试）相比 mock 后端�
 
 Redis 中每个互斥锁使用：
 - 1 个字符串键（互斥锁名称 -> 所有者 ID，约 50 字节）
-- 1 个有序集合（等待队列，每个竞争者约 100 字节）
-- 每个竞争者 2 个发布/订阅订阅（全局频道 + 按竞争者频道）
+- 每个竞争者的发布/订阅订阅：mutex 频道，以及为从 Simba < 3.2 滚动升级保留的按竞争者频道
 
 对于 100 个互斥锁，每个有 10 个竞争者，这大约是 100KB 的 Redis 内存 -- 可以忽略不计。
 
@@ -718,39 +717,25 @@ Both paths converge to the same result; pub/sub only improves latency.
 ### mutex_acquire.lua
 
 ```lua
-redis.replicate_commands();
-
-local mutex = KEYS[1];
-local contenderId = ARGV[1];
-local transition = ARGV[2];
-local mutexKey = 'simba:' .. mutex;
-
--- Step 1: Atomic acquire with expiry
-local succeed = redis.call('set', mutexKey, contenderId, 'nx', 'px', transition)
-
-if succeed then
-    -- Won the lock. Notify all subscribers.
-    local message = 'acquired@@' .. contenderId;
-    redis.call('publish', mutexKey, message)
-    return contenderId..'@@'..transition;
+-- KEYS[1] = simba:{mutex}; ARGV[1] = contenderId; ARGV[2] = lease (ttl + transition) in ms
+if redis.call('set', mutexKey, contenderId, 'nx', 'px', lease) then
+    -- Won the lease. Notify all subscribers.
+    redis.call('publish', mutexKey, 'acquired@@' .. contenderId)
+    return { contenderId, tonumber(lease) };
 end
-
--- Step 2: Lost. Join the wait queue.
-local contenderQueueKey = mutexKey .. ':contender';
-local nowTime = redis.call('time')[1];
-redis.call('zadd', contenderQueueKey, 'nx', nowTime, contenderId)
-
--- Step 3: Return current owner info
+-- Lost. Report the current owner and its remaining lease.
 local ownerId = redis.call('get', mutexKey)
-local ttl = redis.call('pttl', mutexKey)
-return ownerId..'@@'..ttl;
+if not ownerId then
+    return { '', 0 };
+end
+return { ownerId, redis.call('pttl', mutexKey) };
 ```
 
 关键设计决策：
-- `NX` 标志确保当键不存在时只有一个 `SET` 成功
-- `PX` 以毫秒设置过期时间，将锁和 TTL 合并在一个命令中
-- 有序集合等待队列支持对等待竞争者的定向通知
-- `redis.replicate_commands()` 在 Redis Cluster 中启用脚本效果复制
+- `NX` 标志确保在键不存在时只有一个 `SET` 成功
+- `PX` 以毫秒设置过期时间，将锁和 TTL 合并为一条命令
+- 键通过 `KEYS` 传入，返回值是结构化数组而不是分隔符拼接的字符串
+- 等待的竞争者不需要队列：释放消息在 mutex 频道上广播
 
 ### mutex_guard.lua
 
@@ -758,7 +743,7 @@ return ownerId..'@@'..ttl;
 
 ### mutex_release.lua
 
-原子检查所有权并释放。发布释放事件以通知等待的竞争者。
+原子检查所有权并释放。在 mutex 频道上广播 `released`，所有等待的竞争者立即竞争。
 
 ---
 
@@ -787,7 +772,7 @@ autonumber
     end
 ```
 
-异步分发很重要：它防止后端线程被缓慢的用户回调阻塞。如果处理执行器是 `ForkJoinPool.commonPool()`，回调运行在共享工作线程上。在生产环境中，考虑使用专用执行器以避免与其他 ForkJoinPool 用户的资源竞争。
+异步分发很重要：它防止后端线程被缓慢的用户回调阻塞。库工厂默认使用 `ForkJoinPool.commonPool()`，回调运行在共享工作线程上；Spring Boot starter 则提供专用的 `simbaHandleExecutor` bean。在 Spring 之外的生产环境中，请传入专用执行器。
 
 ---
 

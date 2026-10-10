@@ -4,35 +4,33 @@ Use this reference for backend debugging, not for everyday Simba usage. It mirro
 
 ## Redis Backend — Lua Scripts
 
-The Redis backend uses three Lua scripts for atomicity. Understanding these helps with debugging and tuning.
+The Redis backend uses three Lua scripts for atomicity. Every script receives its keys through `KEYS` (`KEYS[1]` = `simba:{mutex}`). Acquire and guard return a two-element array `{ownerId, remainingMs}`, or `{'', 0}` when there is no owner.
 
 ### mutex_acquire.lua
 
 Atomically tries to acquire the lock:
 1. `SET key contenderId NX PX (ttl + transition)` - set only if not exists, with millisecond expiry.
-2. On success: publishes `acquired@@contenderId` on the mutex channel and returns `contenderId@@remainingMs`.
-3. On failure (lock exists): adds the contender to a sorted-set wait queue (`ZADD NX score=redisTimeSeconds`) and returns `currentOwnerId@@remainingPttl`.
-
-The sorted set acts as the wait queue. Contenders are notified via Pub/Sub when the lock is released.
+2. On success: publishes `acquired@@contenderId` on the mutex channel and returns `{contenderId, leaseMs}`.
+3. On failure: returns `{currentOwnerId, remainingPttl}`. Nothing is queued; waiting contenders learn about releases from the broadcast.
 
 ### mutex_guard.lua
 
 For the current owner to renew (extend TTL):
 1. Checks if the lock is held by this contender (`GET key == contenderId`).
-2. If yes: `SET XX PX (ttlMs + transitionMs)` to renew the full hard lease. Returns `contenderId@@hardLeaseMs`.
+2. If yes: `SET XX PX (ttlMs + transitionMs)` to renew the full lease. Returns `{contenderId, leaseMs}`.
 3. If no: returns the current owner info so the contender knows it lost the lock.
 
 ### mutex_release.lua
 
-Releases the lock and wakes the next contender:
-1. If lock is held by this contender: `DEL key`.
-2. Picks the oldest contender from the sorted set (`ZREVRANGE -1 -1`), removes it.
-3. Publishes `released@@releasedOwnerId` on the next contender's personal channel to wake it up.
+Releases the lock and wakes every waiting contender:
+1. If the lock is not held by this contender: removes it from the legacy queue and returns `0`.
+2. Otherwise `DEL key legacyQueueKey` (`simba:{mutex}:contender`, written only by Simba < 3.2).
+3. Publishes `released@@releasedOwnerId` on the mutex channel, so all live contenders contend immediately and one wins.
 
 ### Pub/Sub Channels
 
-- **Global mutex channel** (`simba:{mutex}`): All contenders subscribe. Receives `acquired@@ownerId` events.
-- **Per-contender channel** (`simba:{mutex}:{contenderId}`): Only the specific contender subscribes. Receives `released@@contenderId` events to trigger immediate re-acquisition.
+- **Mutex channel** (`simba:{mutex}`): All contenders subscribe. Receives `acquired@@ownerId` and `released@@ownerId`.
+- **Per-contender channel** (`simba:{mutex}:{contenderId}`): Still subscribed so Simba < 3.2 owners, which address releases to one queued contender, can wake newer nodes during a rolling upgrade.
 
 ### Message Format
 

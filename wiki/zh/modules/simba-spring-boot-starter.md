@@ -9,11 +9,12 @@ description: Simba 的 Spring Boot 自动配置 -- 条件注解、属性绑定�
 
 ## 自动配置类
 
-该模块通过 Spring Boot 的标准机制注册三个自动配置类。
+该模块通过 Spring Boot 的标准机制注册四个自动配置类。
 
 **源码：** [simba-spring-boot-starter/.../org.springframework.boot.autoconfigure.AutoConfiguration.imports](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports)
 
 ```
+me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 me.ahoo.simba.spring.boot.starter.jdbc.SimbaJdbcAutoConfiguration
 me.ahoo.simba.spring.boot.starter.redis.SimbaSpringRedisAutoConfiguration
 me.ahoo.simba.spring.boot.starter.zookeeper.SimbaZookeeperAutoConfiguration
@@ -145,12 +146,29 @@ annotation class ConditionalOnSimbaZookeeperEnabled
 
 ## 自动配置详情
 
+### SimbaAutoConfiguration
+
+**源码：** [simba-spring-boot-starter/.../SimbaAutoConfiguration.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/SimbaAutoConfiguration.kt)
+
+```kotlin
+@AutoConfiguration
+@ConditionalOnSimbaEnabled
+class SimbaAutoConfiguration {
+
+    @Bean(name = ["simbaHandleExecutor"], destroyMethod = "shutdown")
+    @ConditionalOnMissingBean(name = ["simbaHandleExecutor"])
+    fun simbaHandleExecutor(): ExecutorService
+}
+```
+
+为所有后端提供执行 `onAcquired` / `onReleased` 回调的执行器：一个空闲线程会被回收的专用 daemon 线程池，阻塞的回调不会拖累 `ForkJoinPool.commonPool()`。定义名为 `simbaHandleExecutor` 的 bean 即可替换它。
+
 ### SimbaJdbcAutoConfiguration
 
 **源码：** [simba-spring-boot-starter/.../SimbaJdbcAutoConfiguration.kt:32](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/jdbc/SimbaJdbcAutoConfiguration.kt#L32)
 
 ```kotlin
-@AutoConfiguration
+@AutoConfiguration(after = [SimbaAutoConfiguration::class])
 @ConditionalOnSimbaJdbcEnabled
 @ConditionalOnClass(JdbcMutexContendServiceFactory::class)
 @EnableConfigurationProperties(JdbcProperties::class)
@@ -160,7 +178,10 @@ class SimbaJdbcAutoConfiguration(private val jdbcProperties: JdbcProperties) {
     fun mutexOwnerRepository(dataSource: DataSource): MutexOwnerRepository
 
     @Bean @ConditionalOnMissingBean
-    fun jdbcMutexContendServiceFactory(mutexOwnerRepository: MutexOwnerRepository): MutexContendServiceFactory
+    fun jdbcMutexContendServiceFactory(
+        mutexOwnerRepository: MutexOwnerRepository,
+        @Qualifier("simbaHandleExecutor") handleExecutor: Executor
+    ): MutexContendServiceFactory
 }
 ```
 
@@ -174,7 +195,7 @@ class SimbaJdbcAutoConfiguration(private val jdbcProperties: JdbcProperties) {
 **源码：** [simba-spring-boot-starter/.../SimbaSpringRedisAutoConfiguration.kt:34](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/redis/SimbaSpringRedisAutoConfiguration.kt#L34)
 
 ```kotlin
-@AutoConfiguration(after = [DataRedisAutoConfiguration::class])
+@AutoConfiguration(after = [DataRedisAutoConfiguration::class, SimbaAutoConfiguration::class])
 @ConditionalOnSimbaRedisEnabled
 @ConditionalOnClass(StringRedisTemplate::class)
 @EnableConfigurationProperties(RedisProperties::class)
@@ -186,7 +207,8 @@ class SimbaSpringRedisAutoConfiguration(private val redisProperties: RedisProper
     @Bean @ConditionalOnMissingBean @ConditionalOnBean(StringRedisTemplate::class)
     fun redisMutexContendServiceFactory(
         redisTemplate: StringRedisTemplate,
-        listenerContainer: RedisMessageListenerContainer
+        listenerContainer: RedisMessageListenerContainer,
+        @Qualifier("simbaHandleExecutor") handleExecutor: Executor
     ): MutexContendServiceFactory
 }
 ```
@@ -203,14 +225,17 @@ class SimbaSpringRedisAutoConfiguration(private val redisProperties: RedisProper
 **源码：** [simba-spring-boot-starter/.../SimbaZookeeperAutoConfiguration.kt:30](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/zookeeper/SimbaZookeeperAutoConfiguration.kt#L30)
 
 ```kotlin
-@AutoConfiguration
+@AutoConfiguration(after = [SimbaAutoConfiguration::class])
 @ConditionalOnSimbaZookeeperEnabled
 @ConditionalOnClass(ZookeeperMutexContendServiceFactory::class)
 @EnableConfigurationProperties(ZookeeperProperties::class)
 class SimbaZookeeperAutoConfiguration {
 
     @Bean @ConditionalOnBean(CuratorFramework::class) @ConditionalOnMissingBean
-    fun zookeeperMutexContendServiceFactory(curatorFramework: CuratorFramework): ZookeeperMutexContendServiceFactory
+    fun zookeeperMutexContendServiceFactory(
+        curatorFramework: CuratorFramework,
+        @Qualifier("simbaHandleExecutor") handleExecutor: Executor
+    ): MutexContendServiceFactory
 }
 ```
 
