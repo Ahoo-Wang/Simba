@@ -18,6 +18,11 @@
       "description": "Group Kotlin-related updates into a single PR",
       "matchPackageNames": ["/^org\\.jetbrains\\.kotlin/"],
       "groupName": "kotlin"
+    },
+    {
+      "description": "engines declares the minimum supported runtime; raising it would exclude users, so never bump it automatically",
+      "matchDepTypes": ["engines"],
+      "enabled": false
     }
   ]
 }
