@@ -13,7 +13,6 @@
 
 package me.ahoo.simba.example;
 
-import jakarta.annotation.PreDestroy;
 import me.ahoo.simba.core.MutexContendService;
 import me.ahoo.simba.core.MutexContendServiceFactory;
 import me.ahoo.simba.locker.SimbaLocker;
@@ -23,6 +22,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -59,7 +60,11 @@ public class ExampleApp implements CommandLineRunner {
         contendService.start();
     }
 
-    @PreDestroy
+    /**
+     * Stops on context close, before lifecycle beans (such as the Redis connection factory) stop,
+     * so the mutex is released while the backend is still reachable.
+     */
+    @EventListener(ContextClosedEvent.class)
     public void stopContendService() {
         if (contendService != null) {
             contendService.stop();
