@@ -17,10 +17,26 @@ pnpm run sync:llms    # Regenerate llms-full.txt from the English pages
 
 ## Layout
 
-- English pages live at the root (`guide/`, `architecture/`, `api/`, `modules/`, `testing/`, `onboarding/`);
-  Chinese pages mirror the same paths under `zh/`. Every page change is made in both languages.
+Each topic has exactly one page; link to it instead of restating it. Before adding a page, check whether an existing
+page owns the topic.
+
+| Page | Owns |
+|---|---|
+| `guide/index.md` | What Simba guarantees and does not; choosing an API and a backend |
+| `guide/quick-start.md` | Dependencies, backend wiring, first code for each API, use without Spring |
+| `guide/backends.md` | Per-backend storage, schema/keys, fencing source, operating notes, `simba.backend` selection |
+| `guide/correctness.md` | Lease model, ttl/transition tuning, fencing tokens, failure modes, callback semantics |
+| `guide/configuration.md` | Every `simba.*` property, starter beans, executors, factories without Spring |
+| `guide/observability.md` | Metrics, alert rules, Actuator endpoint, custom observers |
+| `guide/upgrading.md` | Upgrade steps and breaking changes |
+| `api/index.md` | Public types and their contracts |
+| `architecture/index.md` | Internals: layers, lease engine, threads, time, wire contracts, ADR index |
+| `contributing/index.md` | Build, tests, TCK, adding a backend, documentation workflow |
+
+- Chinese pages mirror the same paths under `zh/`. Every page change is made in both languages.
 - Navigation and sidebars: `.vitepress/config/en.ts` and `zh.ts`; site config: `.vitepress/config/index.ts`.
-- `llms.txt` (page index) is maintained by hand: update it when pages are added, renamed, or removed.
+- `llms.txt` (page index, same content as the root `llms.txt`) is maintained by hand: update both when pages are
+  added, renamed, or removed.
 - `llms-full.txt` is generated from the English pages: run `pnpm run sync:llms` after editing them
   (`pnpm run check:llms` verifies it). Add a `<doc title=... path=...>` block by hand for a new page.
 
@@ -28,8 +44,10 @@ pnpm run sync:llms    # Regenerate llms-full.txt from the English pages
 
 - Every page has `title` and `description` frontmatter.
 - Keep class names, method names, and config keys in English in Chinese pages.
-- Citations: `[file_path:line](https://github.com/Ahoo-Wang/Simba/blob/main/file_path#Lline)`. Line anchors
-  drift; when code changes move cited lines, fix the citations in both languages.
+- Describe behavior, not code layout: state the contract and link the source file or ADR on GitHub
+  (`https://github.com/Ahoo-Wang/Simba/blob/main/<path>`) without line anchors, which drift.
+- Verify every claim against the code. Never claim more than `../AGENTS.md` guarantees (e.g. no split-brain, or work
+  continuing while the backend is down).
 - Mermaid: dark-mode colors (`#2d333b` fills, `#6d5dfc` borders, `#e6edf3` text), `<br>` not `<br/>`
   (Vue compiler), and `autonumber` in sequence diagrams.
 

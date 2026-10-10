@@ -1,51 +1,38 @@
 ---
 title: 快速开始
-description: 几分钟内上手 Simba。添加依赖、选择后端，用几行代码获取你的第一个分布式锁。
+description: 在 Spring Boot 或普通 JVM 应用中引入 Simba，配置一个后端，并运行仅在 leader 上执行的工作。
 ---
 
 # 快速开始
 
-本指南将带你完成 Simba 的项目集成、后端配置，以及用几行代码获取分布式锁的全过程。
+要求：JDK 17+，以及一个运行中的 MySQL、Redis 或 Zookeeper。示例使用 Spring Boot 4.1 及其依赖管理；不使用 Spring Boot 时请参阅
+[不使用 Spring](#不使用-spring)。
 
-## 前置条件
+## 1. 添加依赖
 
-- **JDK 17** 或更高版本（Simba 面向 JVM 17 工具链）
-- **Gradle 8+**（推荐使用 Kotlin DSL）或 **Maven 3.9+**
-- 一个已运行的后端实例：MySQL、Redis 或 Zookeeper
-
-## 添加依赖
-
-以下示例面向 Spring Boot 4.1，并假定已启用其依赖管理。Simba starter 提供自动配置，但每个后端仍需要对应的客户端和基础设施依赖。请选择一套完整组合。
-
-### Gradle Kotlin DSL
+Starter 只包含自动配置。将它与 **恰好一组** 后端依赖一起添加：
 
 ::: code-group
 
-```kotlin [JDBC/MySQL]
+```kotlin [JDBC (Gradle)]
 implementation("me.ahoo.simba:simba-spring-boot-starter:4.3.0")
 implementation("me.ahoo.simba:simba-jdbc:4.3.0")
 implementation("org.springframework.boot:spring-boot-starter-jdbc")
 runtimeOnly("com.mysql:mysql-connector-j")
 ```
 
-```kotlin [Redis]
+```kotlin [Redis (Gradle)]
 implementation("me.ahoo.simba:simba-spring-boot-starter:4.3.0")
 implementation("me.ahoo.simba:simba-spring-redis:4.3.0")
 implementation("org.springframework.boot:spring-boot-starter-data-redis")
 ```
 
-```kotlin [Zookeeper]
+```kotlin [Zookeeper (Gradle)]
 implementation("me.ahoo.simba:simba-spring-boot-starter:4.3.0")
 implementation("me.ahoo.simba:simba-zookeeper:4.3.0")
 ```
 
-:::
-
-### Maven XML
-
-::: code-group
-
-```xml [JDBC/MySQL]
+```xml [JDBC (Maven)]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
@@ -67,7 +54,7 @@ implementation("me.ahoo.simba:simba-zookeeper:4.3.0")
 </dependency>
 ```
 
-```xml [Redis]
+```xml [Redis (Maven)]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
@@ -84,7 +71,7 @@ implementation("me.ahoo.simba:simba-zookeeper:4.3.0")
 </dependency>
 ```
 
-```xml [Zookeeper]
+```xml [Zookeeper (Maven)]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
@@ -99,294 +86,132 @@ implementation("me.ahoo.simba:simba-zookeeper:4.3.0")
 
 :::
 
-## 选择你的 API 级别
+如果你更喜欢以 platform 方式导入，`simba-bom`（`me.ahoo.simba:simba-bom`）可以统一所有 Simba 模块的版本。
 
-Simba 提供三个 API 级别。根据你的使用场景选择合适的：
+## 2. 连接后端
 
-```mermaid
-graph TD
-    subgraph sg_78 ["Which API?"]
-        direction TB
-        Q1{"Need periodic<br>scheduled work?"}
-        Q2{"Want RAII /<br>try-with-resources?"}
-        Q3{"Need full control<br>via callbacks?"}
-        SCH["Use @SimbaScheduled / SimbaScheduler"]
-        LK["Use SimbaLocker"]
-        CB["Use MutexContender"]
-    end
-
-    Q1 -->|"Yes"| SCH
-    Q1 -->|"No"| Q2
-    Q2 -->|"Yes"| LK
-    Q2 -->|"No"| CB
-
-    style Q1 fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style Q2 fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style Q3 fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style SCH fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style LK fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style CB fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-
-```
-
-## 使用 MutexContender 的基本用法
-
-使用 Simba 最简单的方式是实现 [`MutexContender`]([file_path:simba-core/src/main/kotlin/me/ahoo/simba/core/MutexContender.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexContender.kt))。你会在获取或丢失锁时收到回调通知。
-
-```kotlin
-import me.ahoo.simba.core.AbstractMutexContender
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.core.MutexState
-
-class LeaderContender(mutex: String) : AbstractMutexContender(mutex) {
-    override fun onAcquired(mutexState: MutexState) {
-        println("[$contenderId] acquired leadership for mutex: $mutex")
-    }
-
-    override fun onReleased(mutexState: MutexState) {
-        println("[$contenderId] lost leadership for mutex: $mutex")
-    }
-}
-```
-
-创建竞争者并启动竞争：
-
-```kotlin
-val factory: MutexContendServiceFactory = /* obtain from backend, e.g. JdbcMutexContendServiceFactory */
-val contender = LeaderContender("my-task-lock")
-val service = factory.createMutexContendService(contender)
-service.start()
-
-// When done:
-service.stop()
-```
-
-## 使用 SimbaLocker
-
-[`SimbaLocker`]([file_path:simba-core/src/main/kotlin/me/ahoo/simba/locker/SimbaLocker.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/locker/SimbaLocker.kt)) 实现了 `AutoCloseable` 接口，因此你可以在 try-with-resources 代码块中使用它。调用线程会阻塞直到获取锁为止。
-
-```kotlin
-import me.ahoo.simba.locker.SimbaLocker
-import java.time.Duration
-
-val factory: MutexContendServiceFactory = /* ... */
-
-SimbaLocker("my-task-lock", factory).use { locker ->
-    locker.acquire()
-    println("Lock acquired -- doing critical work")
-    // lock is released automatically when the block exits
-}
-
-// With a timeout:
-SimbaLocker("my-task-lock", factory).use { locker ->
-    locker.acquire(Duration.ofSeconds(30))
-    println("Lock acquired within 30s")
-}
-```
-
-## 只在 leader 上执行的定时任务
-
-使用 Spring Boot starter 时，在 bean 方法上标注 `@SimbaScheduled`。它只在 leader 节点上执行，在上下文刷新完成后启动、关闭时停止：
-
-```kotlin
-import me.ahoo.simba.schedule.ScheduleContext
-import me.ahoo.simba.spring.boot.starter.scheduling.SimbaScheduled
-import org.springframework.stereotype.Service
-
-@Service
-class CleanupJobs {
-    @SimbaScheduled(mutex = "cleanup-task", fixedRate = "5m")
-    fun cleanup(context: ScheduleContext) {
-        println("Running cleanup on leader instance, fencing token ${context.fencingToken}")
-    }
-}
-```
-
-不使用 Spring 时，创建 `SimbaScheduler` 并自行管理生命周期：
-
-```kotlin
-import me.ahoo.simba.schedule.ScheduleConfig
-import me.ahoo.simba.schedule.SimbaScheduler
-import java.time.Duration
-
-val scheduler = SimbaScheduler("cleanup-task", factory, ScheduleConfig.rate(Duration.ZERO, Duration.ofMinutes(5))) {
-    println("Running cleanup on leader instance...")
-}
-scheduler.start()
-// 关闭时
-scheduler.close()
-```
-
-节点成为 leader 时开始执行，失去 leader 时中断正在执行的任务。`AbstractScheduler` 以继承方式提供相同语义，参见 [调度器 API](/zh/api/scheduler-api)。
-
-## Spring Boot 自动配置
-
-只有在所选后端的基础设施可用后，starter 才会创建 `MutexContendServiceFactory`。请配置对应的 `DataSource`、Redis 连接或 `CuratorFramework` Bean。
+当后端的基础设施 bean 存在时，starter 会创建 `MutexContendServiceFactory` bean：`DataSource`、`StringRedisTemplate`
+或 `CuratorFramework`。
 
 ::: code-group
 
-```yaml [JDBC application.yml]
-simba:
-  jdbc:
-    enabled: true
-    initial-delay: 0s
-    ttl: 10s
-    transition: 6s
-
+```yaml [JDBC]
 spring:
   datasource:
     url: jdbc:mysql://localhost:3306/simba_db
-    username: root
-    password: root
+    username: simba
+    password: ${DB_PASSWORD}
 ```
 
-```yaml [Redis application.yml]
-simba:
-  redis:
-    enabled: true
-    ttl: 10s
-    transition: 6s
-
+```yaml [Redis]
 spring:
   data:
     redis:
       url: redis://localhost:6379
 ```
 
-```kotlin [Zookeeper Bean]
-import org.apache.curator.framework.CuratorFramework
-import org.apache.curator.framework.CuratorFrameworkFactory
-import org.apache.curator.retry.ExponentialBackoffRetry
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Configuration
-
+```kotlin [Zookeeper]
 @Configuration(proxyBeanMethods = false)
 class ZookeeperConfiguration {
     @Bean(initMethod = "start", destroyMethod = "close")
-    fun curatorFramework(): CuratorFramework = CuratorFrameworkFactory.newClient(
-        "localhost:2181",
-        ExponentialBackoffRetry(1000, 3)
-    )
+    fun curatorFramework(): CuratorFramework =
+        CuratorFrameworkFactory.newClient("localhost:2181", ExponentialBackoffRetry(1000, 3))
 }
 ```
 
 :::
 
-使用 JDBC 时，还需通过 [`simba-jdbc/src/init-script/init-simba-mysql.sql:17`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/init-simba-mysql.sql#L17) 创建 `simba_mutex` 表。
+JDBC 还需要 `simba_mutex` 表：执行一次
+[`init-simba-mysql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/init-simba-mysql.sql)。
+新 mutex 的行会自动插入。表结构以及 Redis、Zookeeper 的运维要点见 [后端](/zh/guide/backends)。
 
-满足这些前置条件后，自动配置会创建 `MutexContendServiceFactory` Bean。注入它即可直接使用：
+租约时序默认为 `ttl=10s`、`transition=6s`；修改之前请先阅读 [配置](/zh/guide/configuration)。
+
+## 3. 在 leader 上运行代码
+
+### 仅在 leader 上调度
+
+给 bean 方法加注解。它只在 leader 上运行，在上下文刷新后启动，在关闭时停止：
 
 ```kotlin
-import org.springframework.stereotype.Component
-import me.ahoo.simba.core.AbstractMutexContender
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.core.MutexState
-import jakarta.annotation.PostConstruct
-import jakarta.annotation.PreDestroy
-
-@Component
-class MyLeaderTask(
-    private val contendServiceFactory: MutexContendServiceFactory
-) : AbstractMutexContender("spring-task-lock") {
-
-    private val service = contendServiceFactory.createMutexContendService(this)
-
-    @PostConstruct
-    fun onStart() = service.start()
-
-    @PreDestroy
-    fun onStop() = service.stop()
-
-    override fun onAcquired(mutexState: MutexState) {
-        println("This instance is now the leader!")
-    }
-
-    override fun onReleased(mutexState: MutexState) {
-        println("Leadership lost.")
+@Service
+class ReportJobs(private val reports: ReportService) {
+    @SimbaScheduled(mutex = "report", fixedDelay = "1m")
+    fun generate(context: ScheduleContext) {
+        reports.generate(fencingToken = context.fencingToken)
     }
 }
 ```
 
-## 锁获取时序图
+`fixedDelay` 和 `fixedRate` 必须且只能设置一个；`initialDelay` 默认为 `0s`。方法不接受参数，或只接受一个 `ScheduleContext`。
+时长使用 Spring Boot 格式（`10s`、`500ms`、`PT1M`），并支持 `${...}` 占位符。工作在独立线程上运行，节点失去领导权时会被
+**中断**，因此请让它响应中断。
 
-下图展示了两个竞争者竞争同一互斥锁的完整时序：
+### SimbaLocker
 
-```mermaid
-sequenceDiagram
-autonumber
-    participant A as Contender A
-    participant S as Backend Storage
-    participant B as Contender B
+阻塞调用线程直到持有 mutex；`close()` 释放它：
 
-    A->>S: startContend() -- acquire mutex
-    S-->>A: success -- owner = A (ttlAt, transitionAt)
-    A->>A: onAcquired()
-    B->>S: startContend() -- acquire mutex
-    S-->>B: fail -- owner = A (within transition)
-    B->>B: schedule retry with jitter
-    Note over A,S: A's TTL expires -- A calls guard()
-    A->>S: guard() -- renew lease
-    S-->>A: success -- extended ttlAt
-    Note over A,S: After several renewals A stops
-    A->>S: release()
-    S-->>B: pub/sub notification: released
-    B->>S: acquire mutex
-    S-->>B: success -- owner = B
-    B->>B: onAcquired()
+```kotlin
+SimbaLocker("nightly-migration", factory).use { locker ->
+    locker.acquire(Duration.ofSeconds(30)) // 超时抛出 TimeoutException
+    migrate(fencingToken = locker.fencingToken)
+}
 ```
 
-## Locker 获取时序图
-
-```mermaid
-sequenceDiagram
-autonumber
-    participant T as Thread
-    participant L as SimbaLocker
-    participant CS as ContendService
-    participant S as Backend
-
-    T->>L: acquire(timeout)
-    L->>CS: start()
-    CS->>S: startContend()
-    L->>T: LockSupport.park()
-    S-->>CS: onAcquired callback
-    CS->>L: onAcquired()
-    L->>T: LockSupport.unpark()
-    T->>T: critical section executes
-    T->>L: close() / release
-    L->>CS: stop()
-    CS->>S: release mutex
+```java
+try (Locker locker = new SimbaLocker("nightly-migration", factory)) {
+    locker.acquire(Duration.ofSeconds(30));
+    migrate(locker.getFencingToken());
+}
 ```
 
-## 调度器生命周期时序图
+一个 locker 同一时间只属于一个线程。中断线程不会取消 `acquire()`（中断标志会被恢复）；请使用带超时的重载来限制等待时间。
 
-```mermaid
-sequenceDiagram
-autonumber
-    participant App as Application
-    participant Sch as AbstractScheduler
-    participant CS as ContendService
-    participant S as Backend
-    participant W as ScheduledExecutor
+### MutexContender
 
-    App->>Sch: start()
-    Sch->>CS: start()
-    CS->>S: startContend()
-    S-->>CS: onAcquired -- becomes owner
-    CS->>Sch: WorkContender.onAcquired()
-    Sch->>W: scheduleAtFixedRate(work)
-    loop Every period
-        W->>Sch: work()
-        Sch->>App: work() executes
-    end
-    Note over S,CS: Ownership expires
-    S-->>CS: onReleased
-    CS->>Sch: WorkContender.onReleased()
-    Sch->>W: cancel future
+在服务运行期间持续接收回调：
+
+```kotlin
+@Component
+class Coordinator(factory: MutexContendServiceFactory) : AbstractMutexContender("coordinator"), SmartLifecycle {
+    private val service = factory.createMutexContendService(this)
+
+    override fun onAcquired(mutexState: MutexState) = startCoordinating()
+    override fun onReleased(mutexState: MutexState) = stopCoordinating()
+
+    override fun start() = service.start()
+    override fun stop() = service.stop()
+    override fun isRunning() = service.running
+}
 ```
 
-## 后续步骤
+回调在 `simbaHandleExecutor` 上运行，每个竞争者同一时间只运行一个回调。保持回调简短，把耗时工作交给其他线程。
+`stop()` 会等待它自己的 `onReleased` 执行完毕，因此不要在持有回调也会获取的锁时调用它。
 
-- [配置参考](/zh/guide/configuration) -- 调整每个后端的 TTL、过渡期和初始延迟。
-- [架构概览](/architecture/) -- 深入了解抽象链的工作原理。
-- [参与贡献](/zh/guide/contributing) -- 设置开发环境并运行测试套件。
+## 不使用 Spring
+
+为后端构建工厂，并自行管理生命周期：
+
+```kotlin
+val factory = JdbcMutexContendServiceFactory(
+    mutexOwnerRepository = JdbcMutexOwnerRepository(dataSource, queryTimeout = Duration.ofSeconds(10)),
+    initialDelay = Duration.ZERO,
+    ttl = Duration.ofSeconds(10),
+    transition = Duration.ofSeconds(6)
+)
+
+val scheduler = SimbaScheduler("report", factory, ScheduleConfig.delay(Duration.ZERO, Duration.ofMinutes(1))) { context ->
+    reports.generate(fencingToken = context.fencingToken)
+}
+scheduler.start()
+// 关闭时
+scheduler.close()
+factory.close()
+```
+
+Redis 和 Zookeeper 的工厂及其执行器见 [配置](/zh/guide/configuration#不使用-spring)。
+
+## 示例应用
+
+[`simba-example`](https://github.com/Ahoo-Wang/Simba/tree/main/simba-example) 是一个 Spring Boot 应用，包含一个竞争者和一个
+`@SimbaScheduled` 任务；可以在任意后端上运行（`-PexampleBackend=jdbc|redis|zookeeper`）。

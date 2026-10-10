@@ -1,276 +1,104 @@
 ---
 title: Configuration
-description: Full reference for Simba configuration -- Spring Boot properties, programmatic factory setup, and lock lifecycle timing.
+description: Every simba.* Spring Boot property, the callback executor, and the backend factories for use without Spring.
 ---
 
 # Configuration
 
-This page covers every configuration option available in Simba. You can configure Simba through Spring Boot properties (recommended for Spring applications) or programmatically through the factory classes.
+For what `ttl` and `transition` mean and how to choose them, read [Correctness](/guide/correctness#choosing-ttl-and-transition).
 
 ## Spring Boot Properties
 
-All properties are prefixed with `simba.`. The starter auto-configures the correct `MutexContendServiceFactory` based on which backend you enable.
+| Property | Default | Description |
+|---|---|---|
+| `simba.enabled` | `true` | Master switch for all Simba auto-configuration. |
+| `simba.backend` | — | `jdbc`, `redis` or `zookeeper`. Required when more than one backend is active; startup fails otherwise. Must name an active backend. |
+| `simba.jdbc.enabled` | `true` | Enable the JDBC backend. |
+| `simba.jdbc.initial-delay` | `0s` | Delay before the first contention after `start()`. |
+| `simba.jdbc.ttl` | `10s` | Lease length until the owner renews. Also used as the JDBC statement timeout. |
+| `simba.jdbc.transition` | `6s` | Grace period after `ttl` in which only the owner may renew. |
+| `simba.jdbc.fencing` | `true` | Issue fencing tokens from the `fencing_token` column; set `false` for tables without it. |
+| `simba.redis.enabled` | `true` | Enable the Redis backend. |
+| `simba.redis.ttl` | `10s` | Lease length until the owner renews. |
+| `simba.redis.transition` | `6s` | Grace period after `ttl` in which only the owner may renew. |
+| `simba.zookeeper.enabled` | `true` | Enable the Zookeeper backend. Timing is governed by the Curator session. |
+| `simba.scheduling.enabled` | `true` | Run `@SimbaScheduled` methods and `SimbaScheduler` beans with the application context. |
+| `simba.metrics.enabled` | `true` | Record Micrometer metrics when a `MeterRegistry` bean exists; see [Observability](/guide/observability). |
 
-### Global
+Durations accept Spring Boot formats (`10s`, `500ms`, `PT1M`). `ttl` must be positive, `transition` and
+`initial-delay` must not be negative.
 
-| Property | Type | Default | Description |
-|---|---|---|---|
-| `simba.enabled` | `Boolean` | `true` | Master switch for all Simba auto-configuration. |
-| `simba.backend` | `String` | — | `jdbc`, `redis` or `zookeeper`. Required when more than one backend module is active; startup fails otherwise. |
+## Beans the Starter Creates
 
-### JDBC Backend
+| Bean | Condition | Override or disable |
+|---|---|---|
+| `MutexContendServiceFactory` | The selected backend's infrastructure bean exists: a single `DataSource`, a `StringRedisTemplate`, or a `CuratorFramework` | Defining your own `MutexContendServiceFactory` |
+| `MutexOwnerRepository` (JDBC) | A single `DataSource` | Defining your own `MutexOwnerRepository` |
+| `RedisMessageListenerContainer` (Redis) | A single `RedisConnectionFactory` | Defining your own container |
+| `simbaHandleExecutor` | Always | A bean with the same name |
+| `MicrometerContendObserver` | Micrometer and a `MeterRegistry` bean | `simba.metrics.enabled=false` |
+| `SimbaEndpoint` | Actuator, endpoint enabled and exposed | Actuator `management.*` properties |
 
-Properties prefix: `simba.jdbc`
-
-Defined in [`JdbcProperties`]([file_path:simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/jdbc/JdbcProperties.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/jdbc/JdbcProperties.kt)).
-
-| Property | Type | Default | Description |
-|---|---|---|---|
-| `simba.jdbc.enabled` | `Boolean` | `true` | Enable the JDBC backend. Activated when `simba.enabled=true` and this flag is `true`. |
-| `simba.jdbc.initial-delay` | `Duration` | `0s` | Delay before the first contention attempt after `start()`. |
-| `simba.jdbc.ttl` | `Duration` | `10s` | Time-to-live for the owner lease. The owner must renew before this expires. |
-| `simba.jdbc.transition` | `Duration` | `6s` | Grace period after TTL expires. The incumbent owner can renew preferentially during this window. |
-| `simba.jdbc.fencing` | `Boolean` | `true` | Issue fencing tokens from the `fencing_token` column. Existing tables need `upgrade-simba-mysql-fencing-token.sql` first, or set `false`. |
-
-**Example `application.yml`:**
-
-```yaml
-simba:
-  enabled: true
-  jdbc:
-    enabled: true
-    initial-delay: 5s
-    ttl: 30s
-    transition: 10s
-```
-
-### Redis Backend
-
-Properties prefix: `simba.redis`
-
-Defined in [`RedisProperties`]([file_path:simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/redis/RedisProperties.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/redis/RedisProperties.kt)).
-
-| Property | Type | Default | Description |
-|---|---|---|---|
-| `simba.redis.enabled` | `Boolean` | `true` | Enable the Redis backend. |
-| `simba.redis.ttl` | `Duration` | `10s` | Time-to-live for the owner lease. |
-| `simba.redis.transition` | `Duration` | `6s` | Grace period after TTL expires. |
-
-**Example `application.yml`:**
-
-```yaml
-simba:
-  redis:
-    enabled: true
-    ttl: 15s
-    transition: 8s
-```
-
-### Zookeeper Backend
-
-Properties prefix: `simba.zookeeper`
-
-Defined in [`ZookeeperProperties`]([file_path:simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/zookeeper/ZookeeperProperties.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/zookeeper/ZookeeperProperties.kt)).
-
-| Property | Type | Default | Description |
-|---|---|---|---|
-| `simba.zookeeper.enabled` | `Boolean` | `true` | Enable the Zookeeper backend. |
-
-The Zookeeper backend delegates leadership lifecycle management to Curator's `LeaderLatch`, so no additional timing properties are needed at the Simba level.
-
-**Example `application.yml`:**
-
-```yaml
-simba:
-  zookeeper:
-    enabled: true
-```
-
-### Metrics
-
-| Property | Type | Default | Description |
-|---|---|---|---|
-| `simba.metrics.enabled` | `Boolean` | `true` | Record Micrometer metrics when a `MeterRegistry` bean exists; see [Observability](/guide/observability). |
-
-### Scheduling
-
-| Property | Type | Default | Description |
-|---|---|---|---|
-| `simba.scheduling.enabled` | `Boolean` | `true` | Run `@SimbaScheduled` methods and `SimbaScheduler` beans with the application context. |
+Every `ContendObserver` bean in the context is passed to the backend factory, in `@Order`.
 
 ### Callback Executor
 
-Every backend runs `onAcquired` / `onReleased` on the `simbaHandleExecutor` bean, a dedicated daemon pool whose idle
-threads are reclaimed. Define a bean with that name to use your own executor:
+`onAcquired` and `onReleased` run on `simbaHandleExecutor`, a dedicated daemon pool whose idle threads are reclaimed.
+Callbacks of one contender never run concurrently, so the pool grows only with the number of contenders notified at
+the same moment. To use your own executor:
 
 ```kotlin
-@Bean(name = [SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME])
-fun simbaHandleExecutor(): Executor = Executors.newFixedThreadPool(2)
+@Bean(name = [SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME]) // "simbaHandleExecutor"
+fun simbaHandleExecutor(): ExecutorService = Executors.newFixedThreadPool(2)
 ```
 
-## Timing Relationship
+## Without Spring
 
-Understanding how `ttl` and `transition` interact is essential for correct configuration:
+Each backend has a factory. Factories of polling backends own a scheduler (contention triggers and lease watchdogs) and
+an I/O executor (backend calls), both daemon and idle-reclaimed; `close()` the factory on shutdown. Without
+`handleExecutor`, callbacks run on `ForkJoinPool.commonPool()`; pass a dedicated executor if callbacks may block.
 
-```mermaid
-graph LR
-    subgraph sg_7 ["Timeline"]
-        direction LR
-        A["acquiredAt"] -->|"ttl"| B["ttlAt"]
-        B -->|"transition"| C["transitionAt"]
-    end
+::: code-group
 
-    A -.->|"owner renews here"| B
-    B -.->|"grace window"| C
-    C -.->|"other contenders<br>can acquire"| D["next acquisition"]
-
-    style A fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style B fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style C fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style D fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-
-```
-
-**Key rules:**
-
-- The owner should renew before `ttlAt`. The guard operation extends both `ttlAt` and `transitionAt`.
-- Non-owner contenders wake up at `transitionAt` with random jitter of **-200ms to +1000ms** (see [`ContendPeriod.nextContenderDelay()`]([file_path:simba-core/src/main/kotlin/me/ahoo/simba/core/ContendPeriod.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/ContendPeriod.kt#L43-L49))).
-- If `transition` is zero, the owner has no grace period and contenders wake immediately at `ttlAt`.
-
-## Programmatic Configuration
-
-When not using Spring Boot, create a factory directly.
-
-### JDBC Factory
-
-```kotlin
-import me.ahoo.simba.jdbc.JdbcMutexContendServiceFactory
-import me.ahoo.simba.jdbc.JdbcMutexOwnerRepository
-import java.time.Duration
-
-val repository = JdbcMutexOwnerRepository(dataSource)
+```kotlin [JDBC]
 val factory = JdbcMutexContendServiceFactory(
-    mutexOwnerRepository = repository,
-    initialDelay = Duration.ofSeconds(0),
+    mutexOwnerRepository = JdbcMutexOwnerRepository(
+        dataSource,
+        queryTimeout = Duration.ofSeconds(10), // default: no timeout
+        fencing = true
+    ),
+    handleExecutor = callbackExecutor,
+    initialDelay = Duration.ZERO,
     ttl = Duration.ofSeconds(10),
-    transition = Duration.ofSeconds(6)
+    transition = Duration.ofSeconds(6),
+    observer = myObserver // optional
 )
 ```
 
-The factory parameters mirror the Spring Boot properties. The [`JdbcMutexContendServiceFactory`]([file_path:simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendServiceFactory.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendServiceFactory.kt)) accepts an optional `handleExecutor` (defaults to `ForkJoinPool.commonPool()`).
-
-### Redis Factory
-
-```kotlin
-import me.ahoo.simba.spring.redis.SpringRedisMutexContendServiceFactory
-import org.springframework.data.redis.core.StringRedisTemplate
-import org.springframework.data.redis.listener.RedisMessageListenerContainer
-import java.time.Duration
-import java.util.concurrent.Executors
-
+```kotlin [Redis]
+val listenerContainer = RedisMessageListenerContainer().apply {
+    setConnectionFactory(connectionFactory)
+    afterPropertiesSet()
+    start()
+}
 val factory = SpringRedisMutexContendServiceFactory(
-    redisTemplate = redisTemplate,
-    listenerContainer = listenerContainer,
-    scheduledExecutorService = Executors.newScheduledThreadPool(4),
     ttl = Duration.ofSeconds(10),
-    transition = Duration.ofSeconds(6)
+    transition = Duration.ofSeconds(6),
+    redisTemplate = StringRedisTemplate(connectionFactory),
+    listenerContainer = listenerContainer,
+    handleExecutor = callbackExecutor,
+    observer = myObserver // optional
 )
 ```
 
-### Zookeeper Factory
-
-```kotlin
-import me.ahoo.simba.zookeeper.ZookeeperMutexContendServiceFactory
-import org.apache.curator.framework.CuratorFramework
-import java.util.concurrent.ForkJoinPool
-
+```kotlin [Zookeeper]
 val factory = ZookeeperMutexContendServiceFactory(
-    handleExecutor = ForkJoinPool.commonPool(),
-    curatorFramework = curatorClient
+    handleExecutor = callbackExecutor,
+    curatorFramework = curatorFramework, // already started
+    observer = myObserver // optional
 )
 ```
 
-The Zookeeper backend delegates lease management to Curator, so no timing parameters are needed.
+:::
 
-## Lock Lifecycle State Diagram
-
-The `MutexContendService` follows a strict state machine. Understanding this helps when debugging lifecycle issues:
-
-```mermaid
-stateDiagram-v2
-    [*] --> INITIAL
-    INITIAL --> STARTING : start()
-    STARTING --> RUNNING : startRetrieval() OK
-    STARTING --> INITIAL : exception
-    RUNNING --> STOPPING : stop()
-    RUNNING --> STOPPING : close()
-    STOPPING --> INITIAL : cleanup done
-    note right of RUNNING : Owner renews via guard()
-    note right of INITIAL : Ready to start again
-```
-
-## Contention Timing Flow
-
-This sequence diagram shows how `ContendPeriod` computes the next delay for both the owner and non-owner contenders:
-
-```mermaid
-sequenceDiagram
-autonumber
-    participant Owner as Current Owner
-    participant CP as ContendPeriod
-    participant C1 as Contender 1
-    participant C2 as Contender 2
-
-    Owner->>CP: nextOwnerDelay(owner)
-    CP-->>Owner: ttlAt - now (positive if within TTL)
-    Note over Owner: Owner calls guard() before ttlAt
-
-    Owner->>CP: nextOwnerDelay(owner) after renewal
-    CP-->>Owner: new ttlAt - now
-
-    Note over CP: TTL expires -- transition begins
-
-    C1->>CP: nextContenderDelay(owner)
-    CP-->>C1: transitionAt - now + random(-200..1000ms)
-
-    C2->>CP: nextContenderDelay(owner)
-    CP-->>C2: transitionAt - now + random(-200..1000ms)
-
-    Note over C1,C2: Different jitter values<br>spread out acquisition attempts
-```
-
-## Owner State Diagram
-
-The `MutexOwner` lifecycle during a single lease:
-
-```mermaid
-stateDiagram-v2
-    [*] --> NoOwner
-    NoOwner --> Owned : contender acquires
-    state Owned {
-        [*] --> InTTL
-        InTTL --> InTransition : ttlAt reached
-        InTransition --> [*] : transitionAt reached
-    }
-    Owned --> NoOwner : release or transition expires
-    state InTTL {
-        [*] --> FreshAcquire
-        FreshAcquire --> Renewed : guard() succeeds
-        Renewed --> Renewed : guard() succeeds
-    }
-```
-
-## Recommended Defaults
-
-| Scenario | TTL | Transition | Notes |
-|---|---|---|---|
-| **Short-lived tasks** | 5s | 3s | Fast failover, higher backend load |
-| **Standard workloads** | 10s | 6s | Default -- good balance |
-| **Heavy tasks** | 30s -- 60s | 10s -- 20s | Allows long-running work on the leader |
-| **Scheduler with 1-min period** | 65s+ | 20s+ | Must exceed the scheduling period |
-
-## Related Pages
-
-- [Quick Start](/guide/quick-start) -- add dependencies and write your first lock.
-- [Architecture](/architecture/) -- deep dive into the contention mechanics.
-- [Contributing](/guide/contributing) -- development setup and testing.
+All factory and service constructors are `@JvmOverloads`, so Java callers can omit trailing optional parameters.

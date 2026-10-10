@@ -51,7 +51,7 @@ groups:
           summary: "Leadership of {{ $labels.mutex }} moves too often"
 ```
 
-Nodes are scraped at different moments, so a handover can briefly look like zero or two owners; the `for: 1m` clause filters that out. Leases themselves never overlap: a node revokes its ownership locally when its lease ends, and writes that may outlive it should carry a [fencing token](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md).
+Nodes are scraped at different moments, so a handover can briefly look like zero or two owners; the `for: 1m` clause filters that out. A node revokes its ownership locally when its lease ends, so a lasting `SimbaSplitLeadership` points at the backend (for example a Redis failover). Writes that may outlive a lease should carry a [fencing token](/guide/correctness#fencing-tokens).
 
 ## Actuator Endpoint
 
@@ -123,5 +123,5 @@ val factory = SpringRedisMutexContendServiceFactory(
 
 ## Related Pages
 
-- [Configuration](/guide/configuration) -- every `simba.*` property.
-- [Spring Boot Starter](/modules/simba-spring-boot-starter) -- auto-configuration details.
+- [Configuration](/guide/configuration): every `simba.*` property and the beans the starter creates.
+- [Correctness](/guide/correctness#failure-modes): what each failure looks like.

@@ -1,4 +1,4 @@
-# Simba(Distributed Mutex)
+# Simba
 
 [![License](https://img.shields.io/badge/license-Apache%202-4EB1BA.svg)](https://www.apache.org/licenses/LICENSE-2.0.html)
 [![GitHub release](https://img.shields.io/github/release/Ahoo-Wang/Simba.svg)](https://github.com/Ahoo-Wang/Simba/releases)
@@ -7,254 +7,110 @@
 [![codecov](https://codecov.io/gh/Ahoo-Wang/Simba/branch/main/graph/badge.svg?token=P9EMJKJ2I5)](https://codecov.io/gh/Ahoo-Wang/Simba)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Ahoo-Wang/Simba)
 
-> [中文文档](https://simba.ahoo.me/zh/) | [English Document](https://simba.ahoo.me/)
+> [中文文档](https://simba.ahoo.me/zh/) | [English Documentation](https://simba.ahoo.me/) | [English README](README.md)
 
-## 介绍
+Simba 是一个用于 **选主与分布式互斥** 的 JVM 库。应用的各个实例竞争一个具名 mutex；MySQL（JDBC）、Redis 或 Zookeeper
+把一个有时限的租约授予其中一个实例，Simba 通过有序回调告诉每个实例它何时获得或失去所有权。无需运行 Simba 服务端。
 
-Simba 旨在提供易用、灵活的分布式锁服务，支持多种存储后端实现：关系型数据库、Redis、Zookeeper。
+- **每个租约最多一个本地持有者。** 租约结束且未续期成功时，节点会自行撤销所有权，即使后端调用仍然挂起。
+- **Fencing token。** 每个所有权任期都带有严格递增的 token。被 GC 暂停的进程可能在租约结束后恢复；必须拒绝这类过期持有者的资源需要检查
+  token。Simba 无法替你完成这一步。
+- **三种 API**，基于同一个竞争服务：`@SimbaScheduled` / `SimbaScheduler`（仅在 leader 上执行）、`SimbaLocker`（阻塞锁）、
+  `MutexContender`（回调）。
+
+保护任何绝不能重复写入的资源之前，请先阅读 [正确性](https://simba.ahoo.me/zh/guide/correctness)。
 
 ## 安装
 
-### Gradle
+添加 Spring Boot starter 和 **一个** 后端（Java 17+）：
 
-> Kotlin DSL
+```kotlin
+implementation("me.ahoo.simba:simba-spring-boot-starter:${simbaVersion}")
 
-``` kotlin
-    implementation("me.ahoo.simba:simba-spring-boot-starter:${simbaVersion}")
+// JDBC（MySQL）：还需执行一次 simba-jdbc/src/init-script/init-simba-mysql.sql
+implementation("me.ahoo.simba:simba-jdbc:${simbaVersion}")
+implementation("org.springframework.boot:spring-boot-starter-jdbc")
+runtimeOnly("com.mysql:mysql-connector-j")
+
+// 或 Redis
+implementation("me.ahoo.simba:simba-spring-redis:${simbaVersion}")
+implementation("org.springframework.boot:spring-boot-starter-data-redis")
+
+// 或 Zookeeper：还需定义一个已启动的 CuratorFramework bean
+implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
 ```
 
-### Maven
+Starter 会为基础设施 bean（`DataSource`、`StringRedisTemplate` 或 `CuratorFramework`）存在的那个后端进行配置。classpath 上有多个后端模块时，
+请设置 `simba.backend=jdbc|redis|zookeeper`。Maven 坐标、JDBC 表结构以及不使用 Spring 的用法见
+[快速开始](https://simba.ahoo.me/zh/guide/quick-start)。
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
+## 使用
 
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-
-    <modelVersion>4.0.0</modelVersion>
-    <parent>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.1.0</version>
-        <relativePath/>
-    </parent>
-    <artifactId>demo</artifactId>
-    <properties>
-        <simba.version>simbaVersion</simba.version>
-    </properties>
-
-    <dependencies>
-        <dependency>
-            <groupId>me.ahoo.simba</groupId>
-            <artifactId>simba-spring-boot-starter</artifactId>
-            <version>${simba.version}</version>
-        </dependency>
-    </dependencies>
-    
-</project>
-```
-
-starter 只提供 Simba 自动配置。请从下文选择并添加一套完整的后端依赖；对应的后端基础设施仍然是必需的。
-
-### application.yaml
-
-```yaml
-simba:
-  # Required only when more than one backend module is on the classpath.
-  backend: jdbc
-
-spring:
-  datasource:
-    url: jdbc:mysql://localhost:3306/simba_db
-    username: root
-    password: root
-```
-
-### Optional-1: JdbcMutexContendService
-
-![JdbcMutexContendService](docs/JdbcMutexContendService.png)
-
-> Kotlin DSL
-
-``` kotlin
-    implementation("me.ahoo.simba:simba-jdbc:${simbaVersion}")
-    implementation("org.springframework.boot:spring-boot-starter-jdbc")
-    runtimeOnly("com.mysql:mysql-connector-j")
-```
-
-> Maven
-
-```xml
-<dependency>
-    <groupId>me.ahoo.simba</groupId>
-    <artifactId>simba-jdbc</artifactId>
-    <version>${simba.version}</version>
-</dependency>
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-jdbc</artifactId>
-</dependency>
-<dependency>
-    <groupId>com.mysql</groupId>
-    <artifactId>mysql-connector-j</artifactId>
-    <scope>runtime</scope>
-</dependency>
-```
-
-```sql
-create table simba_mutex
-(
-    mutex             varchar(66)     not null primary key comment 'mutex name',
-    acquired_at       bigint unsigned not null,
-    ttl_at         bigint unsigned not null,
-    transition_at bigint unsigned not null,
-    owner_id          varchar(128)    not null,
-    version           int unsigned    not null,
-    fencing_token     bigint unsigned not null default 0
-);
-```
-
-### Optional-2: RedisMutexContendService
-
-> Kotlin DSL
-
-``` kotlin
-    implementation("me.ahoo.simba:simba-spring-redis:${simbaVersion}")
-    implementation("org.springframework.boot:spring-boot-starter-data-redis")
-```
-
-> Maven
-
-```xml
-<dependency>
-    <groupId>me.ahoo.simba</groupId>
-    <artifactId>simba-spring-redis</artifactId>
-    <version>${simba.version}</version>
-</dependency>
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-data-redis</artifactId>
-</dependency>
-```
-
-### Optional-3: ZookeeperMutexContendService
-
-> Kotlin DSL
-
-``` kotlin
-    implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
-```
-
-> Maven
-
-```xml
-<dependency>
-    <groupId>me.ahoo.simba</groupId>
-    <artifactId>simba-zookeeper</artifactId>
-    <version>${simba.version}</version>
-</dependency>
-```
-
-还需按照[快速开始](https://simba.ahoo.me/zh/guide/quick-start.html)注册一个由 Spring 管理的 `CuratorFramework` Bean。
-
-## Examples
-
-[Simba-Examples](https://github.com/Ahoo-Wang/Simba/tree/main/simba-example)
-
-## 使用入门
-
-### MutexContender
-
-```java
-        MutexContendService contendService = contendServiceFactory.createMutexContendService(new AbstractMutexContender(mutex) {
-            @Override
-            public void onAcquired(MutexState mutexState) {
-                    log.info("onAcquired");
-            }
-            
-            @Override
-            public void onReleased(MutexState mutexState) {
-                    log.info("onReleased");
-            }
-        });
-        contendService.start();
-        try {
-            // 使用互斥保护的服务。
-        } finally {
-            contendService.stop();
-        }
-```
-
-### SimbaLocker
-
-```java
-        try (Locker locker = new SimbaLocker("mutex-locker", this.mutexContendServiceFactory)) {
-            locker.acquire(Duration.ofSeconds(1));
-        /**
-         * doSomething
-         */
-        } catch (Exception e) {
-            log.error(e.getMessage(), e);
-        }
-```
-
-### Scheduler
-
-只在 leader 节点上执行的方法，由 Spring Boot starter 在启动完成后开始、在关闭时停止：
+### 仅在 leader 上调度
 
 ```java
 @Service
 public class ReportJobs {
-    @SimbaScheduled(mutex = "report", fixedDelay = "10s")
+    @SimbaScheduled(mutex = "report", fixedDelay = "1m")
     public void generate(ScheduleContext context) {
         reportService.generate(context.getFencingToken());
     }
 }
 ```
 
-不使用 Spring 时，直接使用 `SimbaScheduler`：
+该方法只在 leader 上运行；节点失去领导权时会被中断。不使用 Spring 时，使用
+`SimbaScheduler(mutex, factory, ScheduleConfig.delay(...)) { context -> ... }`。
 
-```kotlin
-SimbaScheduler("report", factory, ScheduleConfig.delay(Duration.ZERO, Duration.ofSeconds(10))) { context ->
-    reportService.generate(context.fencingToken)
-}.start()
+### SimbaLocker
+
+```java
+try (Locker locker = new SimbaLocker("nightly-migration", mutexContendServiceFactory)) {
+    locker.acquire(Duration.ofSeconds(30));
+    migrate(locker.getFencingToken());
+}
 ```
 
-节点成为 leader 时开始执行，失去 leader 时中断正在执行的任务。
+### MutexContender
 
-### Fencing Token
+```java
+MutexContendService contendService = mutexContendServiceFactory.createMutexContendService(
+    new AbstractMutexContender("coordinator") {
+        @Override
+        public void onAcquired(MutexState mutexState) {
+            startCoordinating();
+        }
 
-租约只能限定后端授予持有权的时长，限定不了一个被暂停的持有者还会继续操作多久。请把当前任期的 fencing token 传给受保护的资源，由资源拒绝比它见过的最大值更小的 token：
-
-```kotlin
-locker.acquire()
-repository.save(order, fencingToken = locker.fencingToken)
+        @Override
+        public void onReleased(MutexState mutexState) {
+            stopCoordinating();
+        }
+    });
+contendService.start();
+// 关闭时
+contendService.stop();
 ```
 
-所有后端的 token 都按持有任期严格递增（`0` 表示没有）。Redis 需要持久化计数器（AOF），重启后才能保持单调。
+## 文档
 
-### 指标
+| | |
+|---|---|
+| [简介](https://simba.ahoo.me/zh/guide/) | 保证、如何选择 API 和后端 |
+| [后端](https://simba.ahoo.me/zh/guide/backends) | JDBC、Redis、Zookeeper：存储、部署、运维要点 |
+| [正确性](https://simba.ahoo.me/zh/guide/correctness) | 租约、ttl/transition、fencing token、故障模式 |
+| [配置](https://simba.ahoo.me/zh/guide/configuration) | `simba.*` 属性与工厂 |
+| [可观测性](https://simba.ahoo.me/zh/guide/observability) | Micrometer 指标、`simba` Actuator 端点、告警 |
+| [升级](https://simba.ahoo.me/zh/guide/upgrading) | 升级到 4.x |
+| [API 参考](https://simba.ahoo.me/zh/api/) | 公共类型 |
+| [架构](https://simba.ahoo.me/zh/architecture/)、[ADR](docs/adr/) | 内部实现与设计决策 |
 
-引入 Micrometer（例如 `spring-boot-starter-actuator`）后，starter 会记录 `simba.mutex.owner`、
-`simba.mutex.ownership.changes`、`simba.mutex.contend`、`simba.mutex.lease.expired` 和 `simba.scheduler.work`，
-按 mutex 打标签。引入 Actuator 并暴露后，只读的 `simba` 端点（`/actuator/simba`）会列出本节点竞争的 mutex
-及其最后观察到的 owner。告警规则和自定义 `ContendObserver` 参见 [可观测性](https://simba.ahoo.me/zh/guide/observability)。
+[示例应用](simba-example) 可以在任意后端上运行。
 
-## 升级到 4.0
-
-- **Redis：** 推出 4.0 之前，所有节点都必须先运行 Simba 3.2 或更高版本。
-- **JDBC：** fencing token 默认开启。已有的表请执行 [`upgrade-simba-mysql-fencing-token.sql`](simba-jdbc/src/init-script/upgrade-simba-mysql-fencing-token.sql)，或设置 `simba.jdbc.fencing=false`。
-- **Spring Boot：** classpath 上有多个后端模块时，请设置 `simba.backend`。
-- **API：** `MutexOwner` 改为不可继承的值类型（删除 `MutexOwnerEntity`，`isInTransition` 合并进 `hasOwner()`）；删除 `MutexRetrievalServiceFactory`；`MutexOwnerRepository` 只保留 `acquireAndGetOwner` 和 `release`。`simba-core` 不再引入 Guava 和 cosid。
-
-设计理由参见 [ADR 0003](docs/adr/0003-simba-4.md)。
-
-#### Use Cases
+## 使用者
 
 - [Govern-EventBus](https://github.com/Ahoo-Wang/govern-eventbus/tree/master/eventbus-core/src/main/java/me/ahoo/eventbus/core/compensate)
 - [CoSky](https://github.com/Ahoo-Wang/CoSky/blob/main/cosky-rest-api/src/main/kotlin/me/ahoo/cosky/rest/stat/StatServiceScheduler.kt)
 
 ## 参与贡献
 
-工作流程、质量门禁和发布流程参见 [CONTRIBUTING.md](CONTRIBUTING.md)，报告安全漏洞参见 [SECURITY.md](SECURITY.md)。
+工作流程、质量门禁和发布流程参见 [CONTRIBUTING.md](CONTRIBUTING.md)，测试与后端 TCK 参见
+[贡献者指南](https://simba.ahoo.me/zh/contributing/)，报告安全漏洞参见 [SECURITY.md](SECURITY.md)。

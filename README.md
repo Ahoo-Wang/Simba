@@ -1,4 +1,4 @@
-# Simba(Distributed Mutex)
+# Simba
 
 [![License](https://img.shields.io/badge/license-Apache%202-4EB1BA.svg)](https://www.apache.org/licenses/LICENSE-2.0.html)
 [![GitHub release](https://img.shields.io/github/release/Ahoo-Wang/Simba.svg)](https://github.com/Ahoo-Wang/Simba/releases)
@@ -7,261 +7,114 @@
 [![codecov](https://codecov.io/gh/Ahoo-Wang/Simba/branch/main/graph/badge.svg?token=P9EMJKJ2I5)](https://codecov.io/gh/Ahoo-Wang/Simba)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Ahoo-Wang/Simba)
 
-> [中文文档](https://simba.ahoo.me/zh/) | [English Document](https://simba.ahoo.me/)
+> [English Documentation](https://simba.ahoo.me/) | [中文文档](https://simba.ahoo.me/zh/) | [中文 README](README.zh-CN.md)
 
-## Introduction
+Simba is a JVM library for **leader election and distributed mutual exclusion**. Instances of your application contend
+for a named mutex; MySQL (JDBC), Redis or Zookeeper grants one of them a time-bounded lease, and Simba tells each
+instance through ordered callbacks when it gains or loses ownership. There is no Simba server to run.
 
-Simba aims to provide easy-to-use and flexible distributed lock services and supports multiple storage implementations: relational databases, Redis, and Zookeeper.
+- **At most one local owner per lease.** A node revokes its own ownership when its lease ends without renewal, even
+  while a backend call hangs.
+- **Fencing tokens.** Every ownership term carries a strictly increasing token. A process paused by GC can resume
+  after its lease ended; resources that must reject such a stale owner check the token. Simba cannot do that for you.
+- **Three APIs** on one contend service: `@SimbaScheduled` / `SimbaScheduler` (leader-only work), `SimbaLocker`
+  (blocking lock), `MutexContender` (callbacks).
+
+Read [Correctness](https://simba.ahoo.me/guide/correctness) before protecting anything that must never be written twice.
 
 ## Installation
 
-### Gradle
+Add the Spring Boot starter and **one** backend (Java 17+):
 
-> Kotlin DSL
+```kotlin
+implementation("me.ahoo.simba:simba-spring-boot-starter:${simbaVersion}")
 
-``` kotlin
-    implementation("me.ahoo.simba:simba-spring-boot-starter:${simbaVersion}")
+// JDBC (MySQL): also run simba-jdbc/src/init-script/init-simba-mysql.sql once
+implementation("me.ahoo.simba:simba-jdbc:${simbaVersion}")
+implementation("org.springframework.boot:spring-boot-starter-jdbc")
+runtimeOnly("com.mysql:mysql-connector-j")
+
+// or Redis
+implementation("me.ahoo.simba:simba-spring-redis:${simbaVersion}")
+implementation("org.springframework.boot:spring-boot-starter-data-redis")
+
+// or Zookeeper: also define a started CuratorFramework bean
+implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
 ```
 
-### Maven
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-
-    <modelVersion>4.0.0</modelVersion>
-    <parent>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.1.0</version>
-        <relativePath/>
-    </parent>
-    <artifactId>demo</artifactId>
-    <properties>
-        <simba.version>simbaVersion</simba.version>
-    </properties>
-
-    <dependencies>
-        <dependency>
-            <groupId>me.ahoo.simba</groupId>
-            <artifactId>simba-spring-boot-starter</artifactId>
-            <version>${simba.version}</version>
-        </dependency>
-    </dependencies>
-    
-</project>
-```
-
-The starter provides Simba auto-configuration only. Add exactly one complete backend dependency set below; the backend infrastructure is still required.
-
-### application.yaml
-
-```yaml
-simba:
-  # Required only when more than one backend module is on the classpath.
-  backend: jdbc
-
-spring:
-  datasource:
-    url: jdbc:mysql://localhost:3306/simba_db
-    username: root
-    password: root
-```
-
-### Optional-1: JdbcMutexContendService
-
-![JdbcMutexContendService](docs/JdbcMutexContendService.png)
-
-> Kotlin DSL
-
-``` kotlin
-    implementation("me.ahoo.simba:simba-jdbc:${simbaVersion}")
-    implementation("org.springframework.boot:spring-boot-starter-jdbc")
-    runtimeOnly("com.mysql:mysql-connector-j")
-```
-
-> Maven
-
-```xml
-<dependency>
-    <groupId>me.ahoo.simba</groupId>
-    <artifactId>simba-jdbc</artifactId>
-    <version>${simba.version}</version>
-</dependency>
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-jdbc</artifactId>
-</dependency>
-<dependency>
-    <groupId>com.mysql</groupId>
-    <artifactId>mysql-connector-j</artifactId>
-    <scope>runtime</scope>
-</dependency>
-```
-
-```sql
-create table simba_mutex
-(
-    mutex             varchar(66)     not null primary key comment 'mutex name',
-    acquired_at       bigint unsigned not null,
-    ttl_at         bigint unsigned not null,
-    transition_at bigint unsigned not null,
-    owner_id          varchar(128)    not null,
-    version           int unsigned    not null,
-    fencing_token     bigint unsigned not null default 0
-);
-```
-
-### Optional-2: RedisMutexContendService
-
-> Kotlin DSL
-
-``` kotlin
-    implementation("me.ahoo.simba:simba-spring-redis:${simbaVersion}")
-    implementation("org.springframework.boot:spring-boot-starter-data-redis")
-```
-
-> Maven
-
-```xml
-<dependency>
-    <groupId>me.ahoo.simba</groupId>
-    <artifactId>simba-spring-redis</artifactId>
-    <version>${simba.version}</version>
-</dependency>
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-data-redis</artifactId>
-</dependency>
-```
-
-### Optional-3: ZookeeperMutexContendService
-
-> Kotlin DSL
-
-``` kotlin
-    implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
-```
-
-> Maven
-
-```xml
-<dependency>
-    <groupId>me.ahoo.simba</groupId>
-    <artifactId>simba-zookeeper</artifactId>
-    <version>${simba.version}</version>
-</dependency>
-```
-
-Also register a managed `CuratorFramework` bean as shown in the [Quick Start](https://simba.ahoo.me/guide/quick-start.html).
-
-## Examples
-
-[Simba-Examples](https://github.com/Ahoo-Wang/Simba/tree/main/simba-example)
+The starter configures the backend whose infrastructure bean (`DataSource`, `StringRedisTemplate` or
+`CuratorFramework`) exists. With several backend modules on the classpath, set `simba.backend=jdbc|redis|zookeeper`.
+Maven coordinates, the JDBC schema and use without Spring are in the
+[Quick Start](https://simba.ahoo.me/guide/quick-start).
 
 ## Usage
 
-### MutexContender
-
-```java
-        MutexContendService contendService = contendServiceFactory.createMutexContendService(new AbstractMutexContender(mutex) {
-            @Override
-            public void onAcquired(MutexState mutexState) {
-                    log.info("onAcquired");
-            }
-            
-            @Override
-            public void onReleased(MutexState mutexState) {
-                    log.info("onReleased");
-            }
-        });
-        contendService.start();
-        try {
-            // Use the mutex-protected service.
-        } finally {
-            contendService.stop();
-        }
-```
-
-### SimbaLocker
-
-```java
-        try (Locker locker = new SimbaLocker("mutex-locker", this.mutexContendServiceFactory)) {
-            locker.acquire(Duration.ofSeconds(1));
-        /**
-         * doSomething
-         */
-        } catch (Exception e) {
-            log.error(e.getMessage(), e);
-        }
-```
-
-### Scheduler
-
-Run a method on the leader only — the Spring Boot starter starts it after refresh and stops it on shutdown:
+### Leader-only scheduling
 
 ```java
 @Service
 public class ReportJobs {
-    @SimbaScheduled(mutex = "report", fixedDelay = "10s")
+    @SimbaScheduled(mutex = "report", fixedDelay = "1m")
     public void generate(ScheduleContext context) {
         reportService.generate(context.getFencingToken());
     }
 }
 ```
 
-Without Spring, use `SimbaScheduler` directly:
+The method runs on the leader only; it is interrupted when the node loses leadership. Without Spring, use
+`SimbaScheduler(mutex, factory, ScheduleConfig.delay(...)) { context -> ... }`.
 
-```kotlin
-SimbaScheduler("report", factory, ScheduleConfig.delay(Duration.ZERO, Duration.ofSeconds(10))) { context ->
-    reportService.generate(context.fencingToken)
-}.start()
+### SimbaLocker
+
+```java
+try (Locker locker = new SimbaLocker("nightly-migration", mutexContendServiceFactory)) {
+    locker.acquire(Duration.ofSeconds(30));
+    migrate(locker.getFencingToken());
+}
 ```
 
-Work starts when the node becomes leader and is interrupted when it loses leadership.
+### MutexContender
 
-### Fencing Tokens
+```java
+MutexContendService contendService = mutexContendServiceFactory.createMutexContendService(
+    new AbstractMutexContender("coordinator") {
+        @Override
+        public void onAcquired(MutexState mutexState) {
+            startCoordinating();
+        }
 
-A lease bounds how long the backend grants ownership, not how long a paused owner keeps acting. Pass the fencing
-token of the current term to the resource you protect, and let it reject tokens lower than the highest it has seen:
-
-```kotlin
-locker.acquire()
-repository.save(order, fencingToken = locker.fencingToken)
+        @Override
+        public void onReleased(MutexState mutexState) {
+            stopCoordinating();
+        }
+    });
+contendService.start();
+// on shutdown
+contendService.stop();
 ```
 
-Tokens increase strictly per ownership term on every backend (`0` means none). Redis needs persistence of its counter
-(AOF) to stay monotonic across restarts.
+## Documentation
 
-### Metrics
+| | |
+|---|---|
+| [Introduction](https://simba.ahoo.me/guide/) | Guarantees, choosing an API and a backend |
+| [Backends](https://simba.ahoo.me/guide/backends) | JDBC, Redis, Zookeeper: storage, setup, operating notes |
+| [Correctness](https://simba.ahoo.me/guide/correctness) | Leases, ttl/transition, fencing tokens, failure modes |
+| [Configuration](https://simba.ahoo.me/guide/configuration) | `simba.*` properties and factories |
+| [Observability](https://simba.ahoo.me/guide/observability) | Micrometer metrics, `simba` Actuator endpoint, alerts |
+| [Upgrading](https://simba.ahoo.me/guide/upgrading) | Upgrading to 4.x |
+| [API Reference](https://simba.ahoo.me/api/) | Public types |
+| [Architecture](https://simba.ahoo.me/architecture/), [ADRs](docs/adr/) | Internals and design decisions |
 
-With Micrometer (e.g. `spring-boot-starter-actuator`), the starter records `simba.mutex.owner`,
-`simba.mutex.ownership.changes`, `simba.mutex.contend`, `simba.mutex.lease.expired` and `simba.scheduler.work`,
-tagged by mutex. With Actuator, the read-only `simba` endpoint (`/actuator/simba`, once exposed) lists the mutexes
-this node contends for and their last observed owner. See [Observability](https://simba.ahoo.me/guide/observability)
-for alert rules and custom `ContendObserver`s.
+The [example application](simba-example) runs against any backend.
 
-## Upgrading to 4.0
-
-- **Redis:** every node must run Simba 3.2 or later before you roll out 4.0.
-- **JDBC:** fencing tokens are on by default. Run
-  [`upgrade-simba-mysql-fencing-token.sql`](simba-jdbc/src/init-script/upgrade-simba-mysql-fencing-token.sql) on
-  existing tables, or set `simba.jdbc.fencing=false`.
-- **Spring Boot:** with more than one backend module on the classpath, set `simba.backend`.
-- **API:** `MutexOwner` is a final value (no subclassing, `MutexOwnerEntity` removed, `isInTransition` folded into
-  `hasOwner()`); `MutexRetrievalServiceFactory` is gone; `MutexOwnerRepository` keeps only `acquireAndGetOwner` and
-  `release`. `simba-core` no longer brings Guava or cosid.
-
-See [ADR 0003](docs/adr/0003-simba-4.md) for the rationale.
-
-#### Use Cases
+## Used By
 
 - [Govern-EventBus](https://github.com/Ahoo-Wang/govern-eventbus/tree/master/eventbus-core/src/main/java/me/ahoo/eventbus/core/compensate)
 - [CoSky](https://github.com/Ahoo-Wang/CoSky/blob/main/cosky-rest-api/src/main/kotlin/me/ahoo/cosky/rest/stat/StatServiceScheduler.kt)
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, quality gates and release process, and [SECURITY.md](SECURITY.md) to report vulnerabilities.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, quality gates and release process, the
+[contributor guide](https://simba.ahoo.me/contributing/) for tests and the backend TCK, and
+[SECURITY.md](SECURITY.md) to report vulnerabilities.
