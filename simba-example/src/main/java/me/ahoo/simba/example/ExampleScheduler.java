@@ -13,58 +13,31 @@
 
 package me.ahoo.simba.example;
 
-import me.ahoo.simba.core.MutexContendServiceFactory;
-import me.ahoo.simba.schedule.AbstractScheduler;
-import me.ahoo.simba.schedule.ScheduleConfig;
+import me.ahoo.simba.schedule.ScheduleContext;
+import me.ahoo.simba.spring.boot.starter.scheduling.SimbaScheduled;
 
-import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.jetbrains.annotations.NotNull;
-import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
-
 /**
- * Example Scheduler.
+ * Example Scheduler: runs on the leader of {@code example-scheduler} only, started and stopped by the starter.
  *
  * @author ahoo wang
  */
 @Service
 @Slf4j
-public class ExampleScheduler extends AbstractScheduler implements SmartLifecycle {
+public class ExampleScheduler {
 
-    public ExampleScheduler(MutexContendServiceFactory contendServiceFactory) {
-        super("example-scheduler", contendServiceFactory);
-    }
-
-    @Override
-    protected String getWorker() {
-        return "ExampleScheduler";
-    }
-
-    @SneakyThrows
-    @Override
-    protected void work() {
+    @SimbaScheduled(mutex = "example-scheduler", fixedDelay = "10s", worker = "ExampleScheduler")
+    public void work(ScheduleContext context) throws InterruptedException {
         if (log.isInfoEnabled()) {
-            log.info("do some work start!");
+            log.info("do some work start! fencingToken:[{}]", context.getFencingToken());
         }
         TimeUnit.SECONDS.sleep(5);
         if (log.isInfoEnabled()) {
             log.info("do some work end!");
         }
-    }
-
-    @Override
-    public boolean isRunning() {
-        return getRunning();
-    }
-
-    @NotNull
-    @Override
-    protected ScheduleConfig getConfig() {
-        return ScheduleConfig.delay(Duration.ofSeconds(0), Duration.ofSeconds(10));
     }
 }

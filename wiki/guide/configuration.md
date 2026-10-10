@@ -86,6 +86,12 @@ simba:
     enabled: true
 ```
 
+### Scheduling
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `simba.scheduling.enabled` | `Boolean` | `true` | Run `@SimbaScheduled` methods and `SimbaScheduler` beans with the application context. |
+
 ### Callback Executor
 
 Every backend runs `onAcquired` / `onReleased` on the `simbaHandleExecutor` bean, a dedicated daemon pool whose idle

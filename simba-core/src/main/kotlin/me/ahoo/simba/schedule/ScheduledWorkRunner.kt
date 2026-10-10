@@ -71,6 +71,10 @@ internal class ScheduledWorkRunner(
     private fun safeWork() {
         try {
             work()
+        } catch (interrupted: InterruptedException) {
+            // Expected when leadership is lost or the scheduler stops: the run was cancelled, not failed.
+            Thread.currentThread().interrupt()
+            log.info { "work - mutex:[$mutex] - interrupted:[${interrupted.message}]." }
         } catch (throwable: Throwable) {
             log.error(throwable) { "work - mutex:[$mutex] - failed:[${throwable.message}]." }
         }

@@ -4536,7 +4536,7 @@ graph TD
         Q1{"Need periodic<br>scheduled work?"}
         Q2{"Want RAII /<br>try-with-resources?"}
         Q3{"Need full control<br>via callbacks?"}
-        SCH["Use AbstractScheduler"]
+        SCH["Use @SimbaScheduled / SimbaScheduler"]
         LK["Use SimbaLocker"]
         CB["Use MutexContender"]
     end
@@ -4610,39 +4610,40 @@ SimbaLocker("my-task-lock", factory).use { locker ->
 }
 ```
 
-## Using AbstractScheduler
+## Leader-Only Scheduling
 
-[`AbstractScheduler`]([file_path:simba-core/src/main/kotlin/me/ahoo/simba/schedule/AbstractScheduler.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/schedule/AbstractScheduler.kt)) is ideal for periodic tasks that should only run on the current leader instance. It automatically starts and stops the scheduled work when leadership changes.
+With the Spring Boot starter, annotate a bean method with `@SimbaScheduled`. It runs on the leader only, starts after the context refreshes and stops on shutdown:
 
 ```kotlin
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.schedule.AbstractScheduler
-import me.ahoo.simba.schedule.ScheduleConfig
-import java.time.Duration
+import me.ahoo.simba.schedule.ScheduleContext
+import me.ahoo.simba.spring.boot.starter.scheduling.SimbaScheduled
+import org.springframework.stereotype.Service
 
-class MyCleanupScheduler(
-    contendServiceFactory: MutexContendServiceFactory
-) : AbstractScheduler("cleanup-task", contendServiceFactory) {
-
-    override val config: ScheduleConfig = ScheduleConfig.rate(
-        initialDelay = Duration.ofSeconds(0),
-        period = Duration.ofMinutes(5)
-    )
-
-    override val worker: String = "cleanup-worker"
-
-    override fun work() {
-        println("Running cleanup on leader instance...")
+@Service
+class CleanupJobs {
+    @SimbaScheduled(mutex = "cleanup-task", fixedRate = "5m")
+    fun cleanup(context: ScheduleContext) {
+        println("Running cleanup on leader instance, fencing token ${context.fencingToken}")
     }
 }
-
-// Start the scheduler
-val scheduler = MyCleanupScheduler(factory)
-scheduler.start()
-
-// Stop when shutting down
-scheduler.stop()
 ```
+
+Without Spring, create a `SimbaScheduler` and manage its lifecycle:
+
+```kotlin
+import me.ahoo.simba.schedule.ScheduleConfig
+import me.ahoo.simba.schedule.SimbaScheduler
+import java.time.Duration
+
+val scheduler = SimbaScheduler("cleanup-task", factory, ScheduleConfig.rate(Duration.ZERO, Duration.ofMinutes(5))) {
+    println("Running cleanup on leader instance...")
+}
+scheduler.start()
+// on shutdown
+scheduler.close()
+```
+
+Work starts when the node becomes leader and is interrupted when it loses leadership. `AbstractScheduler` offers the same semantics for the subclassing style; see the [Scheduler API](/api/scheduler-api).
 
 ## Spring Boot Auto-Configuration
 
@@ -4900,6 +4901,12 @@ simba:
   zookeeper:
     enabled: true
 ```
+
+### Scheduling
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `simba.scheduling.enabled` | `Boolean` | `true` | Run `@SimbaScheduled` methods and `SimbaScheduler` beans with the application context. |
 
 ### Callback Executor
 
@@ -6378,6 +6385,8 @@ SimbaScheduler scheduler = new SimbaScheduler("report", factory,
 | `running` | Whether the scheduler is contending. |
 | `isLeader` | Whether this node currently leads the mutex and runs the work. |
 | `fencingToken` | Token of the current term; `0` when not leader. |
+
+In Spring Boot, annotate a bean method with `@SimbaScheduled` instead; see [Spring Boot Starter](/modules/simba-spring-boot-starter#leader-only-scheduling).
 
 Work starts when the node acquires the mutex and is cancelled with interruption when it loses it. The single-thread executor (named after `worker`, default the mutex) exists only while leading. `AbstractScheduler` below shares the same implementation.
 
@@ -8124,6 +8133,7 @@ simba:
 | `simba.redis.ttl` | `RedisProperties` | `10s` |
 | `simba.redis.transition` | `RedisProperties` | `6s` |
 | `simba.zookeeper.enabled` | `ZookeeperProperties` | `true` |
+| `simba.scheduling.enabled` | `SimbaSchedulingAutoConfiguration` | `true` |
 
 ## Gradle Feature Variants
 
@@ -8245,6 +8255,26 @@ simba:
 ```
 
 Disabling the other backends (`simba.<backend>.enabled=false`) also resolves the ambiguity.
+
+## Leader-Only Scheduling
+
+`SimbaSchedulingAutoConfiguration` registers a bean post-processor that turns every `@SimbaScheduled` bean method into a `SimbaScheduler` and runs it, together with any `SimbaScheduler` beans, with the application context: started after refresh, stopped on shutdown before the backend connections close. Lazy beans start as soon as they are created.
+
+```kotlin
+@SimbaScheduled(mutex = "report", fixedDelay = "\${report.delay:1m}", initialDelay = "10s")
+fun generate(context: ScheduleContext) {
+    reportService.generate(fencingToken = context.fencingToken)
+}
+```
+
+| Attribute | Description |
+|---|---|
+| `mutex` | Mutex whose leader runs the method; unique per application. |
+| `fixedDelay` / `fixedRate` | Exactly one is required; Spring Boot duration formats (`10s`, `PT1M`). |
+| `initialDelay` | Delay before the first run after becoming leader; default `0s`. |
+| `worker` | Thread name prefix of the work executor; defaults to `mutex`. |
+
+The method takes no parameter or a single `ScheduleContext`, and every attribute accepts `${...}` placeholders (escape them as `\${...}` in Kotlin strings). Invalid declarations, or a `@SimbaScheduled` method without a backend, fail startup. Set `simba.scheduling.enabled=false` to turn the support off.
 
 ## See Also
 

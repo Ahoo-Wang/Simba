@@ -110,7 +110,7 @@ graph TD
         Q1{"Need periodic<br>scheduled work?"}
         Q2{"Want RAII /<br>try-with-resources?"}
         Q3{"Need full control<br>via callbacks?"}
-        SCH["Use AbstractScheduler"]
+        SCH["Use @SimbaScheduled / SimbaScheduler"]
         LK["Use SimbaLocker"]
         CB["Use MutexContender"]
     end
@@ -184,39 +184,40 @@ SimbaLocker("my-task-lock", factory).use { locker ->
 }
 ```
 
-## Using AbstractScheduler
+## Leader-Only Scheduling
 
-[`AbstractScheduler`]([file_path:simba-core/src/main/kotlin/me/ahoo/simba/schedule/AbstractScheduler.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/schedule/AbstractScheduler.kt)) is ideal for periodic tasks that should only run on the current leader instance. It automatically starts and stops the scheduled work when leadership changes.
+With the Spring Boot starter, annotate a bean method with `@SimbaScheduled`. It runs on the leader only, starts after the context refreshes and stops on shutdown:
 
 ```kotlin
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.schedule.AbstractScheduler
-import me.ahoo.simba.schedule.ScheduleConfig
-import java.time.Duration
+import me.ahoo.simba.schedule.ScheduleContext
+import me.ahoo.simba.spring.boot.starter.scheduling.SimbaScheduled
+import org.springframework.stereotype.Service
 
-class MyCleanupScheduler(
-    contendServiceFactory: MutexContendServiceFactory
-) : AbstractScheduler("cleanup-task", contendServiceFactory) {
-
-    override val config: ScheduleConfig = ScheduleConfig.rate(
-        initialDelay = Duration.ofSeconds(0),
-        period = Duration.ofMinutes(5)
-    )
-
-    override val worker: String = "cleanup-worker"
-
-    override fun work() {
-        println("Running cleanup on leader instance...")
+@Service
+class CleanupJobs {
+    @SimbaScheduled(mutex = "cleanup-task", fixedRate = "5m")
+    fun cleanup(context: ScheduleContext) {
+        println("Running cleanup on leader instance, fencing token ${context.fencingToken}")
     }
 }
-
-// Start the scheduler
-val scheduler = MyCleanupScheduler(factory)
-scheduler.start()
-
-// Stop when shutting down
-scheduler.stop()
 ```
+
+Without Spring, create a `SimbaScheduler` and manage its lifecycle:
+
+```kotlin
+import me.ahoo.simba.schedule.ScheduleConfig
+import me.ahoo.simba.schedule.SimbaScheduler
+import java.time.Duration
+
+val scheduler = SimbaScheduler("cleanup-task", factory, ScheduleConfig.rate(Duration.ZERO, Duration.ofMinutes(5))) {
+    println("Running cleanup on leader instance...")
+}
+scheduler.start()
+// on shutdown
+scheduler.close()
+```
+
+Work starts when the node becomes leader and is interrupted when it loses leadership. `AbstractScheduler` offers the same semantics for the subclassing style; see the [Scheduler API](/api/scheduler-api).
 
 ## Spring Boot Auto-Configuration
 

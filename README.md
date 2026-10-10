@@ -201,31 +201,27 @@ Also register a managed `CuratorFramework` bean as shown in the [Quick Start](ht
 
 ### Scheduler
 
+Run a method on the leader only — the Spring Boot starter starts it after refresh and stops it on shutdown:
+
 ```java
-public class ExampleScheduler extends AbstractScheduler implements SmartLifecycle {
-
-    public ExampleScheduler(MutexContendServiceFactory contendServiceFactory) {
-        super("example-scheduler", contendServiceFactory);
-    }
-
-    @Override
-    protected String getWorker() {
-        return "ExampleScheduler";
-    }
-
-    @Override
-    protected ScheduleConfig getConfig() {
-        return ScheduleConfig.delay(Duration.ofSeconds(0), Duration.ofSeconds(10));
-    }
-
-    @Override
-    protected void work() {
-        if (log.isInfoEnabled()) {
-            log.info("do some work!");
-        }
+@Service
+public class ReportJobs {
+    @SimbaScheduled(mutex = "report", fixedDelay = "10s")
+    public void generate(ScheduleContext context) {
+        reportService.generate(context.getFencingToken());
     }
 }
 ```
+
+Without Spring, use `SimbaScheduler` directly:
+
+```kotlin
+SimbaScheduler("report", factory, ScheduleConfig.delay(Duration.ZERO, Duration.ofSeconds(10))) { context ->
+    reportService.generate(context.fencingToken)
+}.start()
+```
+
+Work starts when the node becomes leader and is interrupted when it loses leadership.
 
 ### Fencing Tokens
 

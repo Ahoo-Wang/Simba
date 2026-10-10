@@ -68,6 +68,24 @@ class SimbaSchedulerTest {
     }
 
     @Test
+    fun `work interrupted by leadership loss runs again on the next term`() {
+        val starts = LinkedBlockingQueue<Long>()
+        val scheduler = SimbaScheduler("again", factory, ScheduleConfig.delay(Duration.ZERO, Duration.ofHours(1))) {
+            starts.add(it.fencingToken)
+            Thread.sleep(TimeUnit.MINUTES.toMillis(1))
+        }
+        scheduler.start()
+        factory.lead(scheduler, fencingToken = 1)
+        starts.poll(2, TimeUnit.SECONDS).assert().isEqualTo(1L)
+
+        factory.service!!.publishOwner(MutexOwner("other")).join()
+        factory.lead(scheduler, fencingToken = 2)
+
+        starts.poll(2, TimeUnit.SECONDS).assert().isEqualTo(2L)
+        scheduler.stop()
+    }
+
+    @Test
     fun `a failing run does not stop later runs`() {
         val runs = AtomicInteger()
         val secondRun = CountDownLatch(1)

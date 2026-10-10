@@ -38,6 +38,8 @@ SimbaScheduler scheduler = new SimbaScheduler("report", factory,
 | `isLeader` | 本节点当前是否为 leader 并在执行任务。 |
 | `fencingToken` | 当前任期的 token；非 leader 时为 `0`。 |
 
+在 Spring Boot 中可以改用 `@SimbaScheduled` 标注 bean 方法，参见 [Spring Boot Starter](/zh/modules/simba-spring-boot-starter#只在-leader-上执行的定时任务)。
+
 节点获得 mutex 时开始执行任务，失去 mutex 时以中断方式取消。单线程执行器（以 `worker` 命名，默认为 mutex 名）只在担任 leader 期间存在。下面的 `AbstractScheduler` 与它共用同一套实现。
 
 ## AbstractScheduler

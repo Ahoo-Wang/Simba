@@ -201,31 +201,27 @@ create table simba_mutex
 
 ### Scheduler
 
+只在 leader 节点上执行的方法，由 Spring Boot starter 在启动完成后开始、在关闭时停止：
+
 ```java
-public class ExampleScheduler extends AbstractScheduler implements SmartLifecycle {
-
-    public ExampleScheduler(MutexContendServiceFactory contendServiceFactory) {
-        super("example-scheduler", contendServiceFactory);
-    }
-
-    @Override
-    protected String getWorker() {
-        return "ExampleScheduler";
-    }
-
-    @Override
-    protected ScheduleConfig getConfig() {
-        return ScheduleConfig.delay(Duration.ofSeconds(0), Duration.ofSeconds(10));
-    }
-
-    @Override
-    protected void work() {
-        if (log.isInfoEnabled()) {
-            log.info("do some work!");
-        }
+@Service
+public class ReportJobs {
+    @SimbaScheduled(mutex = "report", fixedDelay = "10s")
+    public void generate(ScheduleContext context) {
+        reportService.generate(context.getFencingToken());
     }
 }
 ```
+
+不使用 Spring 时，直接使用 `SimbaScheduler`：
+
+```kotlin
+SimbaScheduler("report", factory, ScheduleConfig.delay(Duration.ZERO, Duration.ofSeconds(10))) { context ->
+    reportService.generate(context.fencingToken)
+}.start()
+```
+
+节点成为 leader 时开始执行，失去 leader 时中断正在执行的任务。
 
 ### Fencing Token
 

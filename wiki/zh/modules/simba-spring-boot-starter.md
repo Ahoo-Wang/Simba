@@ -281,6 +281,7 @@ simba:
 | `simba.redis.ttl` | `RedisProperties` | `10s` |
 | `simba.redis.transition` | `RedisProperties` | `6s` |
 | `simba.zookeeper.enabled` | `ZookeeperProperties` | `true` |
+| `simba.scheduling.enabled` | `SimbaSchedulingAutoConfiguration` | `true` |
 
 ## Gradle 功能变体
 
@@ -400,6 +401,26 @@ simba:
 ```
 
 禁用其他后端（`simba.<backend>.enabled=false`）同样可以消除歧义。
+
+## 只在 leader 上执行的定时任务
+
+`SimbaSchedulingAutoConfiguration` 注册一个 bean 后处理器：把每个 `@SimbaScheduled` 方法变成一个 `SimbaScheduler`，并与容器中的 `SimbaScheduler` bean 一起随应用上下文运行：上下文刷新后启动，关闭时在后端连接关闭之前停止。懒加载的 bean 在创建后立即启动。
+
+```kotlin
+@SimbaScheduled(mutex = "report", fixedDelay = "\${report.delay:1m}", initialDelay = "10s")
+fun generate(context: ScheduleContext) {
+    reportService.generate(fencingToken = context.fencingToken)
+}
+```
+
+| 属性 | 说明 |
+|---|---|
+| `mutex` | 由该 mutex 的 leader 执行方法；同一应用内不可重复。 |
+| `fixedDelay` / `fixedRate` | 必须且只能设置一个；使用 Spring Boot 时长格式（`10s`、`PT1M`）。 |
+| `initialDelay` | 成为 leader 后首次执行前的延迟，默认 `0s`。 |
+| `worker` | 任务执行线程名前缀，默认与 `mutex` 相同。 |
+
+方法不带参数或只带一个 `ScheduleContext` 参数；所有属性都支持 `${...}` 占位符（在 Kotlin 字符串中写作 `\${...}`）。声明不合法，或存在 `@SimbaScheduled` 方法但没有后端时，应用启动失败。设置 `simba.scheduling.enabled=false` 可关闭该功能。
 
 ## 另请参阅
 

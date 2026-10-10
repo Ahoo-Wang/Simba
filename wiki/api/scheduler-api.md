@@ -38,6 +38,8 @@ SimbaScheduler scheduler = new SimbaScheduler("report", factory,
 | `isLeader` | Whether this node currently leads the mutex and runs the work. |
 | `fencingToken` | Token of the current term; `0` when not leader. |
 
+In Spring Boot, annotate a bean method with `@SimbaScheduled` instead; see [Spring Boot Starter](/modules/simba-spring-boot-starter#leader-only-scheduling).
+
 Work starts when the node acquires the mutex and is cancelled with interruption when it loses it. The single-thread executor (named after `worker`, default the mutex) exists only while leading. `AbstractScheduler` below shares the same implementation.
 
 ## AbstractScheduler
