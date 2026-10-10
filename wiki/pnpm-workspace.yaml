@@ -1,2 +1,11 @@
 allowBuilds:
   esbuild: true
+
+# Patched versions for Dependabot alerts in build-time dependencies. VitePress 1.6 pins vite ^5.4 and mermaid 11
+# pins katex ^0.16, both inside the vulnerable ranges; the site builds and renders with these versions.
+overrides:
+  vite: ^6.4.4
+  vue: ^3.5.43
+  source-map-js: ^1.2.2
+  mermaid: ^11.17.2
+  katex: ^0.18.2
