@@ -4,6 +4,8 @@ VitePress site for Simba. Root rules in `../AGENTS.md` also apply.
 
 ## Commands
 
+Requires Node.js 22.12 or later (see `engines` in `package.json`).
+
 ```bash
 pnpm install
 pnpm run dev          # Dev server
