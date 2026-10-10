@@ -365,10 +365,12 @@ class AbstractMutexRetrievalServiceTest {
     @Test
     fun `stop called from a callback delivers its release inline`() {
         val released = CountDownLatch(1)
+        val stopped = CountDownLatch(1)
         lateinit var service: FakeMutexContendService
         val contender = object : AbstractMutexContender("m", "c1") {
             override fun onAcquired(mutexState: MutexState) {
                 service.stop()
+                stopped.countDown()
             }
 
             override fun onReleased(mutexState: MutexState) {
@@ -382,6 +384,8 @@ class AbstractMutexRetrievalServiceTest {
         service.publishOwner(MutexOwner("c1", 0, Long.MAX_VALUE, Long.MAX_VALUE))
 
         released.await(2, TimeUnit.SECONDS).assert().isTrue()
+        // onReleased runs inside stop(); the status becomes INITIAL only once stop() returns.
+        stopped.await(2, TimeUnit.SECONDS).assert().isTrue()
         service.status.assert().isEqualTo(MutexRetrievalService.Status.INITIAL)
         pool.shutdown()
     }
