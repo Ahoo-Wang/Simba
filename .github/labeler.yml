@@ -1,4 +1,5 @@
-# Area labels by changed paths (actions/labeler). Type labels come from the PR title, see workflows/labeler.yml.
+# Area labels by changed paths (actions/labeler). They use the "module:"/"area:" namespaces so they never collide with
+# the type labels that the title job sets for release-note categories (see workflows/labeler.yml and release.yml).
 "module: core":
   - changed-files:
       - any-glob-to-any-file: ["simba-core/**"]
@@ -17,13 +18,13 @@
 "module: example":
   - changed-files:
       - any-glob-to-any-file: ["simba-example/**"]
-test:
+"area: test":
   - changed-files:
       - any-glob-to-any-file: ["simba-test/**", "**/src/test/**"]
-documentation:
+"area: docs":
   - changed-files:
       - any-glob-to-any-file: ["wiki/**", "docs/**", "skills/**", "**/*.md", "llms.txt"]
-build:
+"area: build":
   - changed-files:
       - any-glob-to-any-file:
           - "**/*.gradle.kts"
@@ -33,6 +34,6 @@ build:
           - "simba-bom/**"
           - "simba-dependencies/**"
           - "config/**"
-ci:
+"area: ci":
   - changed-files:
       - any-glob-to-any-file: [".github/**", "renovate.json", "codecov.yml"]
