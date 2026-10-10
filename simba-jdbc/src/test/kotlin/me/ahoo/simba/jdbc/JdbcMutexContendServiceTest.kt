@@ -12,7 +12,6 @@
  */
 package me.ahoo.simba.jdbc
 
-import com.zaxxer.hikari.HikariDataSource
 import me.ahoo.simba.core.AbstractMutexContender
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexOwner
@@ -39,10 +38,7 @@ internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
 
     @BeforeAll
     fun setup() {
-        val hikariDataSource = HikariDataSource()
-        hikariDataSource.jdbcUrl = "jdbc:mysql://localhost:3306/simba_db"
-        hikariDataSource.username = "root"
-        hikariDataSource.password = "root"
+        val hikariDataSource = MySqlFixture.newDataSource()
         jdbcMutexOwnerRepository = JdbcMutexOwnerRepository(hikariDataSource)
         mutexContendServiceFactory = JdbcMutexContendServiceFactory(
             mutexOwnerRepository = jdbcMutexOwnerRepository,

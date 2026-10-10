@@ -104,34 +104,9 @@ graph TD
 
 ```
 
-### simba-jdbc (MySQL)
+### simba-jdbc (MySQL) and simba-spring-redis (Redis)
 
-Requires a running MySQL instance. Apply the init script before running tests:
-
-```bash
-mysql -u root -p < simba-jdbc/src/init-script/init-simba-mysql.sql
-```
-
-Or use Docker:
-
-```bash
-docker run -d --name simba-mysql \
-  -e MYSQL_ROOT_PASSWORD=root \
-  -e MYSQL_DATABASE=simba \
-  -p 3306:3306 \
-  mysql:8.0
-
-# Wait for startup, then:
-mysql -h 127.0.0.1 -u root -proot simba < simba-jdbc/src/init-script/init-simba-mysql.sql
-```
-
-### simba-spring-redis (Redis)
-
-Requires a running Redis instance:
-
-```bash
-docker run -d --name simba-redis -p 6379:6379 redis:7
-```
+Require Docker only. The tests start `mysql:8.4` (initialized with `simba-jdbc/src/init-script/init-simba-mysql.sql`) and `redis:7.4-alpine` through Testcontainers; no local services or manual schema setup are needed.
 
 ### simba-zookeeper
 
@@ -215,9 +190,9 @@ autonumber
     end
     Note over Dev: For backend integration tests:
     Dev->>GW: ./gradlew simba-jdbc:test
-    GW->>SJ: test (requires MySQL)
+    GW->>SJ: test (Docker: MySQL)
     Dev->>GW: ./gradlew simba-spring-redis:test
-    GW->>SR: test (requires Redis)
+    GW->>SR: test (Docker: Redis)
 ```
 
 ## PR Process

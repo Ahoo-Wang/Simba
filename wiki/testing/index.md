@@ -105,21 +105,7 @@ flowchart LR
 
 ### JDBC/MySQL Backend
 
-**Prerequisite**: A running MySQL instance.
-
-**Connection defaults** (from [`JdbcMutexContendServiceTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/test/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendServiceTest.kt)):
-
-```
-jdbc:mysql://localhost:3306/simba_db
-username: root
-password: root
-```
-
-**Initialization**: Run the init script before first test execution:
-
-```bash
-mysql -u root -proot < simba-jdbc/src/init-script/init-simba-mysql.sql
-```
+**Prerequisite**: Docker. [`MySqlFixture`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/test/kotlin/me/ahoo/simba/jdbc/MySqlFixture.kt) starts a `mysql:8.4` container through Testcontainers and initializes it with `simba-jdbc/src/init-script/init-simba-mysql.sql`.
 
 The test class calls [`jdbcMutexOwnerRepository.tryInitMutex()`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/test/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendServiceTest.kt) for each of the 5 mutex constants (`start`, `restart`, `guard`, `multiContend`, `schedule`).
 
@@ -127,9 +113,7 @@ The test class calls [`jdbcMutexOwnerRepository.tryInitMutex()`](https://github.
 
 ### Redis Backend
 
-**Prerequisite**: A running Redis instance on `localhost:6379`.
-
-The test class in [`SpringRedisMutexContendServiceTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/test/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendServiceTest.kt) uses `LettuceConnectionFactory` with default standalone configuration.
+**Prerequisite**: Docker. [`RedisFixture`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/test/kotlin/me/ahoo/simba/spring/redis/RedisFixture.kt) starts a `redis:7.4-alpine` container through Testcontainers; [`SpringRedisMutexContendServiceTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/test/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendServiceTest.kt) connects with `LettuceConnectionFactory`.
 
 **Configuration**: `ttl=2s`, `transition=1s`.
 
@@ -165,8 +149,8 @@ This makes the Zookeeper module the easiest to run locally and in CI without any
 
 ```bash
 ./gradlew simba-core:check            # unit tests only (no infra needed)
-./gradlew simba-jdbc:check            # needs MySQL
-./gradlew simba-spring-redis:check    # needs Redis
+./gradlew simba-jdbc:check            # needs Docker (Testcontainers MySQL)
+./gradlew simba-spring-redis:check    # needs Docker (Testcontainers Redis)
 ./gradlew simba-zookeeper:check       # no external infra
 ```
 

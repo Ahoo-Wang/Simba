@@ -22,7 +22,6 @@ import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.springframework.data.redis.connection.MessageListener
-import org.springframework.data.redis.connection.RedisStandaloneConfiguration
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.listener.ChannelTopic
@@ -33,7 +32,7 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /**
- * Script contract and release hand-off against a real Redis on localhost:6379.
+ * Script contract and release hand-off against a real Redis (Testcontainers).
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class SpringRedisMutexReleaseBroadcastTest {
@@ -44,8 +43,7 @@ class SpringRedisMutexReleaseBroadcastTest {
 
     @BeforeAll
     fun setup() {
-        connectionFactory = LettuceConnectionFactory(RedisStandaloneConfiguration())
-        connectionFactory.afterPropertiesSet()
+        connectionFactory = RedisFixture.newConnectionFactory()
         redisTemplate = StringRedisTemplate(connectionFactory)
         listenerContainer = RedisMessageListenerContainer()
         listenerContainer.setConnectionFactory(connectionFactory)

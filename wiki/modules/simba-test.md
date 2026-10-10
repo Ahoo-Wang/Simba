@@ -242,7 +242,7 @@ class ZookeeperMutexContendServiceSpec : MutexContendServiceSpec() {
 graph TD
     subgraph sg_54 ["Test Environment"]
 
-        J_ENV["simba-jdbc tests<br>Requires running MySQL<br>Init script: init-simba-mysql.sql"]
+        J_ENV["simba-jdbc tests<br>Testcontainers MySQL<br>Init script: init-simba-mysql.sql"]
         R_ENV["simba-spring-redis tests<br>Requires running Redis"]
         Z_ENV["simba-zookeeper tests<br>Uses Curator embedded test server<br>(no external dependency)"]
     end
@@ -254,7 +254,7 @@ graph TD
 
 | Backend | Test Infrastructure |
 |---|---|
-| `simba-jdbc` | Running MySQL instance. Schema must be initialized from `init-simba-mysql.sql`. |
+| `simba-jdbc` | Docker: `MySqlFixture` starts MySQL via Testcontainers, initialized from `init-simba-mysql.sql`. |
 | `simba-spring-redis` | Running Redis instance. |
 | `simba-zookeeper` | Curator's embedded test server (no external ZK required). |
 

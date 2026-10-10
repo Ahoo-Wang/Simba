@@ -462,12 +462,10 @@ cd Simba
 # Zookeeper 测试（内嵌服务器，不需要基础设施）
 ./gradlew simba-zookeeper:check
 
-# JDBC 测试（需要 MySQL）
-docker compose -f docker-compose-test.yml up -d mysql
+# JDBC 测试（需要 Docker；Testcontainers 启动 MySQL）
 ./gradlew simba-jdbc:check
 
-# Redis 测试（需要 Redis）
-docker compose -f docker-compose-test.yml up -d redis
+# Redis 测试（需要 Docker；Testcontainers 启动 Redis）
 ./gradlew simba-spring-redis:check
 
 # 所有测试

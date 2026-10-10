@@ -104,34 +104,9 @@ graph TD
 
 ```
 
-### simba-jdbc（MySQL）
+### simba-jdbc（MySQL）与 simba-spring-redis（Redis）
 
-需要一个正在运行的 MySQL 实例。运行测试前请先执行初始化脚本：
-
-```bash
-mysql -u root -p < simba-jdbc/src/init-script/init-simba-mysql.sql
-```
-
-或使用 Docker：
-
-```bash
-docker run -d --name simba-mysql \
-  -e MYSQL_ROOT_PASSWORD=root \
-  -e MYSQL_DATABASE=simba \
-  -p 3306:3306 \
-  mysql:8.0
-
-# Wait for startup, then:
-mysql -h 127.0.0.1 -u root -proot simba < simba-jdbc/src/init-script/init-simba-mysql.sql
-```
-
-### simba-spring-redis（Redis）
-
-需要一个正在运行的 Redis 实例：
-
-```bash
-docker run -d --name simba-redis -p 6379:6379 redis:7
-```
+只需要 Docker。测试会通过 Testcontainers 启动 `mysql:8.4`（用 `simba-jdbc/src/init-script/init-simba-mysql.sql` 初始化）和 `redis:7.4-alpine`，不需要本地服务或手工建表。
 
 ### simba-zookeeper
 
@@ -215,9 +190,9 @@ autonumber
     end
     Note over Dev: For backend integration tests:
     Dev->>GW: ./gradlew simba-jdbc:test
-    GW->>SJ: test (requires MySQL)
+    GW->>SJ: test (Docker: MySQL)
     Dev->>GW: ./gradlew simba-spring-redis:test
-    GW->>SR: test (requires Redis)
+    GW->>SR: test (Docker: Redis)
 ```
 
 ## PR 流程

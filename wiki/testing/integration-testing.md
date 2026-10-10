@@ -81,10 +81,7 @@ internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
 
     @BeforeAll
     fun setup() {
-        val hikariDataSource = HikariDataSource()
-        hikariDataSource.jdbcUrl = "jdbc:mysql://localhost:3306/simba_db"
-        hikariDataSource.username = "root"
-        hikariDataSource.password = "root"
+        val hikariDataSource = MySqlFixture.newDataSource()
         jdbcMutexOwnerRepository = JdbcMutexOwnerRepository(hikariDataSource)
         mutexContendServiceFactory = JdbcMutexContendServiceFactory(
             mutexOwnerRepository = jdbcMutexOwnerRepository,
@@ -128,33 +125,12 @@ autonumber
     CS->>CS: notifyOwner(MutexOwner.NONE)
 ```
 
-### MySQL via Docker Compose
+### MySQL via Testcontainers
 
-```yaml
-# docker-compose-test.yml
-services:
-  mysql:
-    image: mysql:8.0
-    ports:
-      - "3306:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: simba_db
-    volumes:
-      - ./simba-jdbc/src/init-script/init-simba-mysql.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-```
+[`MySqlFixture`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/test/kotlin/me/ahoo/simba/jdbc/MySqlFixture.kt) starts one `mysql:8.4` container per test JVM and initializes it with the published `init-simba-mysql.sql`, so tests and users share a single schema definition. Tests only call `MySqlFixture.newDataSource()`; no local MySQL, credentials or manual schema setup are needed.
 
 ```bash
-docker compose -f docker-compose-test.yml up -d mysql
-# Wait for healthy
-docker compose -f docker-compose-test.yml exec mysql mysqladmin ping -h localhost
-# Run tests
-./gradlew simba-jdbc:check
+./gradlew simba-jdbc:check   # requires Docker
 ```
 
 ## Redis Backend
@@ -213,9 +189,7 @@ internal class SpringRedisMutexContendServiceTest : MutexContendServiceSpec() {
 
     @BeforeAll
     fun setup() {
-        val redisStandaloneConfiguration = RedisStandaloneConfiguration()
-        lettuceConnectionFactory = LettuceConnectionFactory(redisStandaloneConfiguration)
-        lettuceConnectionFactory.afterPropertiesSet()
+        lettuceConnectionFactory = RedisFixture.newConnectionFactory()
         val stringRedisTemplate = StringRedisTemplate(lettuceConnectionFactory)
         listenerContainer = RedisMessageListenerContainer()
         listenerContainer.setConnectionFactory(lettuceConnectionFactory)
@@ -233,25 +207,12 @@ internal class SpringRedisMutexContendServiceTest : MutexContendServiceSpec() {
 }
 ```
 
-### Redis via Docker Compose
+### Redis via Testcontainers
 
-```yaml
-# docker-compose-test.yml (add to existing file)
-services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-```
+[`RedisFixture`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/test/kotlin/me/ahoo/simba/spring/redis/RedisFixture.kt) starts one `redis:7.4-alpine` container per test JVM; tests call `RedisFixture.newConnectionFactory()`.
 
 ```bash
-docker compose -f docker-compose-test.yml up -d redis
-./gradlew simba-spring-redis:check
+./gradlew simba-spring-redis:check   # requires Docker
 ```
 
 ## Zookeeper Backend
@@ -325,91 +286,42 @@ autonumber
 ./gradlew simba-zookeeper:check
 ```
 
-## Full Docker Compose for All Backends
+## Requirements for All Backends
 
-```yaml
-# docker-compose-test.yml
-services:
-  mysql:
-    image: mysql:8.0
-    ports:
-      - "3306:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: simba_db
-    volumes:
-      - ./simba-jdbc/src/init-script/init-simba-mysql.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-```
-
-Start all services and run all tests:
+Only Docker (for the JDBC and Redis containers) and JDK 17. Zookeeper uses an embedded Curator `TestingServer`. Containers are started lazily on first use and removed by Testcontainers when the test JVM exits.
 
 ```bash
-docker compose -f docker-compose-test.yml up -d
 ./gradlew check
-docker compose -f docker-compose-test.yml down
 ```
 
 ## CI Configuration
 
 ### GitHub Actions Example
 
-```yaml
-# .github/workflows/test.yml
-name: Tests
-on: [push, pull_request]
+GitHub-hosted runners provide Docker, so the workflows need no service containers or database setup steps:
 
+```yaml
+# .github/workflows/integration-test.yml (excerpt)
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: simba_db
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h localhost"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
+  simba-jdbc-test:
+    runs-on: ubuntu-latest   # Docker is available; Testcontainers starts MySQL
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: 17
-      - name: Init MySQL
-        run: mysql -h 127.0.0.1 -u root -proot < simba-jdbc/src/init-script/init-simba-mysql.sql
-      - name: Run tests
-        run: ./gradlew check
-      - name: Coverage report
-        run: ./gradlew codeCoverageReport
+          java-version: '17'
+          distribution: 'temurin'
+      - run: ./gradlew simba-jdbc:check
+
+  simba-spring-redis-test:
+    runs-on: ubuntu-latest   # Testcontainers starts Redis
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - run: ./gradlew simba-spring-redis:check
 ```
 
 ## Timing Considerations
@@ -428,13 +340,9 @@ The `multiContend` test is the longest-running and most resource-intensive. It v
 
 ## Troubleshooting
 
-### JDBC: "Connection refused"
+### JDBC / Redis: "Could not find a valid Docker environment"
 
-Ensure MySQL is running and the `simba_db` database exists with the `simba_mutex` table initialized. Verify credentials match the test configuration (`root`/`root`).
-
-### Redis: "Connection refused"
-
-Ensure Redis is running on `localhost:6379`. The test uses default `RedisStandaloneConfiguration` with no authentication.
+Testcontainers needs a running Docker daemon (Docker Desktop, Colima, or a remote `DOCKER_HOST`). Start it and rerun; the first run pulls `mysql:8.4` and `redis:7.4-alpine`.
 
 ### Zookeeper: Tests pass in isolation but fail in suite
 

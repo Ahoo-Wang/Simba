@@ -127,11 +127,11 @@ This gives you five standard tests:
 
 | Backend | External dependency | Notes |
 |---------|-------------------|-------|
-| Redis | Running Redis instance | Current repository tests use `RedisStandaloneConfiguration` defaults |
-| JDBC | Running MySQL instance | Current repository tests use `jdbc:mysql://localhost:3306/simba_db`, `root`/`root`; init script: `simba-jdbc/src/init-script/init-simba-mysql.sql` |
+| Redis | Docker | `RedisFixture` starts `redis:7.4-alpine` through Testcontainers |
+| JDBC | Docker | `MySqlFixture` starts `mysql:8.4` through Testcontainers, initialized with `simba-jdbc/src/init-script/init-simba-mysql.sql` |
 | Zookeeper | None | Uses Curator's `TestingServer` (embedded) |
 
-Do not silently add Testcontainers to this repository's tests. If CI isolation is required, add the dependency and Gradle wiring intentionally, then update the backend setup code and this skill together.
+Repository backend tests obtain connections only from `MySqlFixture` / `RedisFixture`; never hardcode hosts or credentials.
 
 ## AbstractScheduler Tests
 

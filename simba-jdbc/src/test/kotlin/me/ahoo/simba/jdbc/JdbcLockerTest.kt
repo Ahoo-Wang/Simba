@@ -12,7 +12,6 @@
  */
 package me.ahoo.simba.jdbc
 
-import com.zaxxer.hikari.HikariDataSource
 import me.ahoo.simba.locker.SimbaLocker
 import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.BeforeAll
@@ -36,10 +35,7 @@ class JdbcLockerTest {
 
     @BeforeAll
     fun setup() {
-        val hikariDataSource = HikariDataSource()
-        hikariDataSource.jdbcUrl = "jdbc:mysql://localhost:3306/simba_db"
-        hikariDataSource.username = "root"
-        hikariDataSource.password = "root"
+        val hikariDataSource = MySqlFixture.newDataSource()
         jdbcMutexOwnerRepository = JdbcMutexOwnerRepository(hikariDataSource)
         contendServiceFactory = JdbcMutexContendServiceFactory(
             mutexOwnerRepository = jdbcMutexOwnerRepository,

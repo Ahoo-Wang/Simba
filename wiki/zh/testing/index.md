@@ -105,31 +105,15 @@ flowchart LR
 
 ### JDBC/MySQL 后端
 
-**前提条件**：一个正在运行的 MySQL 实例。
-
-**连接默认值**（来自 [`JdbcMutexContendServiceTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/test/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendServiceTest.kt)）：
-
-```
-jdbc:mysql://localhost:3306/simba_db
-username: root
-password: root
-```
-
-**初始化**：在首次测试执行前运行初始化脚本：
-
-```bash
-mysql -u root -proot < simba-jdbc/src/init-script/init-simba-mysql.sql
-```
+**前提条件**：Docker。[`MySqlFixture`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/test/kotlin/me/ahoo/simba/jdbc/MySqlFixture.kt) 通过 Testcontainers 启动 `mysql:8.4` 容器，并用 `simba-jdbc/src/init-script/init-simba-mysql.sql` 初始化。
 
 测试类为 5 个互斥锁常量（`start`、`restart`、`guard`、`multiContend`、`schedule`）中的每一个调用 [`jdbcMutexOwnerRepository.tryInitMutex()`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/test/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendServiceTest.kt)。
 
-**配置**：`initialDelay=2s`，`ttl=2s`，`transition=5s`。
+**配置**：`initialDelay=2s`、`ttl=2s`、`transition=5s`。
 
 ### Redis 后端
 
-**前提条件**：一个在 `localhost:6379` 上运行的 Redis 实例。
-
-[`SpringRedisMutexContendServiceTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/test/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendServiceTest.kt) 中的测试类使用默认独立模式配置的 `LettuceConnectionFactory`。
+**前提条件**：Docker。[`RedisFixture`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/test/kotlin/me/ahoo/simba/spring/redis/RedisFixture.kt) 通过 Testcontainers 启动 `redis:7.4-alpine` 容器；[`SpringRedisMutexContendServiceTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/test/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendServiceTest.kt) 使用 `LettuceConnectionFactory` 连接。
 
 **配置**：`ttl=2s`，`transition=1s`。
 
@@ -165,8 +149,8 @@ curatorFramework.start()
 
 ```bash
 ./gradlew simba-core:check            # 仅单元测试（不需要基础设施）
-./gradlew simba-jdbc:check            # 需要 MySQL
-./gradlew simba-spring-redis:check    # 需要 Redis
+./gradlew simba-jdbc:check            # 需要 Docker（Testcontainers MySQL）
+./gradlew simba-spring-redis:check    # 需要 Docker（Testcontainers Redis）
 ./gradlew simba-zookeeper:check       # 不需要外部基础设施
 ```
 

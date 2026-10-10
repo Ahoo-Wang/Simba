@@ -16,4 +16,5 @@ dependencies {
     testImplementation(project(":simba-test"))
     testImplementation("com.zaxxer:HikariCP")
     testImplementation("com.mysql:mysql-connector-j")
+    testImplementation("org.testcontainers:testcontainers-mysql")
 }

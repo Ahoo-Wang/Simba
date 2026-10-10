@@ -17,7 +17,6 @@ import me.ahoo.simba.test.MutexContendServiceSpec
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.TestInstance
-import org.springframework.data.redis.connection.RedisStandaloneConfiguration
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.listener.RedisMessageListenerContainer
@@ -39,9 +38,7 @@ internal class SpringRedisMutexContendServiceTest : MutexContendServiceSpec() {
 
     @BeforeAll
     fun setup() {
-        val redisStandaloneConfiguration = RedisStandaloneConfiguration()
-        lettuceConnectionFactory = LettuceConnectionFactory(redisStandaloneConfiguration)
-        lettuceConnectionFactory.afterPropertiesSet()
+        lettuceConnectionFactory = RedisFixture.newConnectionFactory()
         val stringRedisTemplate = StringRedisTemplate(lettuceConnectionFactory)
         listenerContainer = RedisMessageListenerContainer()
         listenerContainer.setConnectionFactory(lettuceConnectionFactory)
