@@ -1,6 +1,6 @@
 # ADR 0001: Shared Lease Contention Engine
 
-- Status: Proposed
+- Status: Accepted — phase 1 shipped in #541, #542 (with #543) and #544; phase 2 A–C in #545; fencing tokens moved to ADR 0002
 - Date: 2026-10-09
 
 ## Context
@@ -47,7 +47,7 @@ interface MutexLeaseStore {
 | Phase | Scope | Compatibility |
 |---|---|---|
 | 1 (3.x) | Lease watchdog and JDBC query timeout; consistent starter bean types; extract the engine; encapsulate `status`; idempotent `close()`; shared scheduler | No public API break |
-| 2 (3.x) | Optional fencing token; Redis queue expiry and structured Lua results; configurable callback executor | Additive; Redis upgrade order must be documented |
+| 2 (3.x) | Redis release broadcast (replaces the contender queue) and structured Lua results; configurable callback executor; fencing tokens per [ADR 0002](0002-fencing-token.md) | Additive; mixed-version Redis nodes stay compatible |
 | 3 (4.0) | `MutexOwner` as an immutable value with an injected clock; remove unused retrieval factory; drop cosid/Guava from core; explicit `simba.backend` selection; JDBC dialect SPI | Breaking |
 
 ## Consequences
