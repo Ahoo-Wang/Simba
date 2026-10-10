@@ -12,18 +12,14 @@
  */
 package me.ahoo.simba.schedule
 
-import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.core.AbstractMutexContender
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexState
-import me.ahoo.simba.util.Threads.defaultFactory
-import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.ScheduledThreadPoolExecutor
-import java.util.concurrent.TimeUnit
 
 /**
- * Abstract Scheduler.
+ * Abstract Scheduler: leader-only scheduled work by subclassing. Prefer [SimbaScheduler], which needs no subclass
+ * and passes a [ScheduleContext] to the work; both share the same scheduling semantics.
  *
  * @author ahoo wang
  */
@@ -31,10 +27,6 @@ abstract class AbstractScheduler(
     val mutex: String,
     contendServiceFactory: MutexContendServiceFactory
 ) {
-    companion object {
-        private val log = KotlinLogging.logger {}
-    }
-
     private val workContender = WorkContender(mutex)
     private val contendService: MutexContendService =
         contendServiceFactory.createMutexContendService(workContender)
@@ -65,63 +57,23 @@ abstract class AbstractScheduler(
         get() = contendService.fencingToken
 
     inner class WorkContender(mutex: String) : AbstractMutexContender(mutex) {
-        /**
-         * Created lazily on first acquisition and shut down by [shutdown] on scheduler stop,
-         * so a stopped (or never-started) scheduler holds no threads; a restart recreates it.
-         */
-        @Volatile
-        private var scheduledThreadPoolExecutor: ScheduledThreadPoolExecutor? = null
-
-        @Volatile
-        private var workFuture: ScheduledFuture<*>? = null
+        private val runner = ScheduledWorkRunner(mutex, { config }, { worker }) { work() }
 
         override fun onAcquired(mutexState: MutexState) {
             super.onAcquired(mutexState)
-            if (workFuture == null || workFuture!!.isDone) {
-                val initialDelay = config.initialDelay.toMillis()
-                val period = config.period.toMillis()
-                val executor = ensureExecutor()
-                workFuture = if (ScheduleConfig.Strategy.FIXED_RATE == config.strategy) {
-                    executor.scheduleAtFixedRate(
-                        this::safeWork,
-                        initialDelay,
-                        period,
-                        TimeUnit.MILLISECONDS
-                    )
-                } else {
-                    executor.scheduleWithFixedDelay(
-                        this::safeWork,
-                        initialDelay,
-                        period,
-                        TimeUnit.MILLISECONDS
-                    )
-                }
-            }
+            runner.start()
         }
 
         override fun onReleased(mutexState: MutexState) {
             super.onReleased(mutexState)
-            workFuture?.cancel(true)
+            runner.cancel()
         }
 
-        private fun ensureExecutor(): ScheduledThreadPoolExecutor {
-            return scheduledThreadPoolExecutor
-                ?: ScheduledThreadPoolExecutor(1, defaultFactory(worker))
-                    .also { scheduledThreadPoolExecutor = it }
-        }
-
+        /**
+         * Shuts the work executor down; a restart recreates it on the next acquisition.
+         */
         fun shutdown() {
-            scheduledThreadPoolExecutor?.shutdown()
-            scheduledThreadPoolExecutor = null
-        }
-
-        @Suppress("TooGenericExceptionCaught")
-        private fun safeWork() {
-            try {
-                work()
-            } catch (throwable: Throwable) {
-                log.error(throwable) { "work - mutex:[$mutex] - failed:[${throwable.message}]." }
-            }
+            runner.shutdown()
         }
     }
 }

@@ -52,6 +52,7 @@ internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
         jdbcMutexOwnerRepository.tryInitMutex(GUARD_MUTEX)
         jdbcMutexOwnerRepository.tryInitMutex(MULTI_CONTEND_MUTEX)
         jdbcMutexOwnerRepository.tryInitMutex(SCHEDULE_MUTEX)
+        jdbcMutexOwnerRepository.tryInitMutex(SIMBA_SCHEDULER_MUTEX)
     }
 
     @Test

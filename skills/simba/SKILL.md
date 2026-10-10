@@ -11,7 +11,7 @@ Simba provides distributed mutex (leader election) for JVM applications with thr
 
 Start by identifying four things:
 1. Which backend the project already runs: Redis, JDBC/MySQL, or Zookeeper.
-2. Which usage pattern fits the job: `MutexContender`, `SimbaLocker`, or `AbstractScheduler`.
+2. Which usage pattern fits the job: `MutexContender`, `SimbaLocker`, or `SimbaScheduler` (`AbstractScheduler` for the subclassing style).
 3. Who owns lifecycle: explicit `start()`/`stop()`, Kotlin `.use {}`, Java try-with-resources, or Spring `SmartLifecycle`.
 4. Whether the task is usage/configuration work or test work. For test-heavy tasks, also use `simba-testing`.
 
@@ -157,9 +157,28 @@ Key points:
 - `close()` releases the lock. Always use try-with-resources / `.use {}` to guarantee release.
 - Internally creates a `MutexContendService`; the thread parks until `onAcquired` fires.
 
-### Pattern 3: AbstractScheduler (leader-only periodic task)
+### Pattern 3: SimbaScheduler (leader-only periodic task)
 
 Use when: the application needs a periodic task that should run on exactly one instance at a time.
+
+```kotlin
+import me.ahoo.simba.schedule.ScheduleConfig
+import me.ahoo.simba.schedule.SimbaScheduler
+
+val scheduler = SimbaScheduler(
+    mutex = "my-scheduled-task",
+    contendServiceFactory = mutexContendServiceFactory,
+    config = ScheduleConfig.delay(Duration.ZERO, Duration.ofMinutes(1))
+) { context ->
+    // Runs only while this node leads; pass context.fencingToken to protected resources.
+    doWork(context.fencingToken)
+}
+scheduler.start()
+// on shutdown
+scheduler.close()
+```
+
+The subclassing style below (`AbstractScheduler`) has the same semantics.
 
 ```kotlin
 import me.ahoo.simba.core.MutexContendServiceFactory
