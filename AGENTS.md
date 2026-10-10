@@ -1,104 +1,128 @@
 # Simba - Agent Instructions
 
-## Build & Run
+Simba is a JVM distributed mutex / leader-election library. It guarantees that, per mutex, at most one
+contender *observes itself* as owner of a time-bounded lease, and it delivers ordered acquire/release callbacks.
+It does **not** provide fencing tokens: local ownership is a weakly consistent view of the backend.
+
+This file records invariants and traps that are not obvious from the code. Describe the code as it is,
+not as it is planned to be; design direction belongs in `docs/adr/`.
+
+## Commands
 
 ```bash
-./gradlew build                         # Build all modules
-./gradlew check                         # Run all checks; JDBC/Redis tests need local services
-./gradlew detekt                        # Static analysis, autoCorrect enabled
-./gradlew codeCoverageReport            # Aggregated JaCoCo report
-./gradlew simba-core:check              # Check one module
-./gradlew simba-zookeeper:check         # Zookeeper backend; uses embedded Curator test server
-./gradlew simba-spring-redis:check      # Redis backend; requires Redis on localhost:6379
-./gradlew simba-jdbc:check              # JDBC backend; requires MySQL and init script below
-mysql -h localhost -uroot -proot < simba-jdbc/src/init-script/init-simba-mysql.sql
+./gradlew build                                   # Build all modules
+./gradlew <module>:check                          # Tests + detekt (autoCorrect) for one module
+./gradlew <module>:test --tests <fully.qualified.TestClass>
+./gradlew simba-example:check -PexampleBackend=jdbc|redis|zookeeper   # default: redis
+./gradlew codeCoverageReport                      # Aggregated JaCoCo report
 ```
 
-Wiki commands live under `wiki/`:
+| Module check | Needs |
+|---|---|
+| `simba-core`, `simba-zookeeper` | Nothing (Zookeeper uses embedded Curator `TestingServer`) |
+| `simba-spring-redis` | Redis on `localhost:6379` |
+| `simba-jdbc` | MySQL on `localhost:3306` (`root`/`root`) initialized with `simba-jdbc/src/init-script/init-simba-mysql.sql` |
 
-```bash
-cd wiki
-pnpm install
-pnpm run dev
-pnpm run build
-pnpm run fix:mermaid
-```
+CI (`.github/workflows/integration-test.yml`) runs `simba-core` first, then the Redis, Zookeeper, JDBC module
+checks and the `simba-example` backend matrix. Wiki commands: see `wiki/AGENTS.md`.
+
+## Modules
+
+`simba-core` ← `simba-jdbc` / `simba-spring-redis` / `simba-zookeeper` ← `simba-spring-boot-starter`.
+`simba-core` must not know any backend; backend-specific behavior stays in its module. `simba-test` is the
+backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are publication metadata.
+
+## Core Invariants
+
+### Lease model
+- An owner holds `ttlAt` (renew deadline) and `transitionAt = ttlAt + transition` (grace period). Inside the
+  grace period only the current owner may renew; others may acquire only after `transitionAt`.
+- `ContendPeriod`: owners retry at `ttlAt`; contenders retry at `transitionAt` plus jitter in `[-200, 1000)` ms
+  (`[0, 1000)` when transition is zero).
+- JDBC: one `simba_mutex` row per mutex; the acquire `UPDATE` encodes the rule above using database time.
+- Redis: `simba:{mutex}` with `PX = ttl + transition`; acquire is `SET NX`, renew (guard) is `SET XX` by the
+  owner only; release deletes the key and publishes `released` to the earliest queued contender.
+- Zookeeper: Curator `LeaderLatch` at `/simba/{mutex}`; ttl/transition do not apply (`ttlAt = transitionAt = MAX`).
+
+### Lifecycle
+- `Status`: `INITIAL → STARTING → RUNNING → STOPPING → INITIAL`. A failed `start()` returns to `INITIAL`;
+  services are restartable with the same `contenderId`.
+- `stop()` always delivers a release (`MutexOwner.NONE`) notification, even if `stopContend()` throws.
+- Each `start()` begins a new generation. Notifications from an older generation are dropped; while inactive,
+  only `NONE` may be applied.
+- A late acquisition finishing after `stop()` must be released remotely, but not if a restarted lifecycle with
+  the same `contenderId` is now active (that would release the new lease).
+- A failed renew/contend revokes local ownership (`NONE`) and retries after `ttl`.
+- `close()` delegates to `stop()` and currently throws when not `RUNNING`; guard with `running` when needed.
+
+### Threading
+- Owner notifications run asynchronously on a sequential executor over `handleExecutor`
+  (starter default: `ForkJoinPool.commonPool()`). Callbacks are invoked while holding the internal notify lock:
+  `onAcquired` / `onReleased` must not block, and must not add locks that `start()` / `stop()` contend on.
+- JDBC creates one single-thread scheduler per service start. Redis shares the factory-owned
+  `ScheduledExecutorService` across all mutexes; closing the factory shuts it down.
+- `SimbaLocker` is owned by one thread at a time; interruption does not cancel `acquire()` (the flag is restored).
+- `AbstractScheduler` lazily creates its worker executor on acquire, cancels work with interrupt on release,
+  and shuts the executor down on `stop()`.
+
+### Time
+- Lease decisions must use backend time or monotonic offsets, never mixed wall clocks across nodes.
+- JDBC reads database time (`current_at`) and `MutexOwnerEntity` advances it with `System.nanoTime()`.
+- Redis derives `transitionAt` from the local clock plus the key's `PTTL`; `MutexOwner.currentAt` defaults to
+  the local wall clock.
+
+### Wire contracts (compatibility-sensitive; nodes of different versions may run together)
+- Redis key and channel names are built in both Kotlin and Lua: `simba:{mutex}`, `simba:{mutex}:{contenderId}`,
+  queue `simba:{mutex}:contender`. Script results and messages use the `@@` delimiter.
+- JDBC schema: `simba_mutex(mutex, acquired_at, ttl_at, transition_at, owner_id varchar(128), version)`; the SQL is
+  MySQL-specific.
+
+## Change Playbooks
+
+- **Backend contention logic:** extend `MutexContendServiceSpec` in the backend tests; add focused regression
+  tests for the exact race (stop vs in-flight contend, restart, renew failure).
+- **Redis Lua / naming:** change `SpringRedisMutexContendService`, `AcquireResult` / `OwnerEvent` and all three
+  scripts together; keep mixed-version nodes working or document the upgrade order.
+- **JDBC SQL / schema:** only compatible widening without asking; update the init script, README/wiki schema
+  snippets, and consider DB time vs JVM time.
+- **Starter:** each backend activates on `simba.enabled` and `simba.<backend>.enabled` (both default `true`) plus
+  its bean conditions. Keep `META-INF/spring/...AutoConfiguration.imports` and
+  `additional-spring-configuration-metadata.json` in sync with properties.
+
+## Code Conventions
+
+- Package `me.ahoo.simba...`, four-space indentation, Apache license header, concise KDoc on public types.
+- Constructor injection, immutable constructor parameters; validate arguments at construction.
+- Logging: `io.github.oshai.kotlinlogging.KotlinLogging` with lazy messages including `mutex` and `contenderId`.
+- Do not expose mutable state: no public setters or public `AtomicXxxFieldUpdater`s on new code.
+- Shared API types live in `simba-core`; do not leak backend details into core abstractions.
 
 ## Testing
 
-- Tests use JUnit Platform with Kotlin/JVM and Java 17.
-- Common backend behavior is captured in `simba-test/src/main/kotlin/me/ahoo/simba/test/MutexContendServiceSpec.kt`.
-- Prefer FluentAssert's `.assert()` extensions for new Kotlin assertions; preserve existing Hamcrest assertions unless the test is already being changed. Use MockK where mocking is needed.
-- Run a single test class with `./gradlew <module>:test --tests fully.qualified.TestClass`.
-- CI runs `simba-core`, then Redis, Zookeeper, and JDBC module checks from `.github/workflows/integration-test.yml`.
-- Redis CI starts a Redis service. JDBC CI starts MySQL and loads `simba-jdbc/src/init-script/init-simba-mysql.sql`.
-
-## Project Structure
-
-| Path | Role |
-|---|---|
-| `simba-core/` | Public mutex abstractions, lifecycle state, timing, `SimbaLocker`, `AbstractScheduler` |
-| `simba-jdbc/` | MySQL-backed mutex owner repository and scheduled contention loop |
-| `simba-spring-redis/` | Spring Data Redis backend with `mutex_acquire.lua`, `mutex_guard.lua`, `mutex_release.lua`, pub/sub |
-| `simba-zookeeper/` | Curator `LeaderLatch` backend |
-| `simba-spring-boot-starter/` | Spring Boot auto-configuration and feature capabilities for optional backends |
-| `simba-test/` | Backend TCK shared by JDBC, Redis, and Zookeeper tests |
-| `simba-bom/`, `simba-dependencies/` | Maven BOM and dependency constraints |
-| `simba-example/` | Example Spring Boot app |
-| `code-coverage-report/` | Aggregated JaCoCo report module |
-| `wiki/` | VitePress documentation; see `wiki/AGENTS.md` for scoped rules |
-| `skills/` | Source skill metadata and local skill docs; keep it source-only |
-
-## Architecture Notes
-
-- Core chain: `MutexRetriever` -> `MutexContender` -> `MutexContendService`, created by `MutexContendServiceFactory`.
-- `AbstractMutexRetrievalService` owns start/stop status transitions and async owner notifications.
-- `AbstractMutexContendService` uses a template method boundary: backends implement `startContend()` and `stopContend()`.
-- `ContendPeriod` computes next contention delays from the `MutexOwner` clock; JDBC owners use database time through `MutexOwnerEntity.currentDbAt`.
-- JDBC ownership uses the `simba_mutex` row and `owner_id varchar(128)`.
-- Redis key/channel names must stay aligned with Lua: `simba:{mutex}` and `simba:{mutex}:{contenderId}`.
-- Zookeeper delegates leadership lifecycle to Curator `LeaderLatch`; Simba just translates callbacks to owner state.
-
-## Code Style
-
-- Kotlin source uses package `me.ahoo.simba...`, four-space indentation, Apache license headers, and concise KDoc on public types.
-- Prefer constructor injection and immutable constructor parameters. Keep backend-specific behavior inside its backend module.
-- Keep shared API types in `simba-core`; do not leak backend details into core abstractions without a compatibility reason.
-- Tests should name the behavior under test and use real code paths before mocks.
-
-Example from `simba-core/src/main/kotlin/me/ahoo/simba/core/AbstractMutexContender.kt`:
-
-```kotlin
-abstract class AbstractMutexContender(
-    final override val mutex: String,
-    final override val contenderId: String = ContenderIdGenerator.HOST.generate()
-) : MutexContender {
-    init {
-        require(mutex.isNotBlank()) { "mutex must not be blank!" }
-        require(contenderId.isNotBlank()) { "contenderId must not be blank!" }
-    }
-}
-```
+- JUnit Platform, Kotlin/JVM, Java 17. New assertions use FluentAssert `.assert()`; keep existing Hamcrest
+  assertions unless the test is already being changed. Use MockK only where a real code path is impractical.
+- Name tests after the behavior. Synchronize on latches/futures, not `sleep`.
 
 ## Git Workflow
 
-- PR titles and commit messages should use `category: summary` or `category(scope): summary`, lowercase category, no trailing period.
-- Do not push directly to `main`; use a branch and open a PR.
-- Stage only task-relevant files. Ignore local `.idea/`, `build/`, `out/`, and `logs/` output unless explicitly requested.
-- Before pushing code changes, run targeted module checks plus `git diff --check`. Use full `./gradlew check` only when required services are available.
+- Commit and PR titles: `category: summary` or `category(scope): summary`, lowercase category, no trailing period.
+- Never push to `main`; use a branch and a PR. Stage only task-relevant files.
+- Before pushing: targeted module checks plus `git diff --check`; full `./gradlew check` only when services exist.
 
 ## Boundaries
 
-- **Always do:** Keep English and Chinese docs in sync when touching wiki or README content. Add/adjust focused regression tests for backend semantics.
-- **Always do:** Verify Redis Lua resource names and channel names together when changing Redis contention behavior.
-- **Always do:** Consider DB time vs JVM time when changing JDBC owner state or scheduling.
-- **Ask first:** Changing public API signatures in `simba-core`, changing schema columns beyond compatible widening, or altering Spring Boot auto-configuration activation semantics.
-- **Ask first:** Adding dependencies, changing CI workflows, changing Maven publication/signing logic, or restructuring wiki navigation.
-- **Never do:** Commit secrets, generated build outputs, IDE metadata, or local logs. Do not edit generated artifacts under `build/` or `out/`.
+- **Always:** keep `README.md` / `README.zh-CN.md` and wiki EN/ZH in sync; update this file when an invariant
+  above changes.
+- **Ask first:** public API changes in `simba-core` (including `MutexOwner` fields/equality); Redis Lua results,
+  messages, or key names; JDBC SQL semantics or schema beyond compatible widening; default executors or thread
+  model; starter activation semantics; new dependencies; CI, publication, or signing changes; wiki navigation.
+- **Never:** commit secrets, `build/`, `out/`, `logs/`, IDE metadata, or generated artifacts.
 
-## Documentation
+## Documentation Map
 
-- Root docs: `README.md`, `README.zh-CN.md`, `llms.txt`.
-- Wiki: `wiki/` with scoped instructions in `wiki/AGENTS.md`.
-- Full LLM context: `wiki/llms-full.txt`.
-- Source skill docs: `skills/simba/` and `skills/simba-testing/`; keep source metadata in this repo and do not generate downstream marketplace artifacts here.
+| Path | Content |
+|---|---|
+| `README.md`, `README.zh-CN.md`, `llms.txt` | User-facing entry points |
+| `wiki/` | VitePress site (authoritative docs); rules in `wiki/AGENTS.md` |
+| `docs/adr/` | Architecture decision records |
+| `skills/simba/`, `skills/simba-testing/` | Source skill docs; do not generate marketplace artifacts here |
