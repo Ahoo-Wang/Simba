@@ -61,10 +61,8 @@ The starter provides Simba auto-configuration only. Add exactly one complete bac
 
 ```yaml
 simba:
-  jdbc:
-    enabled: true
-#  redis:
-#    enabled: true
+  # Required only when more than one backend module is on the classpath.
+  backend: jdbc
 
 spring:
   datasource:
@@ -112,7 +110,8 @@ create table simba_mutex
     ttl_at         bigint unsigned not null,
     transition_at bigint unsigned not null,
     owner_id          varchar(128)    not null,
-    version           int unsigned    not null
+    version           int unsigned    not null,
+    fencing_token     bigint unsigned not null default 0
 );
 ```
 
@@ -227,6 +226,32 @@ public class ExampleScheduler extends AbstractScheduler implements SmartLifecycl
     }
 }
 ```
+
+### Fencing Tokens
+
+A lease bounds how long the backend grants ownership, not how long a paused owner keeps acting. Pass the fencing
+token of the current term to the resource you protect, and let it reject tokens lower than the highest it has seen:
+
+```kotlin
+locker.acquire()
+repository.save(order, fencingToken = locker.fencingToken)
+```
+
+Tokens increase strictly per ownership term on every backend (`0` means none). Redis needs persistence of its counter
+(AOF) to stay monotonic across restarts.
+
+## Upgrading to 4.0
+
+- **Redis:** every node must run Simba 3.2 or later before you roll out 4.0.
+- **JDBC:** fencing tokens are on by default. Run
+  [`upgrade-simba-mysql-fencing-token.sql`](simba-jdbc/src/init-script/upgrade-simba-mysql-fencing-token.sql) on
+  existing tables, or set `simba.jdbc.fencing=false`.
+- **Spring Boot:** with more than one backend module on the classpath, set `simba.backend`.
+- **API:** `MutexOwner` is a final value (no subclassing, `MutexOwnerEntity` removed, `isInTransition` folded into
+  `hasOwner()`); `MutexRetrievalServiceFactory` is gone; `MutexOwnerRepository` keeps only `acquireAndGetOwner` and
+  `release`. `simba-core` no longer brings Guava or cosid.
+
+See [ADR 0003](docs/adr/0003-simba-4.md) for the rationale.
 
 #### Use Cases
 
