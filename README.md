@@ -257,3 +257,7 @@ See [ADR 0003](docs/adr/0003-simba-4.md) for the rationale.
 
 - [Govern-EventBus](https://github.com/Ahoo-Wang/govern-eventbus/tree/master/eventbus-core/src/main/java/me/ahoo/eventbus/core/compensate)
 - [CoSky](https://github.com/Ahoo-Wang/CoSky/blob/main/cosky-rest-api/src/main/kotlin/me/ahoo/cosky/rest/stat/StatServiceScheduler.kt)
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, quality gates and release process, and [SECURITY.md](SECURITY.md) to report vulnerabilities.

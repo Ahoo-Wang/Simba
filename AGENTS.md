@@ -127,7 +127,8 @@ publication metadata.
 
 ## Git Workflow
 
-- Commit and PR titles: `category: summary` or `category(scope): summary`, lowercase category, no trailing period.
+- Commit and PR titles follow Conventional Commits (`type(scope)!: summary`, see `CONTRIBUTING.md`); the `Labeler`
+  workflow enforces the title and applies the labels that drive release notes.
 - Never push to `main`; use a branch and a PR. Stage only task-relevant files.
 - Before pushing: targeted module checks plus `git diff --check`; full `./gradlew check` needs only Docker.
 
@@ -147,4 +148,5 @@ publication metadata.
 | `README.md`, `README.zh-CN.md`, `llms.txt` | User-facing entry points |
 | `wiki/` | VitePress site (authoritative docs); rules in `wiki/AGENTS.md` |
 | `docs/adr/` | Architecture decision records |
+| `CONTRIBUTING.md`, `SECURITY.md`, `.github/` | Contribution workflow, quality gates, SemVer and release process; vulnerability reporting; templates, labeler, CODEOWNERS |
 | `skills/simba/`, `skills/simba-testing/` | Source skill docs; do not generate marketplace artifacts here |
