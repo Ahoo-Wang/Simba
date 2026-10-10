@@ -283,6 +283,7 @@ simba:
 | `simba.redis.ttl` | `RedisProperties` | `10s` |
 | `simba.redis.transition` | `RedisProperties` | `6s` |
 | `simba.zookeeper.enabled` | `ZookeeperProperties` | `true` |
+| `simba.scheduling.enabled` | `SimbaSchedulingAutoConfiguration` | `true` |
 
 ## Gradle Feature Variants
 
@@ -404,6 +405,26 @@ simba:
 ```
 
 Disabling the other backends (`simba.<backend>.enabled=false`) also resolves the ambiguity.
+
+## Leader-Only Scheduling
+
+`SimbaSchedulingAutoConfiguration` registers a bean post-processor that turns every `@SimbaScheduled` bean method into a `SimbaScheduler` and runs it, together with any `SimbaScheduler` beans, with the application context: started after refresh, stopped on shutdown before the backend connections close. Lazy beans start as soon as they are created.
+
+```kotlin
+@SimbaScheduled(mutex = "report", fixedDelay = "\${report.delay:1m}", initialDelay = "10s")
+fun generate(context: ScheduleContext) {
+    reportService.generate(fencingToken = context.fencingToken)
+}
+```
+
+| Attribute | Description |
+|---|---|
+| `mutex` | Mutex whose leader runs the method; unique per application. |
+| `fixedDelay` / `fixedRate` | Exactly one is required; Spring Boot duration formats (`10s`, `PT1M`). |
+| `initialDelay` | Delay before the first run after becoming leader; default `0s`. |
+| `worker` | Thread name prefix of the work executor; defaults to `mutex`. |
+
+The method takes no parameter or a single `ScheduleContext`, and every attribute accepts `${...}` placeholders (escape them as `\${...}` in Kotlin strings). Invalid declarations, or a `@SimbaScheduled` method without a backend, fail startup. Set `simba.scheduling.enabled=false` to turn the support off.
 
 ## See Also
 

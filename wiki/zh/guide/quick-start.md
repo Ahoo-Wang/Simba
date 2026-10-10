@@ -110,7 +110,7 @@ graph TD
         Q1{"Need periodic<br>scheduled work?"}
         Q2{"Want RAII /<br>try-with-resources?"}
         Q3{"Need full control<br>via callbacks?"}
-        SCH["Use AbstractScheduler"]
+        SCH["Use @SimbaScheduled / SimbaScheduler"]
         LK["Use SimbaLocker"]
         CB["Use MutexContender"]
     end
@@ -184,39 +184,40 @@ SimbaLocker("my-task-lock", factory).use { locker ->
 }
 ```
 
-## 使用 AbstractScheduler
+## 只在 leader 上执行的定时任务
 
-[`AbstractScheduler`]([file_path:simba-core/src/main/kotlin/me/ahoo/simba/schedule/AbstractScheduler.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/schedule/AbstractScheduler.kt)) 非常适合只需在当前领导者实例上执行的周期性任务。它会在领导权变更时自动启动和停止调度工作。
+使用 Spring Boot starter 时，在 bean 方法上标注 `@SimbaScheduled`。它只在 leader 节点上执行，在上下文刷新完成后启动、关闭时停止：
 
 ```kotlin
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.schedule.AbstractScheduler
-import me.ahoo.simba.schedule.ScheduleConfig
-import java.time.Duration
+import me.ahoo.simba.schedule.ScheduleContext
+import me.ahoo.simba.spring.boot.starter.scheduling.SimbaScheduled
+import org.springframework.stereotype.Service
 
-class MyCleanupScheduler(
-    contendServiceFactory: MutexContendServiceFactory
-) : AbstractScheduler("cleanup-task", contendServiceFactory) {
-
-    override val config: ScheduleConfig = ScheduleConfig.rate(
-        initialDelay = Duration.ofSeconds(0),
-        period = Duration.ofMinutes(5)
-    )
-
-    override val worker: String = "cleanup-worker"
-
-    override fun work() {
-        println("Running cleanup on leader instance...")
+@Service
+class CleanupJobs {
+    @SimbaScheduled(mutex = "cleanup-task", fixedRate = "5m")
+    fun cleanup(context: ScheduleContext) {
+        println("Running cleanup on leader instance, fencing token ${context.fencingToken}")
     }
 }
-
-// Start the scheduler
-val scheduler = MyCleanupScheduler(factory)
-scheduler.start()
-
-// Stop when shutting down
-scheduler.stop()
 ```
+
+不使用 Spring 时，创建 `SimbaScheduler` 并自行管理生命周期：
+
+```kotlin
+import me.ahoo.simba.schedule.ScheduleConfig
+import me.ahoo.simba.schedule.SimbaScheduler
+import java.time.Duration
+
+val scheduler = SimbaScheduler("cleanup-task", factory, ScheduleConfig.rate(Duration.ZERO, Duration.ofMinutes(5))) {
+    println("Running cleanup on leader instance...")
+}
+scheduler.start()
+// 关闭时
+scheduler.close()
+```
+
+节点成为 leader 时开始执行，失去 leader 时中断正在执行的任务。`AbstractScheduler` 以继承方式提供相同语义，参见 [调度器 API](/zh/api/scheduler-api)。
 
 ## Spring Boot 自动配置
 

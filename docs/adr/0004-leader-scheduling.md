@@ -20,8 +20,9 @@ The work had no direct way to reach the term's fencing token (ADR 0002).
 2. **`@SimbaScheduled` (starter)**: annotate a bean method (`fixedDelay` / `fixedRate`, `initialDelay`, optional
    `ScheduleContext` parameter; placeholders and Spring duration formats). A bean post-processor registers a
    `SimbaScheduler` per method; a `SmartLifecycle` starts them after context refresh and stops them on shutdown,
-   before the factories' executors close. `SimbaScheduler` beans are managed the same way; beans that already
-   implement `Lifecycle` are left alone. `simba.scheduling.enabled` switches it off.
+   before the backend connections close; lazy beans start when created. `SimbaScheduler` beans are managed the same
+   way. Invalid declarations, duplicate mutexes, or a missing backend fail startup. `simba.scheduling.enabled`
+   switches it off.
 3. **Threads**: one single-thread executor per scheduler, created on acquisition and shut down on stop, so
    schedulers of different mutexes never block each other and non-leaders hold no threads.
 4. **Interruption on leadership loss** stays the contract; the fencing token guards writes that outlive the term.

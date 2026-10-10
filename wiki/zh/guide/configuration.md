@@ -86,6 +86,12 @@ simba:
     enabled: true
 ```
 
+### 定时任务
+
+| 属性 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `simba.scheduling.enabled` | `Boolean` | `true` | 让 `@SimbaScheduled` 方法和 `SimbaScheduler` bean 随应用上下文运行。 |
+
 ### 回调执行器
 
 所有后端都在 `simbaHandleExecutor` bean 上执行 `onAcquired` / `onReleased`，它是一个空闲线程会被回收的专用 daemon 线程池。定义同名 bean 即可使用自己的执行器：

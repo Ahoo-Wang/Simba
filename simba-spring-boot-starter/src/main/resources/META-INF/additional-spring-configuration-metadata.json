@@ -70,6 +70,13 @@
       "defaultValue": "6s"
     },
     {
+      "name": "simba.scheduling.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether @SimbaScheduled methods and SimbaScheduler beans run with the application context.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.scheduling.SimbaSchedulingAutoConfiguration",
+      "defaultValue": true
+    },
+    {
       "name": "simba.zookeeper.enabled",
       "type": "java.lang.Boolean",
       "description": "Whether the Zookeeper backend is enabled.",
