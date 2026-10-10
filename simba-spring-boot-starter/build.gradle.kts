@@ -53,11 +53,14 @@ dependencies {
 
     api("org.springframework.boot:spring-boot-starter")
     compileOnly("io.micrometer:micrometer-core")
+    compileOnly("org.springframework.boot:spring-boot-actuator-autoconfigure")
     kapt("org.springframework.boot:spring-boot-configuration-processor")
     kapt("org.springframework.boot:spring-boot-autoconfigure-processor")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("io.micrometer:micrometer-core")
+    testImplementation("org.springframework.boot:spring-boot-actuator-autoconfigure")
+    testImplementation("tools.jackson.core:jackson-databind")
     testImplementation("org.springframework.boot:spring-boot-micrometer-metrics")
     testImplementation("com.mysql:mysql-connector-j")
     testImplementation("org.springframework.boot:spring-boot-starter-jdbc")

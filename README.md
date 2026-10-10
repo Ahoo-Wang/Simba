@@ -240,8 +240,9 @@ Tokens increase strictly per ownership term on every backend (`0` means none). R
 
 With Micrometer (e.g. `spring-boot-starter-actuator`), the starter records `simba.mutex.owner`,
 `simba.mutex.ownership.changes`, `simba.mutex.contend`, `simba.mutex.lease.expired` and `simba.scheduler.work`,
-tagged by mutex. See [Observability](https://simba.ahoo.me/guide/observability) for alert rules and custom
-`ContendObserver`s.
+tagged by mutex. With Actuator, the read-only `simba` endpoint (`/actuator/simba`, once exposed) lists the mutexes
+this node contends for and their last observed owner. See [Observability](https://simba.ahoo.me/guide/observability)
+for alert rules and custom `ContendObserver`s.
 
 ## Upgrading to 4.0
 
