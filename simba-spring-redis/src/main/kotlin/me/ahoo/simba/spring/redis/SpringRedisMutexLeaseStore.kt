@@ -32,10 +32,15 @@ internal class SpringRedisMutexLeaseStore(private val redisTemplate: StringRedis
     }
 
     override fun contend(mutex: String, contenderId: String, renew: Boolean, config: LeaseConfig): MutexOwner {
-        val script = if (renew) SCRIPT_GUARD else SCRIPT_ACQUIRE
+        val keys = RedisMutexKeys(mutex)
+        val (script, scriptKeys) = if (renew) {
+            SCRIPT_GUARD to listOf(keys.mutexKey, keys.tokenKey)
+        } else {
+            SCRIPT_ACQUIRE to listOf(keys.mutexKey, keys.fenceKey, keys.tokenKey)
+        }
         val reply = redisTemplate.execute(
             script,
-            listOf(RedisMutexKeys(mutex).mutexKey),
+            scriptKeys,
             contenderId,
             config.leaseMillis.toString()
         )
@@ -44,17 +49,27 @@ internal class SpringRedisMutexLeaseStore(private val redisTemplate: StringRedis
 
     override fun release(mutex: String, contenderId: String): Boolean {
         val keys = RedisMutexKeys(mutex)
-        return redisTemplate.execute(SCRIPT_RELEASE, listOf(keys.mutexKey, keys.legacyQueueKey), contenderId)
+        return redisTemplate.execute(
+            SCRIPT_RELEASE,
+            listOf(keys.mutexKey, keys.legacyQueueKey, keys.tokenKey),
+            contenderId
+        )
     }
 }
 
 /**
  * Rebuilds the owner timeline from the lease end ([transitionAt]) reported by Redis.
  */
-internal fun leaseOwner(ownerId: String, transitionAt: Long, config: LeaseConfig): MutexOwner {
+internal fun leaseOwner(
+    ownerId: String,
+    transitionAt: Long,
+    config: LeaseConfig,
+    fencingToken: Long = MutexOwner.NO_FENCING_TOKEN
+): MutexOwner {
     val ttlAt = transitionAt - config.transitionMillis
     val acquiredAt = ttlAt - config.ttlMillis
-    return MutexOwner(ownerId, acquiredAt, ttlAt, transitionAt)
+    return MutexOwner(ownerId, acquiredAt, ttlAt, transitionAt, fencingToken)
 }
 
-internal fun AcquireResult.toMutexOwner(config: LeaseConfig): MutexOwner = leaseOwner(ownerId, transitionAt, config)
+internal fun AcquireResult.toMutexOwner(config: LeaseConfig): MutexOwner =
+    leaseOwner(ownerId, transitionAt, config, fencingToken)

@@ -132,6 +132,51 @@ class SpringRedisMutexReleaseBroadcastTest {
         }
     }
 
+    @Test
+    fun `fencing token increases per term and stays stable across renewals`() {
+        val store = SpringRedisMutexLeaseStore(redisTemplate)
+        val mutex = "fencing-terms"
+        val keys = RedisMutexKeys(mutex)
+        redisTemplate.delete(listOf(keys.mutexKey, keys.fenceKey, keys.tokenKey))
+
+        val first = store.contend(mutex, "a", renew = false, config = config).fencingToken
+        store.contend(mutex, "a", renew = true, config = config).fencingToken.assert().isEqualTo(first)
+        store.contend(mutex, "b", renew = false, config = config).fencingToken.assert().isEqualTo(first)
+        store.release(mutex, "a").assert().isTrue()
+        redisTemplate.hasKey(keys.tokenKey).assert().isFalse()
+
+        val second = store.contend(mutex, "b", renew = false, config = config).fencingToken
+
+        first.assert().isGreaterThan(0)
+        second.assert().isEqualTo(first + 1)
+        store.release(mutex, "b")
+    }
+
+    @Test
+    fun `owner exposes the fencing token issued by Redis`() {
+        val mutex = "fencing-owner-view"
+        val keys = RedisMutexKeys(mutex)
+        redisTemplate.delete(listOf(keys.mutexKey, keys.fenceKey, keys.tokenKey))
+        val factory = SpringRedisMutexContendServiceFactory(
+            ttl = config.ttl,
+            transition = config.transition,
+            redisTemplate = redisTemplate,
+            listenerContainer = listenerContainer
+        )
+        val acquired = CountDownLatch(1)
+        val service = factory.createMutexContendService(latchContender(mutex, "owner", acquired))
+        try {
+            service.start()
+            acquired.await(2, TimeUnit.SECONDS).assert().isTrue()
+
+            service.fencingToken.assert().isEqualTo(redisTemplate.opsForValue().get(keys.tokenKey)!!.toLong())
+            service.fencingToken.assert().isGreaterThan(0)
+        } finally {
+            service.close()
+            factory.close()
+        }
+    }
+
     private fun latchContender(mutex: String, id: String, acquired: CountDownLatch) =
         object : AbstractMutexContender(mutex, id) {
             override fun onAcquired(mutexState: MutexState) {

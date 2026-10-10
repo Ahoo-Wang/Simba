@@ -27,6 +27,16 @@ internal class RedisMutexKeys(mutex: String) {
     val mutexKey: String = "${Simba.SIMBA}:{$mutex}"
 
     /**
+     * Fencing counter, incremented once per ownership term; never expires.
+     */
+    val fenceKey: String = "$mutexKey:fence"
+
+    /**
+     * Fencing token of the current term; expires with the lease.
+     */
+    val tokenKey: String = "$mutexKey:token"
+
+    /**
      * Contender queue written by Simba < 3.2; only deleted on release.
      */
     val legacyQueueKey: String = "$mutexKey:contender"

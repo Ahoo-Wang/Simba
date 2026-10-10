@@ -139,7 +139,7 @@ Redis 后端使用原子 Lua 脚本执行租约操作，并通过 Redis 发布/�
 
 ### Lua 脚本
 
-所有脚本都通过 `KEYS` 接收键（符合 Redis Cluster 规范）。获取和守护脚本返回 `{ownerId, 剩余租约毫秒数}`，没有持有者时返回 `{'', 0}`。
+所有脚本都通过 `KEYS` 接收键（符合 Redis Cluster 规范）。获取和守护脚本返回 `{ownerId, 剩余租约毫秒数, fencing token}`，没有持有者时返回 `{'', 0, 0}`。新任期会对 `simba:{mutex}:fence` 自增，并把 token 写入 `simba:{mutex}:token`（参见 [ADR 0002](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md)）。
 
 #### mutex_acquire.lua
 
@@ -147,14 +147,16 @@ Redis 后端使用原子 Lua 脚本执行租约操作，并通过 Redis 发布/�
 
 ```lua
 if redis.call('set', mutexKey, contenderId, 'nx', 'px', lease) then
+    local token = redis.call('incr', fenceKey)
+    redis.call('set', tokenKey, token, 'px', lease)
     redis.call('publish', mutexKey, 'acquired@@' .. contenderId)
-    return { contenderId, tonumber(lease) };
+    return { contenderId, tonumber(lease), token };
 end
 local ownerId = redis.call('get', mutexKey)
 if not ownerId then
-    return { '', 0 };
+    return { '', 0, 0 };
 end
-return { ownerId, redis.call('pttl', mutexKey) };
+return { ownerId, redis.call('pttl', mutexKey), tonumber(redis.call('get', tokenKey) or '0') };
 ```
 
 #### mutex_guard.lua
@@ -170,7 +172,7 @@ if redis.call('get', mutexKey) ~= contenderId then
     redis.call('zrem', legacyQueueKey, contenderId)
     return 0;
 end
-redis.call('del', mutexKey, legacyQueueKey)
+redis.call('del', mutexKey, legacyQueueKey, tokenKey)
 redis.call('publish', mutexKey, 'released@@' .. contenderId)
 return 1;
 ```

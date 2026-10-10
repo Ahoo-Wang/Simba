@@ -94,6 +94,13 @@ class SpringRedisMutexContendService @JvmOverloads constructor(
                 }
 
                 OwnerEvent.EVENT_ACQUIRED -> {
+                    if (ownerEvent.ownerId == contenderId) {
+                        /*
+                         * Our own acquisition is applied from the script reply, which carries the fencing token;
+                         * the broadcast cannot (older nodes parse exactly two fields) and would replace it.
+                         */
+                        return
+                    }
                     val transitionAt = ownerEvent.eventAt + leaseConfig.leaseMillis
                     notifyOwner(leaseOwner(ownerEvent.ownerId, transitionAt, leaseConfig))
                 }

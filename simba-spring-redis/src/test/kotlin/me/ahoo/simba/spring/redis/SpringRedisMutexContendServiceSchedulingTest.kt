@@ -44,7 +44,7 @@ class SpringRedisMutexContendServiceSchedulingTest {
                 any<List<String>>(),
                 *anyVararg()
             )
-        } returns listOf(contender.contenderId, 15000L)
+        } returns listOf(contender.contenderId, 15000L, 1L)
         val scheduler = ManualScheduledExecutor()
         val service = newService(contender, redisTemplate, scheduler)
 
@@ -52,10 +52,18 @@ class SpringRedisMutexContendServiceSchedulingTest {
         scheduler.run(0)
         scheduler.run(1)
 
-        verify(exactly = 2) {
+        verify(exactly = 1) {
             redisTemplate.execute(
                 match<RedisScript<List<*>>> { it.resultType == List::class.java },
-                listOf("simba:{guard-lease}"),
+                listOf("simba:{guard-lease}", "simba:{guard-lease}:fence", "simba:{guard-lease}:token"),
+                contender.contenderId,
+                "15000"
+            )
+        }
+        verify(exactly = 1) {
+            redisTemplate.execute(
+                match<RedisScript<List<*>>> { it.resultType == List::class.java },
+                listOf("simba:{guard-lease}", "simba:{guard-lease}:token"),
                 contender.contenderId,
                 "15000"
             )
@@ -64,9 +72,27 @@ class SpringRedisMutexContendServiceSchedulingTest {
     }
 
     @Test
+    fun `own acquisition broadcast does not drop the fencing token`() {
+        val contender = object : AbstractMutexContender("fenced", "fenced-owner") {}
+        val redisTemplate = stringRedisTemplateReturning(listOf(contender.contenderId, 15000L, 7L))
+        val scheduler = ManualScheduledExecutor()
+        val service = newService(contender, redisTemplate, scheduler)
+
+        service.start()
+        scheduler.run(0)
+        service.MutexMessageListener().onMessage(
+            DefaultMessage("simba:{fenced}".toByteArray(), "acquired@@fenced-owner".toByteArray()),
+            null
+        )
+
+        assertThat(service.fencingToken, equalTo(7L))
+        scheduler.shutdownNow()
+    }
+
+    @Test
     fun `released event replaces the pending retry`() {
         val contender = object : AbstractMutexContender("released", "released-owner") {}
-        val redisTemplate = stringRedisTemplateReturning(listOf("other", 15000L))
+        val redisTemplate = stringRedisTemplateReturning(listOf("other", 15000L, 1L))
         val scheduler = ManualScheduledExecutor()
         val service = newService(contender, redisTemplate, scheduler)
 
@@ -88,7 +114,7 @@ class SpringRedisMutexContendServiceSchedulingTest {
     fun `stop prevents a superseded future from acquiring`() {
         val contender = object : AbstractMutexContender("stopped", "stopped-owner") {}
         val acquireCalls = AtomicInteger()
-        val redisTemplate = stringRedisTemplateReturning(listOf("other", 15000L), acquireCalls)
+        val redisTemplate = stringRedisTemplateReturning(listOf("other", 15000L, 1L), acquireCalls)
         every {
             redisTemplate.execute(
                 match<RedisScript<Boolean>> { it.resultType == Boolean::class.java },
