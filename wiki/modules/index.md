@@ -74,7 +74,7 @@ graph TB
 | **simba-jdbc** | JDBC/MySQL backend with atomic conditional updates | `JdbcMutexContendService`, `JdbcMutexOwnerRepository` | simba-core, JDBC driver |
 | **simba-spring-redis** | Redis backend with Lua scripts and pub/sub | `SpringRedisMutexContendService`, Lua scripts | simba-core, spring-data-redis |
 | **simba-zookeeper** | Zookeeper backend using Curator LeaderLatch | `ZookeeperMutexContendService` | simba-core, curator-recipes |
-| **simba-spring-boot-starter** | Auto-configuration for all backends | `SimbaJdbcAutoConfiguration`, `SimbaSpringRedisAutoConfiguration`, `SimbaZookeeperAutoConfiguration` | simba-core + conditional backend deps |
+| **simba-spring-boot-starter** | Auto-configuration for all backends | `SimbaAutoConfiguration`, `SimbaJdbcAutoConfiguration`, `SimbaSpringRedisAutoConfiguration`, `SimbaZookeeperAutoConfiguration` | simba-core + conditional backend deps |
 | **simba-test** | TCK (Technology Compatibility Kit) | `MutexContendServiceSpec`, `LockSpec` | simba-core, JUnit 5 |
 | **simba-bom** | BOM (Bill of Materials) for version management | -- | -- |
 | **simba-dependencies** | Dependency version constraints | -- | -- |
@@ -95,7 +95,6 @@ graph LR
 
         R_LUA["Lua Scripts<br>acquire/guard/release"]
         R_PS["Pub/Sub<br>RedisMessageListenerContainer"]
-        R_ZSET["Sorted Set<br>contender queue"]
     end
     subgraph sg_31 ["Zookeeper Backend"]
 
@@ -108,7 +107,6 @@ graph LR
     style J_DDL fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style R_LUA fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style R_PS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style R_ZSET fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style Z_LATCH fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style Z_CUR fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
@@ -117,7 +115,7 @@ graph LR
 |---|---|---|---|
 | **Coordination mechanism** | Poll with `ScheduledThreadPoolExecutor` | Lua scripts + pub/sub | Curator `LeaderLatch` |
 | **Lock storage** | `simba_mutex` table | Redis key (`simba:{mutex}`) | ZNode (`/simba/{mutex}`) |
-| **Ownership transfer** | Atomic conditional `UPDATE` guarded by owner/transition predicates | Sorted set wait queue + pub/sub notification | ZK watcher on latch participants |
+| **Ownership transfer** | Atomic conditional `UPDATE` guarded by owner/transition predicates | `SET NX` + pub/sub broadcast of releases | ZK watcher on latch participants |
 | **Time source** | MySQL `current_timestamp(3)` | System clock (client-side) | ZK server time |
 | **External dependency** | MySQL instance | Redis instance | ZooKeeper ensemble |
 | **Best for** | Existing relational DB infrastructure | High-throughput, low-latency | Strong consistency guarantees |

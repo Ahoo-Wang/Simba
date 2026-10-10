@@ -90,7 +90,7 @@ Simba 刻意**不**使用 Kotlin 协程。所有并发都通过 `java.util.concu
 - `CompletableFuture` 用于异步所有者通知
 - `Executor` 接口用于回调分发
 - `LockSupport.park/unpark` 用于 `SimbaLocker`
-- `ForkJoinPool.commonPool()` 作为默认处理执行器
+- `ForkJoinPool.commonPool()` 作为库工厂的默认处理执行器（Spring Boot starter 提供专用的 `simbaHandleExecutor` bean）
 
 这是一个刻意的设计选择：库面向服务端 JVM 应用，`java.util.concurrent` 被充分理解、可预测，并且不需要协程上下文管理。
 
@@ -672,7 +672,7 @@ include("simba-{backend}")
 
 [`SpringRedisMutexContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendService.kt) 继承 [`LeaseContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/LeaseContendService.kt)，在共享循环之上增加发布/订阅：
 
-1. **`SpringRedisMutexLeaseStore`**：`contend()` 续期时执行 `mutex_guard.lua`，否则执行 `mutex_acquire.lua`，解析 `AcquireResult` 并重建 `MutexOwner` 时间线；`release()` 执行 `mutex_release.lua`，同时唤醒最早排队的竞争者。
+1. **`SpringRedisMutexLeaseStore`**：`contend()` 续期时执行 `mutex_guard.lua`，否则执行 `mutex_acquire.lua`，解析 `AcquireResult` 并重建 `MutexOwner` 时间线；`release()` 执行 `mutex_release.lua`，广播 `released`，所有等待的竞争者立即竞争。
 2. **`RedisMutexKeys`**：Kotlin 侧唯一的 key 与频道命名来源，与 Lua 脚本保持一致。
 3. **`onStart()` / `onStop()`**：订阅和退订 `MutexMessageListener`。
 4. **`MutexMessageListener.onMessage()`**：
@@ -958,7 +958,7 @@ flowchart TB
 答：Simba 为互斥（一次一个访问）设计。它不适合计数或限流。对于这些用例，使用 Redis 的 `INCR` 配合过期时间，或使用专用限流库。
 
 **问：工厂构造函数中的 `handleExecutor` 参数是什么？**
-答：它是分发 `onAcquired`/`onReleased` 回调的 `Executor`。默认使用 `ForkJoinPool.commonPool()`。在生产环境中，考虑创建专用执行器以避免与其他 ForkJoinPool 用户的资源竞争。
+答：它是分发 `onAcquired`/`onReleased` 回调的 `Executor`。库工厂默认使用 `ForkJoinPool.commonPool()`；Spring Boot starter 注入专用的 `simbaHandleExecutor` bean，定义同名 bean 即可替换。在 Spring 之外的生产环境中，请传入专用执行器。
 
 **问：如何在 `FIXED_RATE` 和 `FIXED_DELAY` 调度策略之间选择？**
 答：当工作必须在一致的挂钟时间间隔运行时（例如每 30 秒）使用 `FIXED_RATE`。当想要在工作完成之间有最小间隔时使用 `FIXED_DELAY`。`FIXED_DELAY` 对于长时间运行的工作更安全，因为它防止任务堆积。

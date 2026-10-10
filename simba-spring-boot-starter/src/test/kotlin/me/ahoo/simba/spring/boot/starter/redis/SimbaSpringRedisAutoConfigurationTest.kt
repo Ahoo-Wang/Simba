@@ -13,6 +13,7 @@
 package me.ahoo.simba.spring.boot.starter.redis
 
 import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 import org.assertj.core.api.AssertionsForInterfaceTypes.assertThat
 import org.junit.jupiter.api.Test
 import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration
@@ -31,6 +32,7 @@ internal class SimbaSpringRedisAutoConfigurationTest {
     fun contextLoads() {
         contextRunner
             .withUserConfiguration(
+                SimbaAutoConfiguration::class.java,
                 DataRedisAutoConfiguration::class.java,
                 SimbaSpringRedisAutoConfiguration::class.java
             )
@@ -48,6 +50,7 @@ internal class SimbaSpringRedisAutoConfigurationTest {
         contextRunner
             .withPropertyValues("simba.redis.ttl=0ms")
             .withUserConfiguration(
+                SimbaAutoConfiguration::class.java,
                 DataRedisAutoConfiguration::class.java,
                 SimbaSpringRedisAutoConfiguration::class.java
             )

@@ -203,8 +203,8 @@ need to implement `startRetrieval()` / `stopRetrieval()` (and by extension, `sta
 Owner notifications are always dispatched asynchronously via
 `CompletableFuture.runAsync(safeNotifyOwner, handleExecutor)` ([line 71](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/AbstractMutexRetrievalService.kt#L71)).
 This ensures that a slow `onAcquired()` / `onReleased()` callback never blocks the contention
-scheduling thread. The default `handleExecutor` is `ForkJoinPool.commonPool()` in the JDBC and
-Redis factories.
+scheduling thread. The JDBC and Redis factories default `handleExecutor` to `ForkJoinPool.commonPool()`;
+the Spring Boot starter passes its dedicated `simbaHandleExecutor` bean instead.
 
 ## Key Concepts
 

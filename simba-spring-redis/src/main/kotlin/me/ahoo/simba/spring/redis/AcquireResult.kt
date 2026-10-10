@@ -25,6 +25,19 @@ data class AcquireResult(val ownerId: String, val transitionAt: Long) {
         val NONE = AcquireResult(MutexOwner.NONE_OWNER_ID, 0L)
 
         /**
+         * build [AcquireResult] from a script reply `{ownerId, remaining lease in milliseconds}`.
+         */
+        fun of(reply: List<*>): AcquireResult {
+            check(reply.size == 2) { "Incorrect script reply:[$reply]" }
+            val ownerId = reply[0] as String
+            if (ownerId.isEmpty()) {
+                return NONE
+            }
+            val remaining = (reply[1] as Number).toLong()
+            return AcquireResult(ownerId, System.currentTimeMillis() + remaining)
+        }
+
+        /**
          * build [AcquireResult] from resultStr.
          *
          * @param resultStr {ownerId}:{transitionAt}.

@@ -175,18 +175,16 @@ flowchart TD
     subgraph channels["Pub/Sub Channels"]
         style channels fill:#161b22,stroke:#30363d,color:#e6edf3
         MC["simba:{mutex}<br>Global channel"]
-        CC["simba:{mutex}:{id}<br>Per-contender channel"]
+        CC["simba:{mutex}:{id}<br>Per-contender channel (legacy)"]
     end
 
     subgraph state["State"]
         style state fill:#161b22,stroke:#30363d,color:#e6edf3
         KEY["simba:{mutex}<br>String key (owner ID)"]
-        QUEUE["simba:{mutex}:contender<br>Sorted Set (wait queue)"]
     end
 
     ACQUIRE --> MC
     ACQUIRE --> KEY
-    ACQUIRE --> QUEUE
     GUARD --> KEY
     RELEASE --> MC
     RELEASE --> KEY
@@ -197,13 +195,12 @@ flowchart TD
     style MC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style CC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style KEY fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style QUEUE fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 
 The `mutex_acquire.lua` script ([source](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_acquire.lua)):
-1. Attempts `SET mutexKey contenderId NX PX transition` -- atomic acquire with expiry
+1. Attempts `SET mutexKey contenderId NX PX lease` (lease = ttl + transition) -- atomic acquire with expiry
 2. On success: publishes `acquired@@contenderId` to the global channel
-3. On failure: adds the contender to a sorted set wait queue and returns the current owner + remaining TTL
+3. On failure: returns the current owner and its remaining lease as `{ownerId, pttl}`
 
 ### Test Class
 

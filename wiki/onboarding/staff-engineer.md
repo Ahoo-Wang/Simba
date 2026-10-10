@@ -467,8 +467,7 @@ Services created by `JdbcMutexContendServiceFactory` share one trigger thread an
 
 Each mutex in Redis uses:
 - 1 string key (the mutex name -> owner ID, ~50 bytes)
-- 1 sorted set (the wait queue, ~100 bytes per contender)
-- 2 pub/sub subscriptions per contender (global channel + per-contender channel)
+- Pub/sub subscriptions per contender: the mutex channel, plus the per-contender channel kept for rolling upgrades from Simba < 3.2
 
 For 100 mutexes with 10 contenders each, this is approximately 100KB of Redis memory -- negligible.
 
@@ -718,39 +717,25 @@ Both paths converge to the same result; pub/sub only improves latency.
 ### mutex_acquire.lua
 
 ```lua
-redis.replicate_commands();
-
-local mutex = KEYS[1];
-local contenderId = ARGV[1];
-local transition = ARGV[2];
-local mutexKey = 'simba:' .. mutex;
-
--- Step 1: Atomic acquire with expiry
-local succeed = redis.call('set', mutexKey, contenderId, 'nx', 'px', transition)
-
-if succeed then
-    -- Won the lock. Notify all subscribers.
-    local message = 'acquired@@' .. contenderId;
-    redis.call('publish', mutexKey, message)
-    return contenderId..'@@'..transition;
+-- KEYS[1] = simba:{mutex}; ARGV[1] = contenderId; ARGV[2] = lease (ttl + transition) in ms
+if redis.call('set', mutexKey, contenderId, 'nx', 'px', lease) then
+    -- Won the lease. Notify all subscribers.
+    redis.call('publish', mutexKey, 'acquired@@' .. contenderId)
+    return { contenderId, tonumber(lease) };
 end
-
--- Step 2: Lost. Join the wait queue.
-local contenderQueueKey = mutexKey .. ':contender';
-local nowTime = redis.call('time')[1];
-redis.call('zadd', contenderQueueKey, 'nx', nowTime, contenderId)
-
--- Step 3: Return current owner info
+-- Lost. Report the current owner and its remaining lease.
 local ownerId = redis.call('get', mutexKey)
-local ttl = redis.call('pttl', mutexKey)
-return ownerId..'@@'..ttl;
+if not ownerId then
+    return { '', 0 };
+end
+return { ownerId, redis.call('pttl', mutexKey) };
 ```
 
 Key design decisions:
 - `NX` flag ensures only one `SET` succeeds when no key exists
 - `PX` sets expiry in milliseconds, combining lock and TTL in one command
-- The sorted set wait queue enables targeted notification to waiting contenders
-- `redis.replicate_commands()` enables script effects replication in Redis Cluster
+- Keys arrive through `KEYS`, and the reply is a structured array rather than a delimited string
+- Waiting contenders need no queue: releases are broadcast on the mutex channel
 
 ### mutex_guard.lua
 
@@ -758,7 +743,7 @@ Used by the owner to renew TTL without releasing the lock. Checks that the calle
 
 ### mutex_release.lua
 
-Atomically checks ownership and releases. Publishes a release event to notify waiting contenders.
+Atomically checks ownership and releases. Broadcasts `released` on the mutex channel so every waiting contender contends immediately.
 
 ---
 
@@ -787,7 +772,7 @@ autonumber
     end
 ```
 
-The async dispatch is important: it prevents backend threads from being blocked by slow user callbacks. If the handle executor is a `ForkJoinPool.commonPool()`, callbacks run on shared worker threads. For production, consider using a dedicated executor to avoid contention with other ForkJoinPool users.
+The async dispatch is important: it prevents backend threads from being blocked by slow user callbacks. The library factories default to `ForkJoinPool.commonPool()`, where callbacks run on shared worker threads; the Spring Boot starter instead provides a dedicated `simbaHandleExecutor` bean. Outside Spring, pass a dedicated executor in production.
 
 ---
 

@@ -84,6 +84,16 @@ simba:
     enabled: true
 ```
 
+### Callback Executor
+
+Every backend runs `onAcquired` / `onReleased` on the `simbaHandleExecutor` bean, a dedicated daemon pool whose idle
+threads are reclaimed. Define a bean with that name to use your own executor:
+
+```kotlin
+@Bean(name = [SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME])
+fun simbaHandleExecutor(): Executor = Executors.newFixedThreadPool(2)
+```
+
 ## Timing Relationship
 
 Understanding how `ttl` and `transition` interact is essential for correct configuration:

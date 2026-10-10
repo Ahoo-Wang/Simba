@@ -48,7 +48,16 @@ object ContendExecutors {
      * so threads never exceed the number of contending services.
      */
     @JvmStatic
-    fun newIoExecutor(domain: String): ExecutorService {
+    fun newIoExecutor(domain: String): ExecutorService = newCachedExecutor(domain)
+
+    /**
+     * Executor for owner callbacks (`handleExecutor`). Each service dispatches its callbacks sequentially,
+     * so threads never exceed the number of services notifying at the same time.
+     */
+    @JvmStatic
+    fun newCallbackExecutor(domain: String): ExecutorService = newCachedExecutor(domain)
+
+    private fun newCachedExecutor(domain: String): ExecutorService {
         return ThreadPoolExecutor(
             0,
             Int.MAX_VALUE,

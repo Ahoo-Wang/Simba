@@ -41,7 +41,7 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
   (`[0, 1000)` when transition is zero).
 - JDBC: one `simba_mutex` row per mutex; the acquire `UPDATE` encodes the rule above using database time.
 - Redis: `simba:{mutex}` with `PX = ttl + transition`; acquire is `SET NX`, renew (guard) is `SET XX` by the
-  owner only; release deletes the key and publishes `released` to the earliest queued contender.
+  owner only; release deletes the key and broadcasts `released` on the mutex channel so every contender contends.
 - Zookeeper: Curator `LeaderLatch` at `/simba/{mutex}`; ttl/transition do not apply (`ttlAt = transitionAt = MAX`).
 - JDBC and Redis share the polling loop in `LeaseContendService`; a backend only implements `MutexLeaseStore`
   (one atomic call, no scheduling or notification). `LeaseConfig` is the single place for duration validation.
@@ -63,7 +63,8 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
 
 ### Threading
 - Owner notifications run asynchronously on a sequential executor over `handleExecutor`
-  (starter default: `ForkJoinPool.commonPool()`). Callbacks are invoked while holding the internal notify lock:
+  (library default: `ForkJoinPool.commonPool()`; the starter injects the dedicated `simbaHandleExecutor` bean).
+  Callbacks are invoked while holding the internal notify lock:
   `onAcquired` / `onReleased` must not block, and must not add locks that `start()` / `stop()` contend on.
 - `LeaseContendService` splits a trigger `ScheduledExecutorService` (never blocks) from an `ioExecutor` running
   `MutexLeaseStore` calls, with at most one call in flight per service and lifecycle. JDBC and Redis factories own
@@ -81,7 +82,8 @@ backend TCK (`MutexContendServiceSpec`). `simba-bom` / `simba-dependencies` are 
 
 ### Wire contracts (compatibility-sensitive; nodes of different versions may run together)
 - Redis key and channel names are built in both Kotlin (`RedisMutexKeys`) and Lua: `simba:{mutex}`,
-  `simba:{mutex}:{contenderId}`, queue `simba:{mutex}:contender`. Script results and messages use the `@@` delimiter.
+  `simba:{mutex}:{contenderId}` (kept for releases from Simba < 3.2 owners), legacy queue `simba:{mutex}:contender`
+  (only deleted). Pub/sub messages use `{event}@@{ownerId}`; Lua scripts take keys via `KEYS` and return arrays.
 - JDBC schema: `simba_mutex(mutex, acquired_at, ttl_at, transition_at, owner_id varchar(128), version)`; the SQL is
   MySQL-specific.
 

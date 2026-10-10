@@ -135,154 +135,91 @@ private fun contend(generation: Long) {
 
 ## Redis 后端
 
-Redis 后端使用原子 Lua 脚本执行锁操作，并使用 Redis 发布/订阅进行所有权变更的即时通知。对于非所有者，它完全避免了轮询。
+Redis 后端使用原子 Lua 脚本执行租约操作，并通过 Redis 发布/订阅广播所有权变更，等待中的竞争者可以立即响应，而不必等到下一次轮询。
 
 ### Lua 脚本
 
-三个 Lua 脚本实现了完整的锁协议：
+所有脚本都通过 `KEYS` 接收键（符合 Redis Cluster 规范）。获取和守护脚本返回 `{ownerId, 剩余租约毫秒数}`，没有持有者时返回 `{'', 0}`。
 
 #### mutex_acquire.lua
 
-[`mutex_acquire.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_acquire.lua) 通过 `SET ... NX PX` 尝试获取锁：
+[`mutex_acquire.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_acquire.lua) 以 `ttl + transition` 为时长通过 `SET ... NX PX` 获取，并宣告新持有者：
 
 ```lua
--- 1. Try SET NX (atomic acquire)
-local succeed = redis.call('set', mutexKey, contenderId, 'nx', 'px', transition)
-if succeed then
-    -- Publish acquisition event to all listeners
+if redis.call('set', mutexKey, contenderId, 'nx', 'px', lease) then
     redis.call('publish', mutexKey, 'acquired@@' .. contenderId)
-    return contenderId .. '@@' .. transition
+    return { contenderId, tonumber(lease) };
 end
-
--- 2. Failed — add self to wait queue (sorted set, scored by time)
-redis.call('zadd', contenderQueueKey, 'nx', nowTime, contenderId)
--- 3. Return current owner and its remaining TTL
 local ownerId = redis.call('get', mutexKey)
-local ttl = redis.call('pttl', mutexKey)
-return ownerId .. '@@' .. ttl
+if not ownerId then
+    return { '', 0 };
+end
+return { ownerId, redis.call('pttl', mutexKey) };
 ```
-
-关键设计决策：
-- 使用 `NX`（仅在键不存在时设置）进行原子获取。
-- TTL 设置为 `ttl + transition`（完整的锁有效窗口）。
-- 获取失败时，竞争者被添加到一个以时间戳为分数的有序集合（`{mutex}:contender`）中，形成等待队列。
 
 #### mutex_guard.lua
 
-[`mutex_guard.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_guard.lua) 在调用者是当前所有者时续约锁：
-
-```lua
--- Verify ownership before renewal
-if redis.call('get', mutexKey) ~= contenderId then
-    return getCurrentOwner(mutexKey)  -- not owner, return current state
-end
--- Extend TTL with XX (only if key exists)
-if redis.call('set', mutexKey, contenderId, 'xx', 'px', transition) then
-    return contenderId .. '@@' .. transition
-end
-```
-
-`XX` 标志确保续约仅在键仍然存在时成功（防止在过期后意外创建锁）。
+[`mutex_guard.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_guard.lua) 仅在调用者仍持有租约时通过 `SET ... XX PX` 续期，否则返回当前持有者。它不会重新创建已经过期的租约。
 
 #### mutex_release.lua
 
-[`mutex_release.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_release.lua) 释放锁并通知等待队列中的下一个竞争者：
+[`mutex_release.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_release.lua) 只释放调用者自己的租约，并广播释放：
 
 ```lua
--- 1. Verify ownership
 if redis.call('get', mutexKey) ~= contenderId then
-    redis.call('zrem', contenderQueueKey, contenderId)
-    return 0
+    redis.call('zrem', legacyQueueKey, contenderId)
+    return 0;
 end
--- 2. Delete the lock
-redis.call('del', mutexKey)
--- 3. Dequeue the next contender and notify via Pub/Sub
-local contenderQueue = redis.call('zrevrange', contenderQueueKey, -1, -1)
-if #contenderQueue > 0 then
-    local nextContender = contenderQueue[1]
-    redis.call('zrem', contenderQueueKey, nextContender)
-    local channel = mutexKey .. ':' .. nextContender
-    redis.call('publish', channel, 'released@@' .. contenderId)
-end
+redis.call('del', mutexKey, legacyQueueKey)
+redis.call('publish', mutexKey, 'released@@' .. contenderId)
+return 1;
 ```
 
-释放脚本使用 `ZREVRANGE -1 -1` 获取分数*最低*（最早加入）的竞争者，实现了 FIFO 公平性。
+所有存活的竞争者都会收到广播并立即竞争，只有一个能 `SET NX` 成功。与定向唤醒不同，释放通知不会因为某个竞争者崩溃而丢失。`legacyQueueKey`（`simba:{mutex}:contender`）只由 Simba < 3.2 写入，在这里被删除。
 
-### 发布/订阅通道
+### 发布/订阅频道
 
-Redis 后端使用两种类型的通道（[SpringRedisMutexContendService，第 67 行](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendService.kt#L67)）：
+| 频道 | 用途 |
+|---|---|
+| `simba:{mutex}` | 所有竞争者订阅，承载 `acquired@@{id}` 和 `released@@{id}`。 |
+| `simba:{mutex}:{contenderId}` | 为滚动升级保留：Simba < 3.2 的持有者会把释放消息发到这里。 |
 
-| 通道 | 模式 | 用途 |
-|---|---|---|
-| `simba:{mutex}` | 广播 | 所有竞争者订阅。获取时发布。 |
-| `simba:{mutex}:{contenderId}` | 每竞争者独立 | 定向通知。释放时发布给下一个等待者。 |
-
-`{mutex}` 哈希标签确保在 Redis 集群中，两个通道和锁键都哈希到同一个槽。
+`{mutex}` 哈希标签让租约键和两个频道落在同一个 Redis Cluster 槽位。[`RedisMutexKeys`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/RedisMutexKeys.kt) 是 Kotlin 侧这些名称的唯一来源。
 
 ### OwnerEvent 协议
 
-消息编码为 `{event}@@{ownerId}` 格式（[`OwnerEvent`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/OwnerEvent.kt)）：
+消息编码为 `{event}@@{ownerId}`（[`OwnerEvent`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/OwnerEvent.kt)）：
 
-| 事件 | 含义 |
+| 事件 | 响应 |
 |---|---|
-| `acquired@@{id}` | 某竞争者已获取锁 |
-| `released@@{id}` | 锁已释放；被通知的竞争者应尝试获取 |
+| `acquired@@{id}` | 更新观测到的持有者 |
+| `released@@{id}` | 清除观测到的持有者并立即竞争（`contendNow()`） |
 
 ### Redis 争用流程
 
 ```mermaid
 sequenceDiagram
 autonumber
-    participant CA as Contender A
     participant SA as RedisService A
     participant REDIS as Redis
     participant SB as RedisService B
-    participant CB as Contender B
 
-    CA->>SA: start()
-    SA->>REDIS: SUBSCRIBE simba:{m}, simba:{m}:A
-
-    CB->>SB: start()
-    SB->>REDIS: SUBSCRIBE simba:{m}, simba:{m}:B
-
+    SA->>REDIS: SUBSCRIBE simba:{m}
+    SB->>REDIS: SUBSCRIBE simba:{m}
     SA->>REDIS: EVAL mutex_acquire(A, ttl+transition)
-    REDIS-->>SA: A@@transition (acquired)
-    REDIS->>SA: PUBLISH acquired@@A (via subscription)
-    REDIS->>SB: PUBLISH acquired@@A (via subscription)
-    SA->>CA: onAcquired()
-    SB->>CB: notifyOwner(A)
-
+    REDIS-->>SA: {A, lease}
+    REDIS->>SB: PUBLISH acquired@@A
     SB->>REDIS: EVAL mutex_acquire(B, ttl+transition)
-    REDIS-->>SB: A@@ttl_remaining (failed)
-    REDIS->>REDIS: ZADD contender_queue now B
-    Note over SB: B waits for targeted release notification
-
-    loop Owner renewal
-        SA->>REDIS: EVAL mutex_guard(A, ttl)
-        REDIS-->>SA: A@@transition (renewed)
+    REDIS-->>SB: {A, remaining}
+    loop Owner renewal at ttlAt
+        SA->>REDIS: EVAL mutex_guard(A, ttl+transition)
+        REDIS-->>SA: {A, lease}
     end
-
-    Note over CA: Application stops
-    CA->>SA: close()
     SA->>REDIS: EVAL mutex_release(A)
-    REDIS->>REDIS: DEL mutex key
-    REDIS->>REDIS: ZREVRANGE contender_queue
-    REDIS->>SB: PUBLISH released@@A to channel simba:{m}:B
-    SB->>CB: onMessage(released)
+    REDIS->>SB: PUBLISH released@@A
     SB->>REDIS: EVAL mutex_acquire(B, ttl+transition)
-    REDIS-->>SB: B@@transition (acquired)
-    SB->>CB: onAcquired()
+    REDIS-->>SB: {B, lease}
 ```
-
-### 有序集合等待队列
-
-等待队列使用键为 `simba:{mutex}:contender` 的 Redis 有序集合：
-
-- **分数**：竞争者的加入时间戳（秒，来自 `TIME` 命令）。
-- **NX 标志**：仅在竞争者不在队列中时添加。
-- **出队**：`ZREVRANGE key -1 -1` 获取分数最低（最早加入）的成员，然后 `ZREM` 移除它。
-
-这在保持队列轻量的同时，为等待中的竞争者提供了 FIFO 顺序。
 
 ## Zookeeper 后端
 
@@ -402,7 +339,7 @@ flowchart LR
 | **通知方式** | 通过 `ScheduledThreadPoolExecutor` 轮询 | 发布/订阅即时通知 | ZNode 监听（内置于 Curator） |
 | **故障检测** | TTL 到期（轮询间隔） | 键 TTL 到期 + 发布/订阅 | 会话丢失时删除临时节点 |
 | **延迟** | 轮询间隔（通常基于 ttl） | 亚毫秒级（发布/订阅推送） | 会话超时（通常 5-30 秒） |
-| **公平性** | 通过数据库时间戳实现先到先服务 | FIFO 有序集合等待队列 | 顺序节点排序 |
+| **公平性** | 无；`transitionAt` 之后（含抖动）最先轮询的竞争者获胜 | 无；最先响应释放广播的竞争者获胜 | 顺序节点排序 |
 | **外部依赖** | MySQL（或任何 JDBC 数据库） | Redis | Zookeeper 集群 |
 | **代码复杂度** | 中等（约 6 个 Kotlin 类） | 较高（约 5 个类 + 3 个 Lua 脚本） | 较低（约 2 个 Kotlin 类） |
 | **集群支持** | 通过共享数据库 | 通过 Redis 集群（哈希标签） | 通过 Zookeeper 集群 |

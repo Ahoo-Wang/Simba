@@ -15,6 +15,7 @@ package me.ahoo.simba.spring.boot.starter.jdbc
 import io.mockk.mockk
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.jdbc.MutexOwnerRepository
+import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 import org.assertj.core.api.AssertionsForInterfaceTypes.assertThat
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
@@ -33,7 +34,7 @@ internal class SimbaJdbcAutoConfigurationTest {
     fun contextLoads() {
         contextRunner
             .withBean(DataSource::class.java, { mockk() })
-            .withUserConfiguration(SimbaJdbcAutoConfiguration::class.java)
+            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
             .run {
                 assertThat(it)
                     .hasSingleBean(SimbaJdbcAutoConfiguration::class.java)
@@ -48,7 +49,7 @@ internal class SimbaJdbcAutoConfigurationTest {
         contextRunner
             .withBean(DataSource::class.java, { mockk() })
             .withPropertyValues("simba.jdbc.initial-delay=10S", "simba.jdbc.ttl=20S", "simba.jdbc.transition=30S")
-            .withUserConfiguration(SimbaJdbcAutoConfiguration::class.java)
+            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
             .run {
                 assertThat(it)
                     .hasSingleBean(JdbcProperties::class.java)
@@ -70,7 +71,7 @@ internal class SimbaJdbcAutoConfigurationTest {
         contextRunner
             .withBean(DataSource::class.java, { mockk() })
             .withPropertyValues("simba.jdbc.ttl=0ms")
-            .withUserConfiguration(SimbaJdbcAutoConfiguration::class.java)
+            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
             .run {
                 assertThat(it).hasFailed()
             }
@@ -81,7 +82,7 @@ internal class SimbaJdbcAutoConfigurationTest {
         contextRunner
             .withBean(DataSource::class.java, { mockk() })
             .withPropertyValues("simba.jdbc.enabled=false")
-            .withUserConfiguration(SimbaJdbcAutoConfiguration::class.java)
+            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
             .run {
                 assertThat(it)
                     .doesNotHaveBean(JdbcProperties::class.java)
@@ -94,7 +95,7 @@ internal class SimbaJdbcAutoConfigurationTest {
     @Test
     fun contextBacksOffWithoutDataSource() {
         contextRunner
-            .withUserConfiguration(SimbaJdbcAutoConfiguration::class.java)
+            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
             .run {
                 assertThat(it)
                     .hasNotFailed()
@@ -107,7 +108,7 @@ internal class SimbaJdbcAutoConfigurationTest {
     fun contextLoadsWithCustomRepositoryWithoutDataSource() {
         contextRunner
             .withBean(MutexOwnerRepository::class.java, { mockk() })
-            .withUserConfiguration(SimbaJdbcAutoConfiguration::class.java)
+            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
             .run {
                 assertThat(it)
                     .hasNotFailed()
@@ -121,7 +122,7 @@ internal class SimbaJdbcAutoConfigurationTest {
         contextRunner
             .withBean("firstDataSource", DataSource::class.java, { mockk() })
             .withBean("secondDataSource", DataSource::class.java, { mockk() })
-            .withUserConfiguration(SimbaJdbcAutoConfiguration::class.java)
+            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
             .run {
                 assertThat(it)
                     .hasNotFailed()

@@ -86,7 +86,7 @@ Simba deliberately does **not** use Kotlin coroutines. All concurrency is handle
 - `CompletableFuture` for async owner notifications
 - `Executor` interfaces for callback dispatch
 - `LockSupport.park/unpark` in `SimbaLocker`
-- `ForkJoinPool.commonPool()` as the default handle executor
+- `ForkJoinPool.commonPool()` as the library factories' default handle executor (the Spring Boot starter provides a dedicated `simbaHandleExecutor` bean)
 
 This is a deliberate design choice: the library targets server-side JVM applications where `java.util.concurrent` is well-understood, predictable, and does not require coroutine context management.
 
@@ -673,7 +673,7 @@ extends [`LeaseContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/sim
 
 1. **`SpringRedisMutexLeaseStore`**: `contend()` runs `mutex_guard.lua` when renewing and `mutex_acquire.lua`
    otherwise, parses the `AcquireResult` and rebuilds the `MutexOwner` timeline; `release()` runs `mutex_release.lua`,
-   which also wakes the earliest queued contender.
+   which broadcasts `released` so every waiting contender contends immediately.
 2. **`RedisMutexKeys`**: the single Kotlin source of key and channel names, aligned with the Lua scripts.
 3. **`onStart()` / `onStop()`**: subscribe and unsubscribe the `MutexMessageListener`.
 4. **`MutexMessageListener.onMessage()`**:
@@ -960,7 +960,7 @@ A: When the lock expires, all waiting contenders schedule their next attempt at 
 A: Simba is designed for mutual exclusion (one-at-a-time access). It is not suitable for counting or rate limiting. For those use cases, use Redis `INCR` with expiry, or a dedicated rate limiter library.
 
 **Q: What is the `handleExecutor` parameter in the factory constructors?**
-A: It is the `Executor` on which `onAcquired`/`onReleased` callbacks are dispatched. By default, `ForkJoinPool.commonPool()` is used. In production, consider creating a dedicated executor to avoid contention with other ForkJoinPool users.
+A: It is the `Executor` on which `onAcquired`/`onReleased` callbacks are dispatched. The library factories default to `ForkJoinPool.commonPool()`; the Spring Boot starter injects its dedicated `simbaHandleExecutor` bean, which you can replace by defining a bean with that name. Outside Spring, pass a dedicated executor in production.
 
 **Q: How do I choose between `FIXED_RATE` and `FIXED_DELAY` scheduling strategies?**
 A: Use `FIXED_RATE` when work must run at consistent wall-clock intervals (e.g., every 30 seconds). Use `FIXED_DELAY` when you want a minimum gap between work completions. `FIXED_DELAY` is safer for long-running work because it prevents task pile-up.
@@ -1064,13 +1064,20 @@ This means:
 
 The dual-timestamp model (`ttlAt` + `transitionAt`) is Simba's key design innovation:
 
-```
-timeline: ----[acquired]----[ttlAt]----[transitionAt]----
-                      |          |              |
-                      |   TTL expires    Transition expires
-                      |          |              |
-                Owner can   Owner can      Any contender
-                use lock    still renew     can take over
+```mermaid
+gantt
+    title TTL + Transition Timeline
+    dateFormat X
+    axisFormat %L ms
+
+    section Owner
+    Exclusive use (TTL window)    :active, ttl, 0, 5000
+    Grace period (transition)     :trans, 5000, 8000
+
+    section Contenders
+    Must not contend              :done, wait1, 0, 5000
+    Timing jitter window          :crit, jitter, 7800, 9000
+    Can acquire                   :acq, 8000, 10000
 ```
 
 - **TTL period** (`acquiredAt` to `ttlAt`): The owner has exclusive use of the lock. No other contender should attempt acquisition.
@@ -1142,42 +1149,54 @@ The transition period gives the existing owner a window to renew even after TTL 
 
 ### Class Hierarchy
 
-```
-MutexRetriever (interface)
-  mutex: String
-  notifyOwner(MutexState)
+```mermaid
+classDiagram
+    class MutexRetriever {
+        <<interface>>
+        +mutex: String
+        +notifyOwner(MutexState)
+    }
+    class MutexContender {
+        <<interface>>
+        +contenderId: String
+        +onAcquired(MutexState)
+        +onReleased(MutexState)
+    }
+    class MutexRetrievalService {
+        <<interface>>
+        +status: Status
+        +retriever: MutexRetriever
+        +mutexState: MutexState
+        +start()
+        +stop()
+    }
+    class MutexContendService {
+        <<interface>>
+        +contender: MutexContender
+        +isOwner: Boolean
+    }
+    class MutexContendServiceFactory {
+        <<interface>>
+        +createMutexContendService(MutexContender) MutexContendService
+    }
 
-MutexContender (interface extends MutexRetriever)
-  contenderId: String
-  onAcquired(MutexState)    -- callback
-  onReleased(MutexState)    -- callback
-
-MutexRetrievalService (interface extends AutoCloseable)
-  status: Status {INITIAL, STARTING, RUNNING, STOPPING}
-  retriever: MutexRetriever
-  mutexState: MutexState
-  start(), stop()
-
-MutexContendService (interface extends MutexRetrievalService)
-  contender: MutexContender
-  isOwner: Boolean
-
-MutexContendServiceFactory (interface)
-  createMutexContendService(MutexContender) -> MutexContendService
+    MutexRetriever <|-- MutexContender
+    MutexRetrievalService <|-- MutexContendService
+    MutexContendServiceFactory ..> MutexContendService
+    MutexContendServiceFactory ..> MutexContender
 ```
 
 ### State Machine
 
-```
-INITIAL --start()--> STARTING
-  ^                     |
-  |                     | startRetrieval() succeeds
-  |                     v
-  +--stop()-------- RUNNING
-  ^                     |
-  |                     | stop()
-  |                     v
-  +--cleanup()---- STOPPING
+```mermaid
+stateDiagram-v2
+    [*] --> INITIAL
+    INITIAL --> STARTING : start()
+    STARTING --> RUNNING : startRetrieval() succeeds
+    RUNNING --> STOPPING : stop()
+    STOPPING --> INITIAL : cleanup()
+    INITIAL --> INITIAL : stop() - illegal
+    RUNNING --> RUNNING : start() - illegal
 ```
 
 The status transitions use `AtomicReferenceFieldUpdater.compareAndSet()` to prevent concurrent transitions. This means `start()` from `INITIAL` and `stop()` from `RUNNING` are the only valid paths.
@@ -1415,8 +1434,7 @@ Services created by `JdbcMutexContendServiceFactory` share one trigger thread an
 
 Each mutex in Redis uses:
 - 1 string key (the mutex name -> owner ID, ~50 bytes)
-- 1 sorted set (the wait queue, ~100 bytes per contender)
-- 2 pub/sub subscriptions per contender (global channel + per-contender channel)
+- Pub/sub subscriptions per contender: the mutex channel, plus the per-contender channel kept for rolling upgrades from Simba < 3.2
 
 For 100 mutexes with 10 contenders each, this is approximately 100KB of Redis memory -- negligible.
 
@@ -1585,8 +1603,13 @@ Simba scales horizontally by design: each application instance runs its own cont
 
 The status field in [`AbstractMutexRetrievalService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/AbstractMutexRetrievalService.kt) uses `AtomicReferenceFieldUpdater` with `compareAndSet`:
 
-```
-INITIAL --[CAS]--> STARTING --[set]--> RUNNING --[CAS]--> STOPPING --[set]--> INITIAL
+```mermaid
+stateDiagram-v2
+    [*] --> INITIAL
+    INITIAL --> STARTING : CAS - compareAndSet
+    STARTING --> RUNNING : set
+    RUNNING --> STOPPING : CAS - compareAndSet
+    STOPPING --> INITIAL : set
 ```
 
 - `start()` uses `compareAndSet(INITIAL, STARTING)` -- only one thread can succeed
@@ -1661,39 +1684,25 @@ Both paths converge to the same result; pub/sub only improves latency.
 ### mutex_acquire.lua
 
 ```lua
-redis.replicate_commands();
-
-local mutex = KEYS[1];
-local contenderId = ARGV[1];
-local transition = ARGV[2];
-local mutexKey = 'simba:' .. mutex;
-
--- Step 1: Atomic acquire with expiry
-local succeed = redis.call('set', mutexKey, contenderId, 'nx', 'px', transition)
-
-if succeed then
-    -- Won the lock. Notify all subscribers.
-    local message = 'acquired@@' .. contenderId;
-    redis.call('publish', mutexKey, message)
-    return contenderId..'@@'..transition;
+-- KEYS[1] = simba:{mutex}; ARGV[1] = contenderId; ARGV[2] = lease (ttl + transition) in ms
+if redis.call('set', mutexKey, contenderId, 'nx', 'px', lease) then
+    -- Won the lease. Notify all subscribers.
+    redis.call('publish', mutexKey, 'acquired@@' .. contenderId)
+    return { contenderId, tonumber(lease) };
 end
-
--- Step 2: Lost. Join the wait queue.
-local contenderQueueKey = mutexKey .. ':contender';
-local nowTime = redis.call('time')[1];
-redis.call('zadd', contenderQueueKey, 'nx', nowTime, contenderId)
-
--- Step 3: Return current owner info
+-- Lost. Report the current owner and its remaining lease.
 local ownerId = redis.call('get', mutexKey)
-local ttl = redis.call('pttl', mutexKey)
-return ownerId..'@@'..ttl;
+if not ownerId then
+    return { '', 0 };
+end
+return { ownerId, redis.call('pttl', mutexKey) };
 ```
 
 Key design decisions:
 - `NX` flag ensures only one `SET` succeeds when no key exists
 - `PX` sets expiry in milliseconds, combining lock and TTL in one command
-- The sorted set wait queue enables targeted notification to waiting contenders
-- `redis.replicate_commands()` enables script effects replication in Redis Cluster
+- Keys arrive through `KEYS`, and the reply is a structured array rather than a delimited string
+- Waiting contenders need no queue: releases are broadcast on the mutex channel
 
 ### mutex_guard.lua
 
@@ -1701,7 +1710,7 @@ Used by the owner to renew TTL without releasing the lock. Checks that the calle
 
 ### mutex_release.lua
 
-Atomically checks ownership and releases. Publishes a release event to notify waiting contenders.
+Atomically checks ownership and releases. Broadcasts `released` on the mutex channel so every waiting contender contends immediately.
 
 ---
 
@@ -1716,25 +1725,21 @@ autonumber
     participant Contender as MutexContender
     participant User as User Code
 
-    Backend->>Service: notifyOwner(newOwner: MutexOwner)
-    Service->>Service: CompletableFuture.runAsync({
-    Note over Service: Compute MutexState(afterOwner, newOwner)
-    Note over Service: mutexState = newState (volatile write)
-    Service->>Contender: retriever.notifyOwner(newState)
-    }, handleExecutor)
-    Service->>Executor: Dispatch async
+    Backend->>Service: notifyOwner(newOwner)
+    Note over Service: Compute MutexState and update volatile field
+    Service->>Executor: CompletableFuture.runAsync - dispatch
     Executor->>Contender: notifyOwner(newState)
     Contender->>Contender: Check isChanged
     alt State changed and this contender acquired
         Contender->>User: onAcquired(mutexState)
     else State changed and this contender released
         Contender->>User: onReleased(mutexState)
-    else State not changed (same owner)
-        Contender->>Contender: Skip (no callback)
+    else State not changed - same owner
+        Contender->>Contender: Skip - no callback
     end
 ```
 
-The async dispatch is important: it prevents backend threads from being blocked by slow user callbacks. If the handle executor is a `ForkJoinPool.commonPool()`, callbacks run on shared worker threads. For production, consider using a dedicated executor to avoid contention with other ForkJoinPool users.
+The async dispatch is important: it prevents backend threads from being blocked by slow user callbacks. The library factories default to `ForkJoinPool.commonPool()`, where callbacks run on shared worker threads; the Spring Boot starter instead provides a dedicated `simbaHandleExecutor` bean. Outside Spring, pass a dedicated executor in production.
 
 ---
 
@@ -2815,8 +2820,8 @@ need to implement `startRetrieval()` / `stopRetrieval()` (and by extension, `sta
 Owner notifications are always dispatched asynchronously via
 `CompletableFuture.runAsync(safeNotifyOwner, handleExecutor)` ([line 71](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/AbstractMutexRetrievalService.kt#L71)).
 This ensures that a slow `onAcquired()` / `onReleased()` callback never blocks the contention
-scheduling thread. The default `handleExecutor` is `ForkJoinPool.commonPool()` in the JDBC and
-Redis factories.
+scheduling thread. The JDBC and Redis factories default `handleExecutor` to `ForkJoinPool.commonPool()`;
+the Spring Boot starter passes its dedicated `simbaHandleExecutor` bean instead.
 
 ## Key Concepts
 
@@ -2890,7 +2895,7 @@ flowchart LR
 | Module | Role |
 |---|---|
 | `simba-core` | Core interfaces and abstract implementations |
-| `simba-jdbc` | JDBC/MySQL backend — polling with optimistic locking |
+| `simba-jdbc` | JDBC/MySQL backend — polling with atomic conditional updates |
 | `simba-spring-redis` | Redis backend — Lua scripts + pub/sub notifications |
 | `simba-zookeeper` | Zookeeper backend — Curator LeaderLatch recipe |
 | `simba-spring-boot-starter` | Spring Boot auto-configuration |
@@ -3508,7 +3513,9 @@ autonumber
     participant BACKEND as Backend
 
     Note over A: TTL at 5000ms, transition at 7000ms
-    Note over B,C,D: Not owners — computing jitter
+    Note over B: Not owner — computing jitter
+    Note over C: Not owner — computing jitter
+    Note over D: Not owner — computing jitter
 
     B->>B: delay = 7000 - now + random(-200,1000) = 6950
     C->>C: delay = 7000 - now + random(-200,1000) = 7100
@@ -3763,8 +3770,8 @@ dependencies, and operational complexity.
 
 ## JDBC Backend
 
-The JDBC backend uses a MySQL table (`simba_mutex`) with optimistic locking via a `version`
-column. Contention is driven by polling through a `ScheduledThreadPoolExecutor`.
+The JDBC backend uses a MySQL table (`simba_mutex`) with atomic conditional `UPDATE`s guarded by
+owner/transition predicates. Contention is driven by polling through a `ScheduledThreadPoolExecutor`.
 
 ### Schema
 
@@ -3778,7 +3785,7 @@ CREATE TABLE IF NOT EXISTS simba_mutex (
     acquired_at   BIGINT UNSIGNED NOT NULL,
     ttl_at        BIGINT UNSIGNED NOT NULL,
     transition_at BIGINT UNSIGNED NOT NULL,
-    owner_id      CHAR(32)       NOT NULL,
+    owner_id      VARCHAR(128)   NOT NULL,
     version       INT UNSIGNED   NOT NULL
 );
 ```
@@ -3791,16 +3798,16 @@ erDiagram
         bigint ttl_at "Epoch millis: TTL expiry"
         bigint transition_at "Epoch millis: transition window end"
         char owner_id "Contender ID of current owner"
-        int version "Optimistic lock version counter"
+        int version "State change counter"
     }
 ```
 
 The `MutexOwnerEntity` class ([`JdbcMutexOwnerRepository.kt`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/MutexOwnerRepository.kt))
-extends `MutexOwner` with a `version` field for optimistic locking and a `currentDbAt`
+extends `MutexOwner` with a `version` state-change counter and a `currentDbAt`
 field that captures the database server's current timestamp, preventing clock skew issues
 between application nodes.
 
-### Atomic Acquire (Optimistic Locking)
+### Atomic Acquire (Conditional Update)
 
 The `SQL_ACQUIRE` query in
 [`JdbcMutexOwnerRepository`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexOwnerRepository.kt#L43)
@@ -3907,163 +3914,101 @@ database calls; the factory owns both and shuts them down on `close()`.
 
 ## Redis Backend
 
-The Redis backend uses atomic Lua scripts for lock operations and Redis Pub/Sub for instant
-notification of ownership changes. It avoids polling entirely for non-owners.
+The Redis backend uses atomic Lua scripts for lease operations and Redis Pub/Sub broadcasts so that waiting
+contenders react to ownership changes immediately instead of waiting for their next poll.
 
 ### Lua Scripts
 
-Three Lua scripts implement the entire lock protocol:
+All scripts receive their keys through `KEYS` (Redis Cluster compliant). The acquire and guard scripts return
+`{ownerId, remaining lease in ms}`, or `{'', 0}` when there is no owner.
 
 #### mutex_acquire.lua
 
 [`mutex_acquire.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_acquire.lua)
-attempts to acquire the lock via `SET ... NX PX`:
+acquires with `SET ... NX PX` for `ttl + transition` and announces the new owner:
 
 ```lua
--- 1. Try SET NX (atomic acquire)
-local succeed = redis.call('set', mutexKey, contenderId, 'nx', 'px', transition)
-if succeed then
-    -- Publish acquisition event to all listeners
+if redis.call('set', mutexKey, contenderId, 'nx', 'px', lease) then
     redis.call('publish', mutexKey, 'acquired@@' .. contenderId)
-    return contenderId .. '@@' .. transition
+    return { contenderId, tonumber(lease) };
 end
-
--- 2. Failed — add self to wait queue (sorted set, scored by time)
-redis.call('zadd', contenderQueueKey, 'nx', nowTime, contenderId)
--- 3. Return current owner and its remaining TTL
 local ownerId = redis.call('get', mutexKey)
-local ttl = redis.call('pttl', mutexKey)
-return ownerId .. '@@' .. ttl
+if not ownerId then
+    return { '', 0 };
+end
+return { ownerId, redis.call('pttl', mutexKey) };
 ```
-
-Key design decisions:
-- Uses `NX` (only set if key does not exist) for atomic acquisition.
-- The TTL is set to `ttl + transition` (the full lock validity window).
-- On failure, the contender is added to a sorted set (`{mutex}:contender`) scored by timestamp,
-  forming a wait queue.
 
 #### mutex_guard.lua
 
 [`mutex_guard.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_guard.lua)
-renews the lock if the caller is the current owner:
-
-```lua
--- Verify ownership before renewal
-if redis.call('get', mutexKey) ~= contenderId then
-    return getCurrentOwner(mutexKey)  -- not owner, return current state
-end
--- Extend TTL with XX (only if key exists)
-if redis.call('set', mutexKey, contenderId, 'xx', 'px', transition) then
-    return contenderId .. '@@' .. transition
-end
-```
-
-The `XX` flag ensures the renewal only succeeds if the key still exists (preventing
-accidental lock creation after expiry).
+renews the lease with `SET ... XX PX` only when the caller still owns it, otherwise it reports the current
+owner. It never recreates a lease that already expired.
 
 #### mutex_release.lua
 
 [`mutex_release.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_release.lua)
-releases the lock and notifies the next contender in the wait queue:
+releases only the caller's own lease and broadcasts the release:
 
 ```lua
--- 1. Verify ownership
 if redis.call('get', mutexKey) ~= contenderId then
-    redis.call('zrem', contenderQueueKey, contenderId)
-    return 0
+    redis.call('zrem', legacyQueueKey, contenderId)
+    return 0;
 end
--- 2. Delete the lock
-redis.call('del', mutexKey)
--- 3. Dequeue the next contender and notify via Pub/Sub
-local contenderQueue = redis.call('zrevrange', contenderQueueKey, -1, -1)
-if #contenderQueue > 0 then
-    local nextContender = contenderQueue[1]
-    redis.call('zrem', contenderQueueKey, nextContender)
-    local channel = mutexKey .. ':' .. nextContender
-    redis.call('publish', channel, 'released@@' .. contenderId)
-end
+redis.call('del', mutexKey, legacyQueueKey)
+redis.call('publish', mutexKey, 'released@@' .. contenderId)
+return 1;
 ```
 
-The release script uses `ZREVRANGE -1 -1` to get the contender with the *lowest* score
-(earliest join time), implementing FIFO fairness.
+Every live contender receives the broadcast and contends at once; exactly one wins the `SET NX`. Unlike a
+targeted wake-up, no release can be lost to a crashed contender. `legacyQueueKey` (`simba:{mutex}:contender`)
+is only written by Simba < 3.2 and is deleted here.
 
 ### Pub/Sub Channels
 
-The Redis backend uses two types of channels ([SpringRedisMutexContendService, line 67](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendService.kt#L67)):
+| Channel | Purpose |
+|---|---|
+| `simba:{mutex}` | All contenders subscribe. Carries `acquired@@{id}` and `released@@{id}`. |
+| `simba:{mutex}:{contenderId}` | Kept for rolling upgrades: Simba < 3.2 owners address releases here. |
 
-| Channel | Pattern | Purpose |
-|---|---|---|
-| `simba:{mutex}` | Broadcast | All contenders subscribe. Published on acquisition. |
-| `simba:{mutex}:{contenderId}` | Per-contender | Targeted notification. Published on release to the next waiter. |
-
-The `{mutex}` hash tag ensures that in Redis Cluster, both channels and the lock key
-hash to the same slot.
+The `{mutex}` hash tag keeps the lease key and both channels in one Redis Cluster slot.
+[`RedisMutexKeys`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/RedisMutexKeys.kt) is the
+single Kotlin source of these names.
 
 ### OwnerEvent Protocol
 
 Messages are encoded as `{event}@@{ownerId}` ([`OwnerEvent`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/OwnerEvent.kt)):
 
-| Event | Meaning |
+| Event | Reaction |
 |---|---|
-| `acquired@@{id}` | A contender has acquired the lock |
-| `released@@{id}` | The lock has been released; the addressed contender should attempt acquisition |
+| `acquired@@{id}` | Update the observed owner |
+| `released@@{id}` | Clear the observed owner and contend immediately (`contendNow()`) |
 
 ### Redis Contention Flow
 
 ```mermaid
 sequenceDiagram
 autonumber
-    participant CA as Contender A
     participant SA as RedisService A
     participant REDIS as Redis
     participant SB as RedisService B
-    participant CB as Contender B
 
-    CA->>SA: start()
-    SA->>REDIS: SUBSCRIBE simba:{m}, simba:{m}:A
-
-    CB->>SB: start()
-    SB->>REDIS: SUBSCRIBE simba:{m}, simba:{m}:B
-
+    SA->>REDIS: SUBSCRIBE simba:{m}
+    SB->>REDIS: SUBSCRIBE simba:{m}
     SA->>REDIS: EVAL mutex_acquire(A, ttl+transition)
-    REDIS-->>SA: A@@transition (acquired)
-    REDIS->>SA: PUBLISH acquired@@A (via subscription)
-    REDIS->>SB: PUBLISH acquired@@A (via subscription)
-    SA->>CA: onAcquired()
-    SB->>CB: notifyOwner(A)
-
+    REDIS-->>SA: {A, lease}
+    REDIS->>SB: PUBLISH acquired@@A
     SB->>REDIS: EVAL mutex_acquire(B, ttl+transition)
-    REDIS-->>SB: A@@ttl_remaining (failed)
-    REDIS->>REDIS: ZADD contender_queue now B
-    Note over SB: B waits for targeted release notification
-
-    loop Owner renewal
-        SA->>REDIS: EVAL mutex_guard(A, ttl)
-        REDIS-->>SA: A@@transition (renewed)
+    REDIS-->>SB: {A, remaining}
+    loop Owner renewal at ttlAt
+        SA->>REDIS: EVAL mutex_guard(A, ttl+transition)
+        REDIS-->>SA: {A, lease}
     end
-
-    Note over CA: Application stops
-    CA->>SA: close()
     SA->>REDIS: EVAL mutex_release(A)
-    REDIS->>REDIS: DEL mutex key
-    REDIS->>REDIS: ZREVRANGE contender_queue
-    REDIS->>SB: PUBLISH released@@A to channel simba:{m}:B
-    SB->>CB: onMessage(released)
+    REDIS->>SB: PUBLISH released@@A
     SB->>REDIS: EVAL mutex_acquire(B, ttl+transition)
-    REDIS-->>SB: B@@transition (acquired)
-    SB->>CB: onAcquired()
+    REDIS-->>SB: {B, lease}
 ```
-
-### Sorted Set Wait Queue
-
-The wait queue uses a Redis sorted set keyed at `simba:{mutex}:contender`:
-
-- **Score**: the contender's join timestamp (seconds, from `TIME` command).
-- **NX flag**: only adds if the contender is not already in the queue.
-- **Dequeue**: `ZREVRANGE key -1 -1` retrieves the member with the lowest score (earliest join),
-  then `ZREM` removes it.
-
-This gives FIFO ordering among waiting contenders while keeping the queue lightweight.
 
 ## Zookeeper Backend
 
@@ -4185,11 +4130,11 @@ flowchart LR
 
 | Feature | JDBC | Redis | Zookeeper |
 |---|---|---|---|
-| **Acquisition mechanism** | `UPDATE ... WHERE` with optimistic locking | `SET NX PX` atomic Lua script | Curator `LeaderLatch` (ephemeral sequential nodes) |
+| **Acquisition mechanism** | `UPDATE ... WHERE` guarded by owner/transition predicates | `SET NX PX` atomic Lua script | Curator `LeaderLatch` (ephemeral sequential nodes) |
 | **Notification** | Polling via `ScheduledThreadPoolExecutor` | Pub/Sub instant notification | ZNode watches (built into Curator) |
 | **Failure detection** | TTL expiry (polling interval) | Key TTL expiry + Pub/Sub | Ephemeral node deletion on session loss |
 | **Latency** | Polling interval (typically ttl-based) | Sub-millisecond (Pub/Sub push) | Session timeout (typically 5-30s) |
-| **Fairness** | First-come-first-served via DB timestamp | FIFO sorted set wait queue | Sequential node ordering |
+| **Fairness** | None; the first contender polling after `transitionAt` (jittered) wins | None; the first contender reacting to the release broadcast wins | Sequential node ordering |
 | **External dependency** | MySQL (or any JDBC database) | Redis | Zookeeper ensemble |
 | **Code complexity** | Medium (~6 Kotlin classes) | High (~5 classes + 3 Lua scripts) | Low (~2 Kotlin classes) |
 | **Cluster support** | Via shared database | Via Redis Cluster (hash tags) | Via Zookeeper ensemble |
@@ -4390,7 +4335,7 @@ graph TD
         direction TB
         MYSQL[("MySQL<br>simba_mutex")]
         REDIS[("Redis<br>Lua scripts + Pub/Sub")]
-        ZK[("Zookeeper<br>Curator InterProcessMutex")]
+        ZK[("Zookeeper<br>Curator LeaderLatch")]
     end
 
     APP --> CS
@@ -4487,7 +4432,7 @@ stateDiagram-v2
 | Feature | Simba | Redisson | Curator | ShedLock |
 |---|---|---|---|---|
 | **Storage** | JDBC, Redis, Zookeeper | Redis only | Zookeeper only | JDBC, Redis, Mongo |
-| **API style** | Callback, RAII, Scheduler | Lock, Semaphore, etc. | InterProcessMutex | Annotation-based |
+| **API style** | Callback, RAII, Scheduler | Lock, Semaphore, etc. | LeaderLatch | Annotation-based |
 | **Leader election** | Built-in (TTL + transition) | Lock-based | Ephemeral nodes | N/A |
 | **Scheduled task support** | `AbstractScheduler` | Not built-in | Not built-in | Core feature |
 | **Thundering herd mitigation** | Random jitter (-200ms..+1s) | Pub/Sub wait | Watch-based | N/A |
@@ -4964,7 +4909,7 @@ Defined in [`ZookeeperProperties`]([file_path:simba-spring-boot-starter/src/main
 |---|---|---|---|
 | `simba.zookeeper.enabled` | `Boolean` | `true` | Enable the Zookeeper backend. |
 
-The Zookeeper backend delegates TTL and lease management to Curator's `InterProcessMutex`, so no additional timing properties are needed at the Simba level.
+The Zookeeper backend delegates leadership lifecycle management to Curator's `LeaderLatch`, so no additional timing properties are needed at the Simba level.
 
 **Example `application.yml`:**
 
@@ -4972,6 +4917,16 @@ The Zookeeper backend delegates TTL and lease management to Curator's `InterProc
 simba:
   zookeeper:
     enabled: true
+```
+
+### Callback Executor
+
+Every backend runs `onAcquired` / `onReleased` on the `simbaHandleExecutor` bean, a dedicated daemon pool whose idle
+threads are reclaimed. Define a bean with that name to use your own executor:
+
+```kotlin
+@Bean(name = [SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME])
+fun simbaHandleExecutor(): Executor = Executors.newFixedThreadPool(2)
 ```
 
 ## Timing Relationship
@@ -5869,7 +5824,7 @@ interface MutexRetrievalService : AutoCloseable {
 | `running` | `Boolean` | `true` if `status` is `STARTING` or `RUNNING` |
 | `start()` | `void` | Transitions from `INITIAL` to `RUNNING`. Throws if not in `INITIAL`. |
 | `stop()` | `void` | Transitions from `RUNNING` to `INITIAL`. Throws if not in `RUNNING`. |
-| `close()` | `void` | Delegates to `stop()` |
+| `close()` | `void` | Idempotent: stops the service if `RUNNING`, no-op otherwise |
 
 ### Status Enum
 
@@ -6838,10 +6793,10 @@ graph TB
 | Module | Role | Key Types | Dependencies |
 |---|---|---|---|
 | **simba-core** | Core interfaces, abstract classes, value objects | `MutexContender`, `MutexContendService`, `SimbaLocker`, `AbstractScheduler` | kotlin-logging, cosid-core, guava |
-| **simba-jdbc** | JDBC/MySQL backend with optimistic locking | `JdbcMutexContendService`, `JdbcMutexOwnerRepository` | simba-core, JDBC driver |
+| **simba-jdbc** | JDBC/MySQL backend with atomic conditional updates | `JdbcMutexContendService`, `JdbcMutexOwnerRepository` | simba-core, JDBC driver |
 | **simba-spring-redis** | Redis backend with Lua scripts and pub/sub | `SpringRedisMutexContendService`, Lua scripts | simba-core, spring-data-redis |
 | **simba-zookeeper** | Zookeeper backend using Curator LeaderLatch | `ZookeeperMutexContendService` | simba-core, curator-recipes |
-| **simba-spring-boot-starter** | Auto-configuration for all backends | `SimbaJdbcAutoConfiguration`, `SimbaSpringRedisAutoConfiguration`, `SimbaZookeeperAutoConfiguration` | simba-core + conditional backend deps |
+| **simba-spring-boot-starter** | Auto-configuration for all backends | `SimbaAutoConfiguration`, `SimbaJdbcAutoConfiguration`, `SimbaSpringRedisAutoConfiguration`, `SimbaZookeeperAutoConfiguration` | simba-core + conditional backend deps |
 | **simba-test** | TCK (Technology Compatibility Kit) | `MutexContendServiceSpec`, `LockSpec` | simba-core, JUnit 5 |
 | **simba-bom** | BOM (Bill of Materials) for version management | -- | -- |
 | **simba-dependencies** | Dependency version constraints | -- | -- |
@@ -6856,13 +6811,12 @@ graph LR
 
         J_REPO["MutexOwnerRepository"]
         J_SCHED["ScheduledThreadPoolExecutor<br>(polling)"]
-        J_DDL["simba_mutex table<br>optimistic locking"]
+        J_DDL["simba_mutex table<br>conditional UPDATE"]
     end
     subgraph sg_30 ["Redis Backend"]
 
         R_LUA["Lua Scripts<br>acquire/guard/release"]
         R_PS["Pub/Sub<br>RedisMessageListenerContainer"]
-        R_ZSET["Sorted Set<br>contender queue"]
     end
     subgraph sg_31 ["Zookeeper Backend"]
 
@@ -6875,7 +6829,6 @@ graph LR
     style J_DDL fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style R_LUA fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style R_PS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style R_ZSET fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style Z_LATCH fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style Z_CUR fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
@@ -6884,7 +6837,7 @@ graph LR
 |---|---|---|---|
 | **Coordination mechanism** | Poll with `ScheduledThreadPoolExecutor` | Lua scripts + pub/sub | Curator `LeaderLatch` |
 | **Lock storage** | `simba_mutex` table | Redis key (`simba:{mutex}`) | ZNode (`/simba/{mutex}`) |
-| **Ownership transfer** | Optimistic locking via `version` column | Sorted set wait queue + pub/sub notification | ZK watcher on latch participants |
+| **Ownership transfer** | Atomic conditional `UPDATE` guarded by owner/transition predicates | `SET NX` + pub/sub broadcast of releases | ZK watcher on latch participants |
 | **Time source** | MySQL `current_timestamp(3)` | System clock (client-side) | ZK server time |
 | **External dependency** | MySQL instance | Redis instance | ZooKeeper ensemble |
 | **Best for** | Existing relational DB infrastructure | High-throughput, low-latency | Strong consistency guarantees |
@@ -7193,7 +7146,9 @@ Key thread-safety mechanisms in simba-core:
 <doc title="simba-jdbc Module" path="modules/simba-jdbc.md">
 # simba-jdbc Module
 
-The `simba-jdbc` module provides a JDBC-based distributed mutex backend using MySQL. It uses optimistic locking (a `version` column) to ensure safe concurrent updates to the `simba_mutex` table, and polls the database on a `ScheduledThreadPoolExecutor` to detect ownership changes.
+The `simba-jdbc` module provides a JDBC-based distributed mutex backend using MySQL. It serializes concurrent updates to the `simba_mutex` table with atomic conditional `UPDATE`s guarded by owner/transition predicates, and polls the database on a `ScheduledThreadPoolExecutor` to detect ownership changes.
+
+> **MySQL version requirement**: the backend reads database time through `UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))`. On 64-bit MySQL 8.0.28+ the returned value is valid through year 3001; on older versions the valid range ends at 2038-01-19 UTC, where out-of-range calls return 0 and owner timestamps silently fall back to JVM time. Plan an upgrade before 2038 if you run an older MySQL.
 
 ## Schema DDL
 
@@ -7208,7 +7163,7 @@ CREATE TABLE IF NOT EXISTS simba_mutex (
     acquired_at   BIGINT UNSIGNED NOT NULL,
     ttl_at        BIGINT UNSIGNED NOT NULL,
     transition_at BIGINT UNSIGNED NOT NULL,
-    owner_id      CHAR(32)       NOT NULL,
+    owner_id      VARCHAR(128)   NOT NULL,
     version       INT UNSIGNED   NOT NULL
 );
 ```
@@ -7223,10 +7178,10 @@ erDiagram
         bigint ttl_at "epoch millis -- TTL expiry"
         bigint transition_at "epoch millis -- grace period end"
         char owner_id "contender ID of current owner"
-        int version "optimistic lock version"
+        int version "state change counter"
     }
 
-    note for SIMBA_MUTEX "Each row represents one distributed mutex.<br>Optimistic locking via version column prevents<br>concurrent ownership conflicts."
+    note for SIMBA_MUTEX "Each row represents one distributed mutex.<br>Conditional UPDATE + InnoDB row lock prevents<br>concurrent ownership conflicts."
 ```
 
 ### Column Semantics
@@ -7237,8 +7192,8 @@ erDiagram
 | `acquired_at` | `BIGINT UNSIGNED` | Epoch millis when the current owner acquired the lock. `0` when no owner. |
 | `ttl_at` | `BIGINT UNSIGNED` | Epoch millis when the TTL expires. After this, other contenders may attempt acquisition. |
 | `transition_at` | `BIGINT UNSIGNED` | Epoch millis when the grace period ends. Equals `acquired_at + ttl + transition`. |
-| `owner_id` | `CHAR(32)` | The `contenderId` of the current owner. Empty string when no owner. |
-| `version` | `INT UNSIGNED` | Incremented on every acquire/release for optimistic concurrency control. |
+| `owner_id` | `VARCHAR(128)` | The `contenderId` of the current owner. Empty string when no owner. |
+| `version` | `INT UNSIGNED` | Incremented on every acquire/release as a state-change counter. Not compared in `WHERE` — concurrency is guarded by the owner/transition predicates. |
 
 ## Key Classes
 
@@ -7317,7 +7272,7 @@ class MutexOwnerEntity(
 
 | Field | Description |
 |---|---|
-| `version` | The optimistic lock version from the database. Used for concurrency control. |
+| `version` | State-change counter from the database. Not used for concurrency decisions. |
 | `currentDbAt` | The database server's current timestamp, used to prevent clock skew issues between application servers. |
 
 ### JdbcMutexContendService
@@ -7420,7 +7375,7 @@ simba:
 | Situation | Behavior |
 |---|---|
 | Mutex row does not exist | `NotFoundMutexOwnerException` thrown; use `tryInitMutex()` or `ensureOwner()` to auto-create |
-| Concurrent acquisition conflict | Optimistic locking via `version` column; the `UPDATE` returns 0 affected rows |
+| Concurrent acquisition conflict | Atomic conditional `UPDATE` guarded by owner/transition predicates; the loser's `UPDATE` affects 0 rows |
 | SQL error during contend | Logged at ERROR level; next contend scheduled after `ttl` period |
 | Transaction rollback | `acquireAndGetOwner` rolls back on any exception and wraps in `SimbaException` |
 
@@ -7444,347 +7399,171 @@ The module does not bundle a JDBC driver. The application must provide the MySQL
 <doc title="simba-spring-redis Module" path="modules/simba-spring-redis.md">
 # simba-spring-redis Module
 
-The `simba-spring-redis` module provides a Redis-based distributed mutex backend using Spring Data Redis. It achieves atomic lock operations through Lua scripts executed server-side, and uses Redis pub/sub for near-instant ownership change notifications.
+The `simba-spring-redis` module provides a Redis-based distributed mutex backend using Spring Data Redis. Lock operations are atomic Lua scripts executed server-side, and Redis pub/sub broadcasts ownership changes so waiting contenders react immediately instead of waiting for their next poll.
 
 ## Architecture Overview
 
 ```mermaid
 graph TB
-    subgraph sg_48 ["Application"]
-
-        SVC["SpringRedisMutexContendService"]
+    subgraph sg_app ["Application"]
+        SVC["SpringRedisMutexContendService<br>(LeaseContendService)"]
+        STORE["SpringRedisMutexLeaseStore"]
+        KEYS["RedisMutexKeys"]
     end
-    subgraph sg_49 ["Redis Operations"]
-
-        ACQ["mutex_acquire.lua<br>SET NX PX + publish"]
+    subgraph sg_lua ["Lua Scripts"]
+        ACQ["mutex_acquire.lua<br>SET NX PX + publish acquired"]
         GRD["mutex_guard.lua<br>SET XX PX (renew)"]
-        REL["mutex_release.lua<br>DEL + publish to queue"]
+        REL["mutex_release.lua<br>DEL + publish released"]
     end
-    subgraph sg_50 ["Redis Data Structures"]
-
+    subgraph sg_data ["Redis"]
         KEY["simba:{mutex}<br>String (ownerId)"]
-        ZSET["simba:{mutex}:contender<br>Sorted Set (wait queue)"]
-        CHAN["simba:{mutex}<br>Pub/Sub Channel"]
-    end
-    subgraph sg_51 ["Spring Data Redis"]
-
-        SRT["StringRedisTemplate"]
-        RMLC["RedisMessageListenerContainer"]
+        CHAN["simba:{mutex}<br>Pub/Sub channel"]
     end
 
-    SVC --> SRT
-    SVC --> RMLC
-    SRT --> ACQ
-    SRT --> GRD
-    SRT --> REL
+    SVC --> STORE
+    STORE --> KEYS
+    SVC --> KEYS
+    STORE --> ACQ
+    STORE --> GRD
+    STORE --> REL
     ACQ --> KEY
-    ACQ --> ZSET
+    ACQ --> CHAN
     GRD --> KEY
     REL --> KEY
-    REL --> ZSET
     REL --> CHAN
-    RMLC --> CHAN
+    CHAN --> SVC
 
     style SVC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
+    style STORE fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
+    style KEYS fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style ACQ fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style GRD fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style REL fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style KEY fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style ZSET fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style CHAN fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style SRT fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style RMLC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 
-## Redis Data Structures
+## Redis Keys and Channels
 
-The module uses a hash-tag convention (`{mutex}`) to ensure all keys for a given mutex land on the same Redis cluster slot.
+All names share the `{mutex}` hash tag, so they land on one Redis Cluster slot. [`RedisMutexKeys`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/RedisMutexKeys.kt) is the single Kotlin source of these names.
 
-| Key | Type | Purpose |
+| Name | Type | Purpose |
 |---|---|---|
-| `simba:{mutex}` | String | Stores the `contenderId` of the current owner. TTL set via `PX` (milliseconds). |
-| `simba:{mutex}:contender` | Sorted Set | Wait queue. Members are `contenderId` values; scores are insertion timestamps. |
-| Channel: `simba:{mutex}` | Pub/Sub | Broadcasts `acquired@@{ownerId}` when a contender acquires the lock. |
-| Channel: `simba:{mutex}:{contenderId}` | Pub/Sub | Per-contender channel. Receives `released@@{ownerId}` when the lock is released and this contender is next in the wait queue. |
+| `simba:{mutex}` | String | `contenderId` of the current owner, expiring after `ttl + transition` (`PX`). |
+| `simba:{mutex}` | Pub/Sub channel | Broadcasts `acquired@@{ownerId}` and `released@@{ownerId}` to every contender. |
+| `simba:{mutex}:{contenderId}` | Pub/Sub channel | Still subscribed so that Simba < 3.2 owners, which address releases to one queued contender, can wake this node during a rolling upgrade. |
+| `simba:{mutex}:contender` | Sorted set (legacy) | Wait queue written only by Simba < 3.2; deleted on every release. |
 
 ## Lua Scripts
 
+Every script receives its keys through `KEYS` (Redis Cluster compliant). `mutex_acquire.lua` and `mutex_guard.lua` return a two-element array `{ownerId, remaining lease in ms}`, or `{'', 0}` when there is no owner.
+
 ### mutex_acquire.lua
 
-**Source:** [simba-spring-redis/src/main/resources/mutex_acquire.lua](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_acquire.lua)
+[`mutex_acquire.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_acquire.lua)
 
 ```lua
-redis.replicate_commands();
-
-local mutex = KEYS[1];
-local contenderId = ARGV[1];
-local transition = ARGV[2];
-local mutexKey = 'simba:' .. mutex;
-
--- 1. Try to acquire the lock (SET NX PX)
-local succeed = redis.call('set', mutexKey, contenderId, 'nx', 'px', transition)
-
-if succeed then
-    -- Publish acquisition event to the mutex channel
-    local message = 'acquired@@' .. contenderId;
-    redis.call('publish', mutexKey, message)
-    return contenderId..'@@'..transition;
+if redis.call('set', mutexKey, contenderId, 'nx', 'px', lease) then
+    redis.call('publish', mutexKey, 'acquired@@' .. contenderId)
+    return { contenderId, tonumber(lease) };
 end
-
--- 2. Failed: add self to wait queue (sorted set)
-local contenderQueueKey = mutexKey .. ':contender';
-local nowTime = redis.call('time')[1];
-redis.call('zadd', contenderQueueKey, 'nx', nowTime, contenderId)
-
--- Return current owner and remaining TTL
 local ownerId = redis.call('get', mutexKey)
-local ttl = redis.call('pttl', mutexKey)
-return ownerId..'@@'..ttl;
+if not ownerId then
+    return { '', 0 };
+end
+return { ownerId, redis.call('pttl', mutexKey) };
 ```
 
-**Logic:**
-1. Attempts `SET key value NX PX ttl` -- atomic lock acquisition.
-2. On success: publishes `acquired@@{contenderId}` to the mutex channel, returns the owner and transition time.
-3. On failure: adds self to the sorted set wait queue (score = current server timestamp), returns the current owner and remaining TTL.
+`SET NX PX` acquires atomically for `ttl + transition` and announces the new owner. On failure the script reports the current owner and its remaining lease.
 
 ### mutex_guard.lua
 
-**Source:** [simba-spring-redis/src/main/resources/mutex_guard.lua](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_guard.lua)
-
-```lua
-local mutex = KEYS[1];
-local contenderId = ARGV[1];
-local transition = ARGV[2];
-local mutexKey = 'simba:' .. mutex;
-
-local function getCurrentOwner(mutexKey)
-    local ownerId = redis.call('get', mutexKey)
-    if ownerId then
-        local ttl = redis.call('pttl', mutexKey)
-        return ownerId .. '@@' .. ttl;
-    end
-    return '@@';
-end
-
--- Check if current owner is this contender
-if redis.call('get', mutexKey) ~= contenderId then
-    return getCurrentOwner(mutexKey)
-end
-
--- Renew the TTL (SET XX PX)
-if redis.call('set', mutexKey, contenderId, 'xx', 'px', transition) then
-    return contenderId .. '@@' .. transition;
-else
-    return getCurrentOwner(mutexKey)
-end
-```
-
-**Logic:**
-1. Verifies the caller is the current owner (`GET` check).
-2. If owner, renews the TTL using `SET key value XX PX ttl` (only set if key exists).
-3. Returns the owner and TTL information.
+[`mutex_guard.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_guard.lua) renews the lease only when the caller still owns it (`SET XX PX`), otherwise it reports the current owner. It never creates a lease that has already expired.
 
 ### mutex_release.lua
 
-**Source:** [simba-spring-redis/src/main/resources/mutex_release.lua](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_release.lua)
+[`mutex_release.lua`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_release.lua)
 
 ```lua
-local mutex = KEYS[1];
-local contenderId = ARGV[1];
-local mutexKey = 'simba:' .. mutex;
-local contenderQueueKey = mutexKey .. ':contender';
-
--- 1. Verify caller is the owner
 if redis.call('get', mutexKey) ~= contenderId then
-    redis.call('zrem', contenderQueueKey, contenderId)
+    redis.call('zrem', legacyQueueKey, contenderId)
     return 0;
 end
-
--- 2. Delete the lock key
-local succeed = redis.call('del', mutexKey)
-if not succeed then return succeed; end
-
--- 3. Notify the next contender in the wait queue
-local contenderQueue = redis.call('zrevrange', contenderQueueKey, -1, -1);
-if #contenderQueue == 0 then return succeed; end
-
-local nextContender = contenderQueue[1];
-redis.call('zrem', contenderQueueKey, nextContender)
-
-local channel = mutexKey .. ':' .. nextContender;
-local message = 'released@@' .. contenderId;
-redis.call('publish', channel, message)
-
-return succeed;
+redis.call('del', mutexKey, legacyQueueKey)
+redis.call('publish', mutexKey, 'released@@' .. contenderId)
+return 1;
 ```
 
-**Logic:**
-1. Verifies the caller is the current owner. If not, removes self from the wait queue and returns failure.
-2. Deletes the lock key.
-3. Pops the first contender from the sorted set (lowest score = longest waiter) and publishes `released@@{ownerId}` to that contender's personal channel.
+Only the owner can release. The release is broadcast on the mutex channel, so every live contender contends immediately and one wins; no wake-up can be lost to a crashed contender.
 
 ## Key Classes
 
-### SpringRedisMutexContendService
-
-**Source:** [simba-spring-redis/.../SpringRedisMutexContendService.kt:42](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendService.kt#L42)
-
-```kotlin
-class SpringRedisMutexContendService(
-    contender: MutexContender,
-    handleExecutor: Executor,
-    private val ttl: Duration,
-    private val transition: Duration,
-    private val redisTemplate: StringRedisTemplate,
-    private val listenerContainer: RedisMessageListenerContainer,
-    private val scheduledExecutorService: ScheduledExecutorService
-) : AbstractMutexContendService(contender, handleExecutor)
-```
-
-| Parameter | Description |
+| Class | Role |
 |---|---|
-| `contender` | The mutex contender |
-| `handleExecutor` | Executor for async owner notification callbacks |
-| `ttl` | Lock TTL (passed to Lua scripts as the PX value for guard, and as part of transition for acquire) |
-| `transition` | Grace period; the total key TTL is `ttl + transition` |
-| `redisTemplate` | `StringRedisTemplate` for Lua script execution |
-| `listenerContainer` | `RedisMessageListenerContainer` for pub/sub |
-| `scheduledExecutorService` | Schedules contend/guard cycles |
+| [`SpringRedisMutexContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendService.kt) | `LeaseContendService` subclass; subscribes in `onStart()`, unsubscribes in `onStop()`, and reacts to owner events. |
+| [`SpringRedisMutexLeaseStore`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexLeaseStore.kt) | `MutexLeaseStore`: runs `mutex_guard.lua` when renewing, `mutex_acquire.lua` otherwise, and `mutex_release.lua`. |
+| [`AcquireResult`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/AcquireResult.kt) | Parses a script reply into the owner and the absolute lease end (`transitionAt`). |
+| [`OwnerEvent`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/OwnerEvent.kt) | Parses pub/sub messages `{event}@@{ownerId}`. |
 
-### Channels
-
-The service subscribes to two topics:
-
-| Channel | Purpose |
+| Event | Reaction |
 |---|---|
-| `simba:{mutex}` | Global mutex channel -- receives `acquired@@{ownerId}` broadcasts |
-| `simba:{mutex}:{contenderId}` | Per-contender channel -- receives `released@@{ownerId}` when this contender is selected from the wait queue |
+| `acquired` | Update the observed owner. |
+| `released` | Clear the observed owner and call `contendNow()` for an immediate attempt. |
 
-### AcquireResult
-
-**Source:** [simba-spring-redis/.../AcquireResult.kt:22](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/AcquireResult.kt#L22)
-
-Parses the Lua script return format `{ownerId}@@{ttl}`:
-
-```kotlin
-data class AcquireResult(val ownerId: String, val transitionAt: Long)
-```
-
-### OwnerEvent
-
-**Source:** [simba-spring-redis/.../OwnerEvent.kt:20](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/OwnerEvent.kt#L20)
-
-Parses pub/sub message format `{event}@@{ownerId}`:
-
-```kotlin
-data class OwnerEvent(val event: String, val ownerId: String, val eventAt: Long)
-```
-
-| Event | Trigger |
-|---|---|
-| `acquired` | A contender successfully acquired the lock (from `mutex_acquire.lua`) |
-| `released` | The current owner released the lock and this contender is next in queue (from `mutex_release.lua`) |
-
-## Sequence Diagram -- Redis Lock Acquisition
+## Sequence Diagram -- Acquisition and Hand-off
 
 ```mermaid
 sequenceDiagram
 autonumber
-    participant C1 as Contender-1
     participant S1 as Service-1
     participant Redis as Redis
     participant S2 as Service-2
-    participant C2 as Contender-2
 
-    Note over C1,C2: Both services subscribe to pub/sub channels
-
-    S1->>Redis: mutex_acquire.lua (key={mutex}, NX, PX=ttl+transition)
-    Redis-->>S1: {ownerId}@@{transitionTime}
-    Redis->>S1: publish acquired@@C1 (mutex channel)
-    Redis->>S2: publish acquired@@C1 (mutex channel)
-    S1->>C1: onAcquired()
-    S2->>C2: notifyOwner(C1 owns)
-
-    Note over S1: Service-1 schedules guard (renew TTL)
-
-    loop While leader
-        S1->>Redis: mutex_guard.lua (renew TTL)
-        Redis-->>S1: {C1}@@{ttl}
+    Note over S1,S2: Both services subscribe to simba:{m}
+    S1->>Redis: mutex_acquire.lua (NX, PX=ttl+transition)
+    Redis-->>S1: {S1, lease}
+    Redis->>S2: publish acquired@@S1
+    S2->>Redis: mutex_acquire.lua
+    Redis-->>S2: {S1, remaining}
+    loop While owner
+        S1->>Redis: mutex_guard.lua
+        Redis-->>S1: {S1, lease}
     end
-
-    Note over S1: Service-1 stops (release)
     S1->>Redis: mutex_release.lua
-    Redis->>Redis: DEL key, select next from sorted set
-    Redis->>S2: publish released@@C1 to contender channel
-    S2->>Redis: mutex_acquire.lua (NX, PX=ttl+transition)
-    Redis-->>S2: {C2}@@{transitionTime}
-    Redis->>S1: publish acquired@@C2
-    Redis->>S2: publish acquired@@C2
-    S2->>C2: onAcquired()
-```
-
-## Sequence Diagram -- Pub/Sub Driven Handoff
-
-```mermaid
-sequenceDiagram
-autonumber
-    participant R as Redis (mutex_release.lua)
-    participant ZSET as Sorted Set (wait queue)
-    participant CHAN_C2 as Channel: simba:{m}:{C2}
-    participant S2 as Service-2
-
-    R->>ZSET: zrevrange(-1, -1) -- get first waiter
-    ZSET-->>R: [C2]
-    R->>ZSET: zrem(C2)
-    R->>CHAN_C2: publish released@@{oldOwner}
-    CHAN_C2->>S2: onMessage(released event)
-    S2->>S2: notifyOwner(MutexOwner.NONE)
-    S2->>R: mutex_acquire.lua (try acquire immediately)
-    R-->>S2: success -- {C2}@@{ttl}
+    Redis->>S2: publish released@@S1
+    S2->>Redis: mutex_acquire.lua
+    Redis-->>S2: {S2, lease}
 ```
 
 ## Properties
 
-```yaml
-simba:
-  enabled: true
-  redis:
-    enabled: true       # Redis backend enable (default: true)
-    ttl: 10s            # Lock TTL
-    transition: 6s      # Grace period after TTL
-```
-
-**Source:** [simba-spring-boot-starter/.../RedisProperties.kt:25](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/redis/RedisProperties.kt#L25)
-
 | Property | Default | Description |
 |---|---|---|
 | `simba.redis.enabled` | `true` | Enable the Redis backend |
-| `simba.redis.ttl` | `10s` | Lock TTL -- the key's PX value for guard, and part of the PX for acquire |
-| `simba.redis.transition` | `6s` | Grace period; total key TTL on acquire = `ttl + transition` |
+| `simba.redis.ttl` | `10s` | Time after acquisition at which the owner renews |
+| `simba.redis.transition` | `6s` | Grace period; the key expires after `ttl + transition` |
 
 ## Factory
 
-**Source:** [simba-spring-redis/.../SpringRedisMutexContendServiceFactory.kt:31](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendServiceFactory.kt#L31)
+[`SpringRedisMutexContendServiceFactory`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendServiceFactory.kt)
 
 ```kotlin
 class SpringRedisMutexContendServiceFactory(
-    private val ttl: Duration,
-    private val transition: Duration,
-    private val redisTemplate: StringRedisTemplate,
-    private val listenerContainer: RedisMessageListenerContainer,
-    private val handleExecutor: Executor = ForkJoinPool.commonPool(),
-    private val scheduledExecutorService: ScheduledExecutorService = Executors.newScheduledThreadPool(1)
-) : MutexContendServiceFactory
+    ttl: Duration,
+    transition: Duration,
+    redisTemplate: StringRedisTemplate,
+    listenerContainer: RedisMessageListenerContainer,
+    handleExecutor: Executor = ForkJoinPool.commonPool(),
+    scheduledExecutorService: ScheduledExecutorService = ContendExecutors.newScheduler("simba-redis"),
+    ioExecutor: ExecutorService = ContendExecutors.newIoExecutor("simba-redis-io")
+) : MutexContendServiceFactory, AutoCloseable
 ```
 
-## Redis Cluster Compatibility
+All services share the scheduler (contention triggers and lease watchdogs) and the I/O executor (script calls). The factory owns both and shuts them down on `close()`. The Spring Boot starter passes its `simbaHandleExecutor` bean as `handleExecutor`.
 
-The `{mutex}` hash-tag in all keys ensures that `simba:{mutex}`, `simba:{mutex}:contender`, and the associated pub/sub channel all hash to the same Redis cluster slot. This is required because Lua scripts access multiple keys atomically -- all keys must reside on the same node.
+## Rolling Upgrade from Simba < 3.2
 
-```
-Key: simba:{order-lock}         -> slot = hash("order-lock")
-Key: simba:{order-lock}:contender -> slot = hash("order-lock")
-```
+Key and channel names are unchanged. Older nodes keep receiving releases because they subscribe to the mutex channel and handle `released` from any channel; newer nodes keep their per-contender channel for releases sent by older owners. Older contenders that are only in the legacy queue may wait for their next poll until all nodes are upgraded.
 
 ## Dependencies
 
@@ -7794,11 +7573,9 @@ simba-spring-redis
   └── spring-data-redis
 ```
 
-The module depends on `spring-data-redis` for `StringRedisTemplate`, `RedisScript`, and `RedisMessageListenerContainer`. The application must provide a Redis connection factory.
-
 ## See Also
 
-- [simba-core Module](./simba-core) -- core interfaces
+- [simba-core Module](./simba-core) -- core interfaces and `LeaseContendService`
 - [simba-spring-boot-starter](./simba-spring-boot-starter) -- auto-configuration with `simba.redis.*` properties
 - [simba-jdbc](./simba-jdbc) -- JDBC alternative backend
 </doc>
@@ -8101,11 +7878,12 @@ The `simba-spring-boot-starter` module provides Spring Boot auto-configuration f
 
 ## Auto-Configuration Classes
 
-The module registers three auto-configuration classes via Spring Boot's standard mechanism.
+The module registers four auto-configuration classes via Spring Boot's standard mechanism.
 
 **Source:** [simba-spring-boot-starter/.../org.springframework.boot.autoconfigure.AutoConfiguration.imports](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports)
 
 ```
+me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 me.ahoo.simba.spring.boot.starter.jdbc.SimbaJdbcAutoConfiguration
 me.ahoo.simba.spring.boot.starter.redis.SimbaSpringRedisAutoConfiguration
 me.ahoo.simba.spring.boot.starter.zookeeper.SimbaZookeeperAutoConfiguration
@@ -8237,12 +8015,31 @@ annotation class ConditionalOnSimbaZookeeperEnabled
 
 ## Auto-Configuration Details
 
+### SimbaAutoConfiguration
+
+**Source:** [simba-spring-boot-starter/.../SimbaAutoConfiguration.kt](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/SimbaAutoConfiguration.kt)
+
+```kotlin
+@AutoConfiguration
+@ConditionalOnSimbaEnabled
+class SimbaAutoConfiguration {
+
+    @Bean(name = ["simbaHandleExecutor"], destroyMethod = "shutdown")
+    @ConditionalOnMissingBean(name = ["simbaHandleExecutor"])
+    fun simbaHandleExecutor(): ExecutorService
+}
+```
+
+Provides the executor that runs `onAcquired` / `onReleased` callbacks for every backend: a dedicated daemon
+pool whose idle threads are reclaimed, so blocking callbacks cannot starve `ForkJoinPool.commonPool()`. Define a
+bean named `simbaHandleExecutor` to replace it.
+
 ### SimbaJdbcAutoConfiguration
 
 **Source:** [simba-spring-boot-starter/.../SimbaJdbcAutoConfiguration.kt:32](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/jdbc/SimbaJdbcAutoConfiguration.kt#L32)
 
 ```kotlin
-@AutoConfiguration
+@AutoConfiguration(after = [SimbaAutoConfiguration::class])
 @ConditionalOnSimbaJdbcEnabled
 @ConditionalOnClass(JdbcMutexContendServiceFactory::class)
 @EnableConfigurationProperties(JdbcProperties::class)
@@ -8252,7 +8049,10 @@ class SimbaJdbcAutoConfiguration(private val jdbcProperties: JdbcProperties) {
     fun mutexOwnerRepository(dataSource: DataSource): MutexOwnerRepository
 
     @Bean @ConditionalOnMissingBean
-    fun jdbcMutexContendServiceFactory(mutexOwnerRepository: MutexOwnerRepository): MutexContendServiceFactory
+    fun jdbcMutexContendServiceFactory(
+        mutexOwnerRepository: MutexOwnerRepository,
+        @Qualifier("simbaHandleExecutor") handleExecutor: Executor
+    ): MutexContendServiceFactory
 }
 ```
 
@@ -8266,7 +8066,7 @@ class SimbaJdbcAutoConfiguration(private val jdbcProperties: JdbcProperties) {
 **Source:** [simba-spring-boot-starter/.../SimbaSpringRedisAutoConfiguration.kt:34](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/redis/SimbaSpringRedisAutoConfiguration.kt#L34)
 
 ```kotlin
-@AutoConfiguration(after = [DataRedisAutoConfiguration::class])
+@AutoConfiguration(after = [DataRedisAutoConfiguration::class, SimbaAutoConfiguration::class])
 @ConditionalOnSimbaRedisEnabled
 @ConditionalOnClass(StringRedisTemplate::class)
 @EnableConfigurationProperties(RedisProperties::class)
@@ -8278,7 +8078,8 @@ class SimbaSpringRedisAutoConfiguration(private val redisProperties: RedisProper
     @Bean @ConditionalOnMissingBean @ConditionalOnBean(StringRedisTemplate::class)
     fun redisMutexContendServiceFactory(
         redisTemplate: StringRedisTemplate,
-        listenerContainer: RedisMessageListenerContainer
+        listenerContainer: RedisMessageListenerContainer,
+        @Qualifier("simbaHandleExecutor") handleExecutor: Executor
     ): MutexContendServiceFactory
 }
 ```
@@ -8295,14 +8096,17 @@ The configuration runs `after = DataRedisAutoConfiguration` to ensure the Redis 
 **Source:** [simba-spring-boot-starter/.../SimbaZookeeperAutoConfiguration.kt:30](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-boot-starter/src/main/kotlin/me/ahoo/simba/spring/boot/starter/zookeeper/SimbaZookeeperAutoConfiguration.kt#L30)
 
 ```kotlin
-@AutoConfiguration
+@AutoConfiguration(after = [SimbaAutoConfiguration::class])
 @ConditionalOnSimbaZookeeperEnabled
 @ConditionalOnClass(ZookeeperMutexContendServiceFactory::class)
 @EnableConfigurationProperties(ZookeeperProperties::class)
 class SimbaZookeeperAutoConfiguration {
 
     @Bean @ConditionalOnBean(CuratorFramework::class) @ConditionalOnMissingBean
-    fun zookeeperMutexContendServiceFactory(curatorFramework: CuratorFramework): ZookeeperMutexContendServiceFactory
+    fun zookeeperMutexContendServiceFactory(
+        curatorFramework: CuratorFramework,
+        @Qualifier("simbaHandleExecutor") handleExecutor: Executor
+    ): MutexContendServiceFactory
 }
 ```
 
@@ -9669,12 +9473,12 @@ CREATE TABLE IF NOT EXISTS simba_mutex (
     acquired_at   BIGINT UNSIGNED NOT NULL,
     ttl_at        BIGINT UNSIGNED NOT NULL,
     transition_at BIGINT UNSIGNED NOT NULL,
-    owner_id      CHAR(32)    NOT NULL,
+    owner_id      VARCHAR(128) NOT NULL,
     version       INT UNSIGNED NOT NULL
 );
 ```
 
-The `version` column enables optimistic locking for concurrent acquisition attempts. [`JdbcMutexOwnerRepository`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexOwnerRepository.kt) uses `UPDATE ... WHERE version = ?` to ensure only one contender succeeds per cycle.
+Concurrent acquisition attempts are serialized by an atomic conditional `UPDATE` guarded by owner/transition predicates. [`JdbcMutexOwnerRepository`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexOwnerRepository.kt) performs `UPDATE ... WHERE mutex = ? AND (transition_at < now OR (owner_id = ? AND transition_at > now))`; the InnoDB row lock plus predicate re-evaluation ensure only one contender succeeds per cycle. The `version` column is a change counter — incremented on every state change, never compared.
 
 ### Test Class
 
@@ -9722,7 +9526,7 @@ autonumber
     C->>CS: start()
     CS->>CS: startContend() -> schedule(initialDelay)
     CS->>DB: acquireAndGetOwner(mutex, contenderId, ttl, transition)
-    DB->>DB: UPDATE WHERE version matches (optimistic lock)
+    DB->>DB: UPDATE guarded by owner/transition predicates
     DB-->>CS: MutexOwner (current state)
     CS->>CS: notifyOwner(mutexOwner)
     CS->>CS: nextDelay = contendPeriod.ensureNextDelay()
@@ -9783,18 +9587,16 @@ flowchart TD
     subgraph channels["Pub/Sub Channels"]
         style channels fill:#161b22,stroke:#30363d,color:#e6edf3
         MC["simba:{mutex}<br>Global channel"]
-        CC["simba:{mutex}:{id}<br>Per-contender channel"]
+        CC["simba:{mutex}:{id}<br>Per-contender channel (legacy)"]
     end
 
     subgraph state["State"]
         style state fill:#161b22,stroke:#30363d,color:#e6edf3
         KEY["simba:{mutex}<br>String key (owner ID)"]
-        QUEUE["simba:{mutex}:contender<br>Sorted Set (wait queue)"]
     end
 
     ACQUIRE --> MC
     ACQUIRE --> KEY
-    ACQUIRE --> QUEUE
     GUARD --> KEY
     RELEASE --> MC
     RELEASE --> KEY
@@ -9805,13 +9607,12 @@ flowchart TD
     style MC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style CC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style KEY fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style QUEUE fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 
 The `mutex_acquire.lua` script ([source](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_acquire.lua)):
-1. Attempts `SET mutexKey contenderId NX PX transition` -- atomic acquire with expiry
+1. Attempts `SET mutexKey contenderId NX PX lease` (lease = ttl + transition) -- atomic acquire with expiry
 2. On success: publishes `acquired@@contenderId` to the global channel
-3. On failure: adds the contender to a sorted set wait queue and returns the current owner + remaining TTL
+3. On failure: returns the current owner and its remaining lease as `{ownerId, pttl}`
 
 ### Test Class
 

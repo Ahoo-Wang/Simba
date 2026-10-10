@@ -90,7 +90,7 @@ Simba deliberately does **not** use Kotlin coroutines. All concurrency is handle
 - `CompletableFuture` for async owner notifications
 - `Executor` interfaces for callback dispatch
 - `LockSupport.park/unpark` in `SimbaLocker`
-- `ForkJoinPool.commonPool()` as the default handle executor
+- `ForkJoinPool.commonPool()` as the library factories' default handle executor (the Spring Boot starter provides a dedicated `simbaHandleExecutor` bean)
 
 This is a deliberate design choice: the library targets server-side JVM applications where `java.util.concurrent` is well-understood, predictable, and does not require coroutine context management.
 
@@ -677,7 +677,7 @@ extends [`LeaseContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/sim
 
 1. **`SpringRedisMutexLeaseStore`**: `contend()` runs `mutex_guard.lua` when renewing and `mutex_acquire.lua`
    otherwise, parses the `AcquireResult` and rebuilds the `MutexOwner` timeline; `release()` runs `mutex_release.lua`,
-   which also wakes the earliest queued contender.
+   which broadcasts `released` so every waiting contender contends immediately.
 2. **`RedisMutexKeys`**: the single Kotlin source of key and channel names, aligned with the Lua scripts.
 3. **`onStart()` / `onStop()`**: subscribe and unsubscribe the `MutexMessageListener`.
 4. **`MutexMessageListener.onMessage()`**:
@@ -964,7 +964,7 @@ A: When the lock expires, all waiting contenders schedule their next attempt at 
 A: Simba is designed for mutual exclusion (one-at-a-time access). It is not suitable for counting or rate limiting. For those use cases, use Redis `INCR` with expiry, or a dedicated rate limiter library.
 
 **Q: What is the `handleExecutor` parameter in the factory constructors?**
-A: It is the `Executor` on which `onAcquired`/`onReleased` callbacks are dispatched. By default, `ForkJoinPool.commonPool()` is used. In production, consider creating a dedicated executor to avoid contention with other ForkJoinPool users.
+A: It is the `Executor` on which `onAcquired`/`onReleased` callbacks are dispatched. The library factories default to `ForkJoinPool.commonPool()`; the Spring Boot starter injects its dedicated `simbaHandleExecutor` bean, which you can replace by defining a bean with that name. Outside Spring, pass a dedicated executor in production.
 
 **Q: How do I choose between `FIXED_RATE` and `FIXED_DELAY` scheduling strategies?**
 A: Use `FIXED_RATE` when work must run at consistent wall-clock intervals (e.g., every 30 seconds). Use `FIXED_DELAY` when you want a minimum gap between work completions. `FIXED_DELAY` is safer for long-running work because it prevents task pile-up.

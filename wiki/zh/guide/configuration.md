@@ -84,6 +84,15 @@ simba:
     enabled: true
 ```
 
+### 回调执行器
+
+所有后端都在 `simbaHandleExecutor` bean 上执行 `onAcquired` / `onReleased`，它是一个空闲线程会被回收的专用 daemon 线程池。定义同名 bean 即可使用自己的执行器：
+
+```kotlin
+@Bean(name = [SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME])
+fun simbaHandleExecutor(): Executor = Executors.newFixedThreadPool(2)
+```
+
 ## 时序关系
 
 理解 `ttl` 和 `transition` 如何交互对于正确配置至关重要：

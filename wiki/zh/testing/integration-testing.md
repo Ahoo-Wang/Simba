@@ -175,18 +175,16 @@ flowchart TD
     subgraph channels["Pub/Sub Channels"]
         style channels fill:#161b22,stroke:#30363d,color:#e6edf3
         MC["simba:{mutex}<br>Global channel"]
-        CC["simba:{mutex}:{id}<br>Per-contender channel"]
+        CC["simba:{mutex}:{id}<br>Per-contender channel (legacy)"]
     end
 
     subgraph state["State"]
         style state fill:#161b22,stroke:#30363d,color:#e6edf3
         KEY["simba:{mutex}<br>String key (owner ID)"]
-        QUEUE["simba:{mutex}:contender<br>Sorted Set (wait queue)"]
     end
 
     ACQUIRE --> MC
     ACQUIRE --> KEY
-    ACQUIRE --> QUEUE
     GUARD --> KEY
     RELEASE --> MC
     RELEASE --> KEY
@@ -197,13 +195,12 @@ flowchart TD
     style MC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style CC fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style KEY fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style QUEUE fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 
 `mutex_acquire.lua` 脚本（[源码](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/resources/mutex_acquire.lua)）：
-1. 尝试 `SET mutexKey contenderId NX PX transition` -- 带过期时间的原子获取
+1. 尝试 `SET mutexKey contenderId NX PX lease`（lease = ttl + transition）-- 带过期时间的原子获取
 2. 成功时：向全局频道发布 `acquired@@contenderId`
-3. 失败时：将竞争者添加到有序集合等待队列，并返回当前所有者 + 剩余 TTL
+3. 失败时：以 `{ownerId, pttl}` 返回当前所有者及其剩余租约
 
 ### 测试类
 

@@ -7,7 +7,9 @@
     "dev": "vitepress dev",
     "build": "vitepress build",
     "preview": "vitepress preview",
-    "fix:mermaid": "node scripts/fix-mermaid.mjs"
+    "fix:mermaid": "node scripts/fix-mermaid.mjs",
+    "sync:llms": "node scripts/sync-llms-full.mjs",
+    "check:llms": "node scripts/sync-llms-full.mjs --check"
   },
   "packageManager": "pnpm@11.28.5",
   "devDependencies": {

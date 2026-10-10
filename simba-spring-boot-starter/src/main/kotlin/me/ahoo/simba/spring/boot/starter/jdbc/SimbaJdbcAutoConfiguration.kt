@@ -16,6 +16,8 @@ import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.jdbc.JdbcMutexContendServiceFactory
 import me.ahoo.simba.jdbc.JdbcMutexOwnerRepository
 import me.ahoo.simba.jdbc.MutexOwnerRepository
+import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
@@ -23,7 +25,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnSingleCandidate
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
-import java.util.concurrent.ForkJoinPool
+import java.util.concurrent.Executor
 import javax.sql.DataSource
 
 /**
@@ -31,7 +33,7 @@ import javax.sql.DataSource
  *
  * @author ahoo wang
  */
-@AutoConfiguration
+@AutoConfiguration(after = [SimbaAutoConfiguration::class])
 @ConditionalOnSimbaJdbcEnabled
 @ConditionalOnClass(
     JdbcMutexContendServiceFactory::class
@@ -49,10 +51,13 @@ class SimbaJdbcAutoConfiguration(private val jdbcProperties: JdbcProperties) {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnBean(MutexOwnerRepository::class)
-    fun jdbcMutexContendServiceFactory(mutexOwnerRepository: MutexOwnerRepository): MutexContendServiceFactory {
+    fun jdbcMutexContendServiceFactory(
+        mutexOwnerRepository: MutexOwnerRepository,
+        @Qualifier(SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME) handleExecutor: Executor
+    ): MutexContendServiceFactory {
         return JdbcMutexContendServiceFactory(
             mutexOwnerRepository = mutexOwnerRepository,
-            handleExecutor = ForkJoinPool.commonPool(),
+            handleExecutor = handleExecutor,
             initialDelay = jdbcProperties.initialDelay,
             ttl = jdbcProperties.ttl,
             transition = jdbcProperties.transition

@@ -14,14 +14,26 @@ package me.ahoo.simba.spring.redis
 
 import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 
-class RedisMutexKeysTest {
+class AcquireResultTest {
     @Test
-    fun `names share the mutex hash tag and stay compatible with earlier nodes`() {
-        val keys = RedisMutexKeys("naming")
+    fun `parses owner and remaining lease`() {
+        val before = System.currentTimeMillis()
 
-        keys.mutexKey.assert().isEqualTo("simba:{naming}")
-        keys.legacyQueueKey.assert().isEqualTo("simba:{naming}:contender")
-        keys.contenderChannel("c1").assert().isEqualTo("simba:{naming}:c1")
+        val result = AcquireResult.of(listOf("c1", 16000L))
+
+        result.ownerId.assert().isEqualTo("c1")
+        result.transitionAt.assert().isBetween(before + 16000, System.currentTimeMillis() + 16000)
+    }
+
+    @Test
+    fun `empty owner means no owner`() {
+        AcquireResult.of(listOf("", 0L)).assert().isEqualTo(AcquireResult.NONE)
+    }
+
+    @Test
+    fun `rejects malformed replies`() {
+        assertThrows<IllegalStateException> { AcquireResult.of(listOf("c1")) }
     }
 }

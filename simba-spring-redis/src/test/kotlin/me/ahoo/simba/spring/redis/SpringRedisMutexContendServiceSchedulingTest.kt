@@ -40,11 +40,11 @@ class SpringRedisMutexContendServiceSchedulingTest {
         val redisTemplate = mockk<StringRedisTemplate>(relaxed = true)
         every {
             redisTemplate.execute(
-                match<RedisScript<String>> { it.resultType == String::class.java },
+                match<RedisScript<List<*>>> { it.resultType == List::class.java },
                 any<List<String>>(),
                 *anyVararg()
             )
-        } returns "${contender.contenderId}@@15000"
+        } returns listOf(contender.contenderId, 15000L)
         val scheduler = ManualScheduledExecutor()
         val service = newService(contender, redisTemplate, scheduler)
 
@@ -54,8 +54,8 @@ class SpringRedisMutexContendServiceSchedulingTest {
 
         verify(exactly = 2) {
             redisTemplate.execute(
-                match<RedisScript<String>> { it.resultType == String::class.java },
-                listOf("{guard-lease}"),
+                match<RedisScript<List<*>>> { it.resultType == List::class.java },
+                listOf("simba:{guard-lease}"),
                 contender.contenderId,
                 "15000"
             )
@@ -66,7 +66,7 @@ class SpringRedisMutexContendServiceSchedulingTest {
     @Test
     fun `released event replaces the pending retry`() {
         val contender = object : AbstractMutexContender("released", "released-owner") {}
-        val redisTemplate = stringRedisTemplateReturning("other@@15000")
+        val redisTemplate = stringRedisTemplateReturning(listOf("other", 15000L))
         val scheduler = ManualScheduledExecutor()
         val service = newService(contender, redisTemplate, scheduler)
 
@@ -88,7 +88,7 @@ class SpringRedisMutexContendServiceSchedulingTest {
     fun `stop prevents a superseded future from acquiring`() {
         val contender = object : AbstractMutexContender("stopped", "stopped-owner") {}
         val acquireCalls = AtomicInteger()
-        val redisTemplate = stringRedisTemplateReturning("other@@15000", acquireCalls)
+        val redisTemplate = stringRedisTemplateReturning(listOf("other", 15000L), acquireCalls)
         every {
             redisTemplate.execute(
                 match<RedisScript<Boolean>> { it.resultType == Boolean::class.java },
@@ -118,13 +118,13 @@ class SpringRedisMutexContendServiceSchedulingTest {
     }
 
     private fun stringRedisTemplateReturning(
-        result: String,
+        result: List<Any>,
         calls: AtomicInteger = AtomicInteger()
     ): StringRedisTemplate {
         return mockk<StringRedisTemplate>(relaxed = true).also { redisTemplate ->
             every {
                 redisTemplate.execute(
-                    match<RedisScript<String>> { it.resultType == String::class.java },
+                    match<RedisScript<List<*>>> { it.resultType == List::class.java },
                     any<List<String>>(),
                     *anyVararg()
                 )
