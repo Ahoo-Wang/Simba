@@ -21,15 +21,16 @@ class AcquireResultTest {
     fun `parses owner and remaining lease`() {
         val before = System.currentTimeMillis()
 
-        val result = AcquireResult.of(listOf("c1", 16000L))
+        val result = AcquireResult.of(listOf("c1", 16000L, 3L))
 
         result.ownerId.assert().isEqualTo("c1")
+        result.fencingToken.assert().isEqualTo(3)
         result.transitionAt.assert().isBetween(before + 16000, System.currentTimeMillis() + 16000)
     }
 
     @Test
     fun `empty owner means no owner`() {
-        AcquireResult.of(listOf("", 0L)).assert().isEqualTo(AcquireResult.NONE)
+        AcquireResult.of(listOf("", 0L, 0L)).assert().isEqualTo(AcquireResult.NONE)
     }
 
     @Test

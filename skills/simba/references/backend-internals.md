@@ -4,20 +4,20 @@ Use this reference for backend debugging, not for everyday Simba usage. It mirro
 
 ## Redis Backend — Lua Scripts
 
-The Redis backend uses three Lua scripts for atomicity. Every script receives its keys through `KEYS` (`KEYS[1]` = `simba:{mutex}`). Acquire and guard return a two-element array `{ownerId, remainingMs}`, or `{'', 0}` when there is no owner.
+The Redis backend uses three Lua scripts for atomicity. Every script receives its keys through `KEYS` (`KEYS[1]` = `simba:{mutex}`). Acquire and guard return `{ownerId, remainingMs, fencingToken}`, or `{'', 0, 0}` when there is no owner. A successful acquire increments `simba:{mutex}:fence` and stores the term's token in `simba:{mutex}:token` (same `PX` as the lease); guard keeps it; release deletes the token key and keeps the counter.
 
 ### mutex_acquire.lua
 
 Atomically tries to acquire the lock:
 1. `SET key contenderId NX PX (ttl + transition)` - set only if not exists, with millisecond expiry.
-2. On success: publishes `acquired@@contenderId` on the mutex channel and returns `{contenderId, leaseMs}`.
+2. On success: publishes `acquired@@contenderId` on the mutex channel and returns `{contenderId, leaseMs, fencingToken}`.
 3. On failure: returns `{currentOwnerId, remainingPttl}`. Nothing is queued; waiting contenders learn about releases from the broadcast.
 
 ### mutex_guard.lua
 
 For the current owner to renew (extend TTL):
 1. Checks if the lock is held by this contender (`GET key == contenderId`).
-2. If yes: `SET XX PX (ttlMs + transitionMs)` to renew the full lease. Returns `{contenderId, leaseMs}`.
+2. If yes: `SET XX PX (ttlMs + transitionMs)` to renew the full lease. Returns `{contenderId, leaseMs, fencingToken}`.
 3. If no: returns the current owner info so the contender knows it lost the lock.
 
 ### mutex_release.lua

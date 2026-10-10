@@ -320,7 +320,7 @@ open class MutexOwner(
 | `acquiredAt` | `Long` | 获取锁时的时间戳（纪元毫秒） |
 | `ttlAt` | `Long` | TTL 到期的时间戳。此后所有者应续期，或其他竞争者可能接管。 |
 | `transitionAt` | `Long` | 转换/宽限期结束时间。在此窗口期间，当前所有者可以优先续期。 |
-| `fencingToken` | `Long` | 按持有任期严格递增，任期内保持不变。后端不签发 token 时为 `NO_FENCING_TOKEN`（`0`），目前只有 Zookeeper 签发。 |
+| `fencingToken` | `Long` | 按持有任期严格递增，任期内保持不变。后端不签发 token 时为 `NO_FENCING_TOKEN`（`0`），目前 Zookeeper 和 Redis 签发，JDBC 尚未支持。 |
 
 | 方法 | 返回值 | 描述 |
 |---|---|---|

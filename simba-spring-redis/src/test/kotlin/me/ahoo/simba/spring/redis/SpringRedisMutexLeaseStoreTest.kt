@@ -29,17 +29,18 @@ class SpringRedisMutexLeaseStoreTest {
 
     @Test
     fun `acquire runs the acquire script with the full lease`() {
-        stubScriptReply(listOf("c1", 16000L))
+        stubScriptReply(listOf("c1", 16000L, 5L))
 
         val owner = store.contend("m", "c1", renew = false, config = config)
 
         owner.ownerId.assert().isEqualTo("c1")
+        owner.fencingToken.assert().isEqualTo(5)
         (owner.transitionAt - owner.ttlAt).assert().isEqualTo(6_000)
         (owner.ttlAt - owner.acquiredAt).assert().isEqualTo(10_000)
         verify {
             redisTemplate.execute(
                 match<RedisScript<List<*>>> { it.isScript("'nx'") },
-                listOf("simba:{m}"),
+                listOf("simba:{m}", "simba:{m}:fence", "simba:{m}:token"),
                 "c1",
                 "16000"
             )
@@ -48,14 +49,14 @@ class SpringRedisMutexLeaseStoreTest {
 
     @Test
     fun `renew runs the guard script`() {
-        stubScriptReply(listOf("c1", 16000L))
+        stubScriptReply(listOf("c1", 16000L, 5L))
 
         store.contend("m", "c1", renew = true, config = config)
 
         verify {
             redisTemplate.execute(
                 match<RedisScript<List<*>>> { it.isScript("'xx'") },
-                listOf("simba:{m}"),
+                listOf("simba:{m}", "simba:{m}:token"),
                 "c1",
                 "16000"
             )
@@ -64,7 +65,7 @@ class SpringRedisMutexLeaseStoreTest {
 
     @Test
     fun `no owner maps to an empty owner id`() {
-        stubScriptReply(listOf("", 0L))
+        stubScriptReply(listOf("", 0L, 0L))
 
         store.contend("m", "c1", renew = true, config = config).ownerId.assert().isEmpty()
     }
@@ -72,7 +73,11 @@ class SpringRedisMutexLeaseStoreTest {
     @Test
     fun `release runs the release script`() {
         every {
-            redisTemplate.execute(any<RedisScript<Boolean>>(), listOf("simba:{m}", "simba:{m}:contender"), "c1")
+            redisTemplate.execute(
+                any<RedisScript<Boolean>>(),
+                listOf("simba:{m}", "simba:{m}:contender", "simba:{m}:token"),
+                "c1"
+            )
         } returns true
 
         store.release("m", "c1").assert().isTrue()

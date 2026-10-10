@@ -320,7 +320,7 @@ open class MutexOwner(
 | `acquiredAt` | `Long` | Timestamp (epoch millis) when the lock was acquired |
 | `ttlAt` | `Long` | Timestamp when the TTL expires. After this, the owner should renew or another contender may take over. |
 | `transitionAt` | `Long` | End of the transition/grace period. During this window the current owner can preferentially renew. |
-| `fencingToken` | `Long` | Strictly increasing per ownership term, stable within one. `NO_FENCING_TOKEN` (`0`) when the backend does not issue tokens (currently only Zookeeper does). |
+| `fencingToken` | `Long` | Strictly increasing per ownership term, stable within one. `NO_FENCING_TOKEN` (`0`) when the backend does not issue tokens (Zookeeper and Redis do; JDBC does not yet). |
 
 | Method | Return | Description |
 |---|---|---|

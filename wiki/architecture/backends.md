@@ -162,7 +162,8 @@ contenders react to ownership changes immediately instead of waiting for their n
 ### Lua Scripts
 
 All scripts receive their keys through `KEYS` (Redis Cluster compliant). The acquire and guard scripts return
-`{ownerId, remaining lease in ms}`, or `{'', 0}` when there is no owner.
+`{ownerId, remaining lease in ms, fencing token}`, or `{'', 0, 0}` when there is no owner. A new term increments
+`simba:{mutex}:fence` and stores the token in `simba:{mutex}:token` (see [ADR 0002](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md)).
 
 #### mutex_acquire.lua
 
@@ -171,14 +172,16 @@ acquires with `SET ... NX PX` for `ttl + transition` and announces the new owner
 
 ```lua
 if redis.call('set', mutexKey, contenderId, 'nx', 'px', lease) then
+    local token = redis.call('incr', fenceKey)
+    redis.call('set', tokenKey, token, 'px', lease)
     redis.call('publish', mutexKey, 'acquired@@' .. contenderId)
-    return { contenderId, tonumber(lease) };
+    return { contenderId, tonumber(lease), token };
 end
 local ownerId = redis.call('get', mutexKey)
 if not ownerId then
-    return { '', 0 };
+    return { '', 0, 0 };
 end
-return { ownerId, redis.call('pttl', mutexKey) };
+return { ownerId, redis.call('pttl', mutexKey), tonumber(redis.call('get', tokenKey) or '0') };
 ```
 
 #### mutex_guard.lua
@@ -197,7 +200,7 @@ if redis.call('get', mutexKey) ~= contenderId then
     redis.call('zrem', legacyQueueKey, contenderId)
     return 0;
 end
-redis.call('del', mutexKey, legacyQueueKey)
+redis.call('del', mutexKey, legacyQueueKey, tokenKey)
 redis.call('publish', mutexKey, 'released@@' .. contenderId)
 return 1;
 ```

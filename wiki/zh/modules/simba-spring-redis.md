@@ -58,11 +58,13 @@ graph TB
 | `simba:{mutex}` | String | 当前持有者的 `contenderId`，在 `ttl + transition` 后过期（`PX`）。 |
 | `simba:{mutex}` | Pub/Sub 频道 | 向所有竞争者广播 `acquired@@{ownerId}` 和 `released@@{ownerId}`。 |
 | `simba:{mutex}:{contenderId}` | Pub/Sub 频道 | 仍会订阅，以便滚动升级期间 Simba < 3.2 的持有者（只向一个排队竞争者发送释放消息）能唤醒本节点。 |
+| `simba:{mutex}:fence` | String（计数器） | Fencing 计数器，每个持有任期自增一次；不过期。 |
+| `simba:{mutex}:token` | String | 当前任期的 fencing token；随租约过期。 |
 | `simba:{mutex}:contender` | 有序集合（遗留） | 仅由 Simba < 3.2 写入的等待队列；每次释放时删除。 |
 
 ## Lua 脚本
 
-所有脚本都通过 `KEYS` 接收键（符合 Redis Cluster 规范）。`mutex_acquire.lua` 和 `mutex_guard.lua` 返回二元数组 `{ownerId, 剩余租约毫秒数}`，没有持有者时返回 `{'', 0}`。
+所有脚本都通过 `KEYS` 接收键（符合 Redis Cluster 规范）。`mutex_acquire.lua` 和 `mutex_guard.lua` 返回 `{ownerId, 剩余租约毫秒数, fencing token}`，没有持有者时返回 `{'', 0, 0}`。
 
 ### mutex_acquire.lua
 
@@ -70,14 +72,16 @@ graph TB
 
 ```lua
 if redis.call('set', mutexKey, contenderId, 'nx', 'px', lease) then
+    local token = redis.call('incr', fenceKey)
+    redis.call('set', tokenKey, token, 'px', lease)
     redis.call('publish', mutexKey, 'acquired@@' .. contenderId)
-    return { contenderId, tonumber(lease) };
+    return { contenderId, tonumber(lease), token };
 end
 local ownerId = redis.call('get', mutexKey)
 if not ownerId then
-    return { '', 0 };
+    return { '', 0, 0 };
 end
-return { ownerId, redis.call('pttl', mutexKey) };
+return { ownerId, redis.call('pttl', mutexKey), tonumber(redis.call('get', tokenKey) or '0') };
 ```
 
 `SET NX PX` 以 `ttl + transition` 为时长原子获取并宣告新持有者。获取失败时返回当前持有者及其剩余租约。
@@ -95,7 +99,7 @@ if redis.call('get', mutexKey) ~= contenderId then
     redis.call('zrem', legacyQueueKey, contenderId)
     return 0;
 end
-redis.call('del', mutexKey, legacyQueueKey)
+redis.call('del', mutexKey, legacyQueueKey, tokenKey)
 redis.call('publish', mutexKey, 'released@@' .. contenderId)
 return 1;
 ```
@@ -166,6 +170,16 @@ class SpringRedisMutexContendServiceFactory(
 ```
 
 所有服务共享调度器（竞争触发与租约看门狗）和 I/O 执行器（脚本调用）。工厂持有二者并在 `close()` 时关闭。Spring Boot starter 会把 `simbaHandleExecutor` bean 作为 `handleExecutor` 传入。
+
+### Fencing Token
+
+一次成功的 `SET NX` 开始一个新的持有任期：`mutex_acquire.lua` 对 `simba:{mutex}:fence` 自增，并把结果以与租约相同的 `PX` 写入 `simba:{mutex}:token`。`mutex_guard.lua` 续期这两个键并保持 token 不变，`mutex_release.lua` 删除 token 键但保留计数器。因此 token 按任期严格递增、任期内保持不变（参见 [ADR 0002](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md)）。
+
+节点会忽略关于自己获取锁的 `acquired@@{ownerId}` 广播：脚本返回值带有 token，而广播无法携带，因为旧节点只按两个字段解析该消息。
+
+::: warning 持久化
+单调性要求 Redis 持久化计数器（AOF 且 `appendfsync always`，或同等配置）。如果 Redis 在没有持久化的情况下重启，计数器会被重置，token 可能倒退。
+:::
 
 ## 从 Simba < 3.2 滚动升级
 

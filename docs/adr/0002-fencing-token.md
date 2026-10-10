@@ -1,6 +1,6 @@
 # ADR 0002: Fencing Tokens
 
-- Status: Accepted — step 1 (core API and Zookeeper) implemented; Redis and JDBC pending
+- Status: Accepted — steps 1–2 (core API, Zookeeper, Redis) implemented; JDBC pending
 - Date: 2026-10-09
 
 ## Context

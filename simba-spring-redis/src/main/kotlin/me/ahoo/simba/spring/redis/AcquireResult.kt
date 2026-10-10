@@ -19,22 +19,27 @@ import me.ahoo.simba.core.MutexOwner
  *
  * @author ahoo wang
  */
-data class AcquireResult(val ownerId: String, val transitionAt: Long) {
+data class AcquireResult @JvmOverloads constructor(
+    val ownerId: String,
+    val transitionAt: Long,
+    val fencingToken: Long = MutexOwner.NO_FENCING_TOKEN
+) {
 
     companion object {
         val NONE = AcquireResult(MutexOwner.NONE_OWNER_ID, 0L)
 
         /**
-         * build [AcquireResult] from a script reply `{ownerId, remaining lease in milliseconds}`.
+         * build [AcquireResult] from a script reply `{ownerId, remaining lease in milliseconds, fencing token}`.
          */
         fun of(reply: List<*>): AcquireResult {
-            check(reply.size == 2) { "Incorrect script reply:[$reply]" }
+            check(reply.size == 3) { "Incorrect script reply:[$reply]" }
             val ownerId = reply[0] as String
             if (ownerId.isEmpty()) {
                 return NONE
             }
             val remaining = (reply[1] as Number).toLong()
-            return AcquireResult(ownerId, System.currentTimeMillis() + remaining)
+            val fencingToken = (reply[2] as Number).toLong()
+            return AcquireResult(ownerId, System.currentTimeMillis() + remaining, fencingToken)
         }
 
         /**

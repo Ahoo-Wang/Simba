@@ -58,11 +58,13 @@ All names share the `{mutex}` hash tag, so they land on one Redis Cluster slot. 
 | `simba:{mutex}` | String | `contenderId` of the current owner, expiring after `ttl + transition` (`PX`). |
 | `simba:{mutex}` | Pub/Sub channel | Broadcasts `acquired@@{ownerId}` and `released@@{ownerId}` to every contender. |
 | `simba:{mutex}:{contenderId}` | Pub/Sub channel | Still subscribed so that Simba < 3.2 owners, which address releases to one queued contender, can wake this node during a rolling upgrade. |
+| `simba:{mutex}:fence` | String (counter) | Fencing counter, incremented once per ownership term; never expires. |
+| `simba:{mutex}:token` | String | Fencing token of the current term; expires with the lease. |
 | `simba:{mutex}:contender` | Sorted set (legacy) | Wait queue written only by Simba < 3.2; deleted on every release. |
 
 ## Lua Scripts
 
-Every script receives its keys through `KEYS` (Redis Cluster compliant). `mutex_acquire.lua` and `mutex_guard.lua` return a two-element array `{ownerId, remaining lease in ms}`, or `{'', 0}` when there is no owner.
+Every script receives its keys through `KEYS` (Redis Cluster compliant). `mutex_acquire.lua` and `mutex_guard.lua` return `{ownerId, remaining lease in ms, fencing token}`, or `{'', 0, 0}` when there is no owner.
 
 ### mutex_acquire.lua
 
@@ -70,14 +72,16 @@ Every script receives its keys through `KEYS` (Redis Cluster compliant). `mutex_
 
 ```lua
 if redis.call('set', mutexKey, contenderId, 'nx', 'px', lease) then
+    local token = redis.call('incr', fenceKey)
+    redis.call('set', tokenKey, token, 'px', lease)
     redis.call('publish', mutexKey, 'acquired@@' .. contenderId)
-    return { contenderId, tonumber(lease) };
+    return { contenderId, tonumber(lease), token };
 end
 local ownerId = redis.call('get', mutexKey)
 if not ownerId then
-    return { '', 0 };
+    return { '', 0, 0 };
 end
-return { ownerId, redis.call('pttl', mutexKey) };
+return { ownerId, redis.call('pttl', mutexKey), tonumber(redis.call('get', tokenKey) or '0') };
 ```
 
 `SET NX PX` acquires atomically for `ttl + transition` and announces the new owner. On failure the script reports the current owner and its remaining lease.
@@ -95,7 +99,7 @@ if redis.call('get', mutexKey) ~= contenderId then
     redis.call('zrem', legacyQueueKey, contenderId)
     return 0;
 end
-redis.call('del', mutexKey, legacyQueueKey)
+redis.call('del', mutexKey, legacyQueueKey, tokenKey)
 redis.call('publish', mutexKey, 'released@@' .. contenderId)
 return 1;
 ```
@@ -166,6 +170,16 @@ class SpringRedisMutexContendServiceFactory(
 ```
 
 All services share the scheduler (contention triggers and lease watchdogs) and the I/O executor (script calls). The factory owns both and shuts them down on `close()`. The Spring Boot starter passes its `simbaHandleExecutor` bean as `handleExecutor`.
+
+### Fencing Tokens
+
+A successful `SET NX` starts a new ownership term: `mutex_acquire.lua` increments `simba:{mutex}:fence` and stores the result in `simba:{mutex}:token` with the lease's `PX`. `mutex_guard.lua` renews both keys and keeps the token, and `mutex_release.lua` deletes the token key while keeping the counter. The token therefore increases strictly per term and stays stable within it (see [ADR 0002](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0002-fencing-token.md)).
+
+A node ignores the `acquired@@{ownerId}` broadcast for its own acquisition: the script reply carries the token, while the broadcast cannot, because older nodes parse the message as exactly two fields.
+
+::: warning Durability
+Monotonicity requires Redis to persist the counter (AOF with `appendfsync always`, or equivalent). If Redis restarts without it, the counter resets and tokens can go backwards.
+:::
 
 ## Rolling Upgrade from Simba < 3.2
 
