@@ -19,6 +19,6 @@
     "vitepress-mermaid-renderer": "^1.2.2"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=24.21.0"
   }
 }
