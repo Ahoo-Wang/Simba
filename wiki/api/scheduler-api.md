@@ -7,6 +7,39 @@ description: AbstractScheduler and ScheduleConfig -- leader-gated periodic task 
 
 The Scheduler API provides leader-gated periodic execution. Only the instance that currently holds the distributed mutex runs the scheduled task. When leadership is lost, the task is cancelled. When leadership is regained, the task resumes.
 
+## SimbaScheduler
+
+[`SimbaScheduler`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/schedule/SimbaScheduler.kt) runs work on the leader only, without subclassing. The work receives a `ScheduleContext` with the mutex and the fencing token of the current term.
+
+```kotlin
+val scheduler = SimbaScheduler(
+    mutex = "report",
+    contendServiceFactory = factory,
+    config = ScheduleConfig.delay(Duration.ZERO, Duration.ofMinutes(1))
+) { context ->
+    reportService.generate(fencingToken = context.fencingToken)
+}
+scheduler.start()
+// ...
+scheduler.close()
+```
+
+```java
+SimbaScheduler scheduler = new SimbaScheduler("report", factory,
+    ScheduleConfig.delay(Duration.ZERO, Duration.ofMinutes(1)),
+    context -> reportService.generate(context.getFencingToken()));
+```
+
+| Member | Description |
+|---|---|
+| `start()` / `stop()` | Start or stop contending; `stop()` also shuts the work executor down. |
+| `close()` | Idempotent stop. |
+| `running` | Whether the scheduler is contending. |
+| `isLeader` | Whether this node currently leads the mutex and runs the work. |
+| `fencingToken` | Token of the current term; `0` when not leader. |
+
+Work starts when the node acquires the mutex and is cancelled with interruption when it loses it. The single-thread executor (named after `worker`, default the mutex) exists only while leading. `AbstractScheduler` below shares the same implementation.
+
 ## AbstractScheduler
 
 **Source:** [simba-core/.../schedule/AbstractScheduler.kt:30](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/schedule/AbstractScheduler.kt#L30)

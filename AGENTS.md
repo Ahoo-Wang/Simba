@@ -79,8 +79,8 @@ publication metadata.
   shared executors from `ContendExecutors` (daemon, idle threads reclaimed) and shut them down on `close()`.
   A directly constructed service defaults to its own idle-reclaimed scheduler and runs I/O on the trigger thread.
 - `SimbaLocker` is owned by one thread at a time; interruption does not cancel `acquire()` (the flag is restored).
-- `AbstractScheduler` lazily creates its worker executor on acquire, cancels work with interrupt on release,
-  and shuts the executor down on `stop()`.
+- `SimbaScheduler` and `AbstractScheduler` share `ScheduledWorkRunner`: the worker executor is created on acquire,
+  work is cancelled with interrupt on release, and the executor is shut down on `stop()`.
 
 ### Time
 - Lease decisions must use backend time or monotonic offsets, never mixed wall clocks across nodes.

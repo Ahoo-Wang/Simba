@@ -20,6 +20,7 @@ import me.ahoo.simba.core.MutexOwner
 import me.ahoo.simba.core.MutexState
 import me.ahoo.simba.schedule.AbstractScheduler
 import me.ahoo.simba.schedule.ScheduleConfig
+import me.ahoo.simba.schedule.SimbaScheduler
 import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
@@ -38,6 +39,7 @@ abstract class MutexContendServiceSpec {
         const val GUARD_MUTEX = "guard"
         const val MULTI_CONTEND_MUTEX = "multiContend"
         const val SCHEDULE_MUTEX = "schedule"
+        const val SIMBA_SCHEDULER_MUTEX = "simbaScheduler"
     }
 
     abstract val mutexContendServiceFactory: MutexContendServiceFactory
@@ -230,5 +232,23 @@ abstract class MutexContendServiceSpec {
         countDownLatch.await(30, TimeUnit.SECONDS).assert().isTrue()
         testScheduler.stop()
         testScheduler.running.assert().isFalse()
+    }
+
+    @Test
+    open fun simbaScheduler() {
+        val context = CompletableFuture<Pair<String, Boolean>>()
+        val scheduler = SimbaScheduler(
+            SIMBA_SCHEDULER_MUTEX,
+            mutexContendServiceFactory,
+            ScheduleConfig.delay(Duration.ZERO, Duration.ofSeconds(1))
+        ) {
+            context.complete(it.mutex to (it.fencingToken >= MutexOwner.NO_FENCING_TOKEN))
+        }
+        scheduler.start()
+        // A failure detector, not a performance bound (see schedule()).
+        context.get(30, TimeUnit.SECONDS).assert().isEqualTo(SIMBA_SCHEDULER_MUTEX to true)
+        scheduler.isLeader.assert().isTrue()
+        scheduler.stop()
+        scheduler.running.assert().isFalse()
     }
 }

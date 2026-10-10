@@ -7,6 +7,39 @@ description: AbstractScheduler 和 ScheduleConfig -- 领导者门控的周期性
 
 Scheduler API 提供领导者门控的周期性执行功能。只有当前持有分布式互斥锁的实例才会运行调度任务。当失去领导权时，任务被取消。当重新获得领导权时，任务恢复执行。
 
+## SimbaScheduler
+
+[`SimbaScheduler`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/schedule/SimbaScheduler.kt) 无需继承即可让任务只在 leader 节点上执行。任务会收到 `ScheduleContext`，其中包含 mutex 名和当前任期的 fencing token。
+
+```kotlin
+val scheduler = SimbaScheduler(
+    mutex = "report",
+    contendServiceFactory = factory,
+    config = ScheduleConfig.delay(Duration.ZERO, Duration.ofMinutes(1))
+) { context ->
+    reportService.generate(fencingToken = context.fencingToken)
+}
+scheduler.start()
+// ...
+scheduler.close()
+```
+
+```java
+SimbaScheduler scheduler = new SimbaScheduler("report", factory,
+    ScheduleConfig.delay(Duration.ZERO, Duration.ofMinutes(1)),
+    context -> reportService.generate(context.getFencingToken()));
+```
+
+| 成员 | 说明 |
+|---|---|
+| `start()` / `stop()` | 开始或停止竞争；`stop()` 同时关闭任务执行器。 |
+| `close()` | 幂等的停止。 |
+| `running` | 调度器是否正在竞争。 |
+| `isLeader` | 本节点当前是否为 leader 并在执行任务。 |
+| `fencingToken` | 当前任期的 token；非 leader 时为 `0`。 |
+
+节点获得 mutex 时开始执行任务，失去 mutex 时以中断方式取消。单线程执行器（以 `worker` 命名，默认为 mutex 名）只在担任 leader 期间存在。下面的 `AbstractScheduler` 与它共用同一套实现。
+
 ## AbstractScheduler
 
 **源码：** [simba-core/.../schedule/AbstractScheduler.kt:30](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/schedule/AbstractScheduler.kt#L30)
