@@ -6,17 +6,17 @@
   "commitMessagePrefix": "fix(deps)",
   "commitMessageTopic": "{{depName}}",
   "rangeStrategy": "bump",
-  "lockFileMaintenance": { "enabled": false },
+  "lockFileMaintenance": { "enabled": true, "schedule": ["before 6am on monday"] },
   "prConcurrentLimit": 5,
   "packageRules": [
     {
       "description": "Group Spring ecosystem updates into a single PR",
-      "matchPackagePatterns": ["^org\\.springframework"],
+      "matchPackageNames": ["/^org\\.springframework/"],
       "groupName": "spring"
     },
     {
       "description": "Group Kotlin-related updates into a single PR",
-      "matchPackagePatterns": ["^org\\.jetbrains\\.kotlin"],
+      "matchPackageNames": ["/^org\\.jetbrains\\.kotlin/"],
       "groupName": "kotlin"
     }
   ]
