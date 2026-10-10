@@ -14,6 +14,7 @@ package me.ahoo.simba.spring.boot.starter.endpoint
 
 import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContendService
+import me.ahoo.simba.core.MutexRetrievalService
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -33,9 +34,11 @@ class SimbaServiceTracker : ContendObserver {
     }
 
     /**
-     * Running services ordered by mutex, then contender id.
+     * Running services ordered by mutex, then contender id. A `stop()` racing with `start()` can report the stop
+     * before the start; such a stopped service is dropped here instead of being listed forever.
      */
     fun services(): List<MutexContendService> {
+        services.removeIf { it.status == MutexRetrievalService.Status.INITIAL }
         return services.sortedWith(compareBy({ it.mutex }, { it.contenderId }))
     }
 }
