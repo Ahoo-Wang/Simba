@@ -57,6 +57,14 @@ abstract class AbstractMutexContendService(
         }
     }
 
+    override fun onStarted() {
+        observe { onStarted(this@AbstractMutexContendService) }
+    }
+
+    override fun onStopped() {
+        observe { onStopped(this@AbstractMutexContendService) }
+    }
+
     /**
      * Reports to [observer]; an observer failure is logged and never affects contention.
      */

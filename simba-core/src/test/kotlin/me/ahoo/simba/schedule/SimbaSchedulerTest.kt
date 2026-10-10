@@ -109,15 +109,21 @@ class SimbaSchedulerTest {
         }
         scheduler.start()
         observedFactory.lead(scheduler)
-        val events = generateSequence { observer.events.poll(2, TimeUnit.SECONDS) }.take(3).toList()
+        val events = generateSequence { observer.events.poll(2, TimeUnit.SECONDS) }.take(4).toList()
         sleeping.await(2, TimeUnit.SECONDS).assert().isTrue()
 
         observedFactory.service!!.publishOwner(MutexOwner("other")).join()
 
-        events.assert().containsExactly("acquired:observed", "work:observed:SUCCESS", "work:observed:FAILED")
+        events.assert().containsExactly(
+            "started:observed",
+            "acquired:observed",
+            "work:observed:SUCCESS",
+            "work:observed:FAILED"
+        )
         observer.events.poll(2, TimeUnit.SECONDS).assert().isEqualTo("released:observed")
         observer.events.poll(2, TimeUnit.SECONDS).assert().isEqualTo("work:observed:INTERRUPTED")
         scheduler.stop()
+        observer.events.poll(2, TimeUnit.SECONDS).assert().isEqualTo("stopped:observed")
     }
 
     @Test

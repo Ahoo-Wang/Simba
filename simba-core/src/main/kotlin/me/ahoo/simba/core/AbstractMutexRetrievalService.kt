@@ -90,12 +90,23 @@ abstract class AbstractMutexRetrievalService protected constructor(
             STATUS.set(this, Status.INITIAL)
             throw error
         }
+        onStarted()
     }
 
     /**
      * Called in notification order after [mutexState] changed and before the retriever is notified.
      */
     protected open fun onStateApplied(mutexState: MutexState) = Unit
+
+    /**
+     * Called once [start] succeeded.
+     */
+    protected open fun onStarted() = Unit
+
+    /**
+     * Called once [stop] completed, after the release was delivered.
+     */
+    protected open fun onStopped() = Unit
 
     protected abstract fun startRetrieval()
     protected abstract fun stopRetrieval()
@@ -186,6 +197,7 @@ abstract class AbstractMutexRetrievalService protected constructor(
         } finally {
             deliverRelease(lifecycleGeneration.get())
             STATUS.set(this, Status.INITIAL)
+            onStopped()
         }
         return true
     }

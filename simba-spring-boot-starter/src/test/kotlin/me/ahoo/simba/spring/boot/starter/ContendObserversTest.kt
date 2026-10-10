@@ -12,8 +12,10 @@
  */
 package me.ahoo.simba.spring.boot.starter
 
+import io.mockk.mockk
 import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.ContendOutcome
+import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.WorkOutcome
 import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.Test
@@ -22,6 +24,14 @@ import org.springframework.beans.factory.support.DefaultListableBeanFactory
 
 class ContendObserversTest {
     private class Recording(private val name: String, private val events: MutableList<String>) : ContendObserver {
+        override fun onStarted(service: MutexContendService) {
+            events += "$name:started"
+        }
+
+        override fun onStopped(service: MutexContendService) {
+            events += "$name:stopped"
+        }
+
         override fun onContend(mutex: String, renew: Boolean, durationNanos: Long, outcome: ContendOutcome) {
             events += "$name:contend"
         }
@@ -62,17 +72,22 @@ class ContendObserversTest {
         val events = mutableListOf<String>()
         val composite = observersOf(Recording("a", events), Recording("b", events))
 
+        val service = mockk<MutexContendService>()
+        composite.onStarted(service)
         composite.onContend("m", false, 1, ContendOutcome.OWNER)
         composite.onAcquired("m")
         composite.onLeaseExpired("m")
         composite.onWork("m", 1, WorkOutcome.SUCCESS)
+        composite.onStopped(service)
         val failure = assertThrows<IllegalStateException> { composite.onReleased("m") }
 
         events.assert().containsExactly(
+            "a:started", "b:started",
             "a:contend", "b:contend",
             "a:acquired", "b:acquired",
             "a:expired", "b:expired",
             "a:work", "b:work",
+            "a:stopped", "b:stopped",
             "a:released", "b:released"
         )
         failure.message.assert().isEqualTo("a failed")

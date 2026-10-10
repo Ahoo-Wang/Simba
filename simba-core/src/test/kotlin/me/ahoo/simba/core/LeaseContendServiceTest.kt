@@ -53,15 +53,18 @@ class LeaseContendServiceTest {
         store.otherOwner = "c2"
         scheduler.runNext()
         io.runNext()
+        observed.stop()
 
         observer.events.toList().assert().containsExactly(
+            "started:m",
             "contend:m:acquire:OWNER",
             "acquired:m",
             "contend:m:renew:OWNER",
             "contend:m:renew:FAILED",
             "expired:m",
             "released:m",
-            "contend:m:acquire:OTHER"
+            "contend:m:acquire:OTHER",
+            "stopped:m"
         )
     }
 
