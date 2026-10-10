@@ -12,6 +12,7 @@
  */
 package me.ahoo.simba.spring.boot.starter.zookeeper
 
+import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.zookeeper.ZookeeperMutexContendServiceFactory
 import org.apache.curator.framework.CuratorFramework
 import org.springframework.boot.autoconfigure.AutoConfiguration
@@ -37,7 +38,7 @@ class SimbaZookeeperAutoConfiguration {
     @Bean
     @ConditionalOnBean(CuratorFramework::class)
     @ConditionalOnMissingBean
-    fun zookeeperMutexContendServiceFactory(curatorFramework: CuratorFramework): ZookeeperMutexContendServiceFactory {
+    fun zookeeperMutexContendServiceFactory(curatorFramework: CuratorFramework): MutexContendServiceFactory {
         return ZookeeperMutexContendServiceFactory(ForkJoinPool.commonPool(), curatorFramework)
     }
 }

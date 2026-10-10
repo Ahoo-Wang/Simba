@@ -31,7 +31,7 @@ abstract class AbstractMutexRetrievalService protected constructor(
 ) : MutexRetrievalService {
     companion object {
         private val log = KotlinLogging.logger {}
-        val STATUS: AtomicReferenceFieldUpdater<AbstractMutexRetrievalService, Status> =
+        private val STATUS: AtomicReferenceFieldUpdater<AbstractMutexRetrievalService, Status> =
             AtomicReferenceFieldUpdater.newUpdater(
                 AbstractMutexRetrievalService::class.java,
                 Status::class.java,
@@ -40,7 +40,8 @@ abstract class AbstractMutexRetrievalService protected constructor(
     }
 
     @Volatile
-    override var status = Status.INITIAL
+    final override var status = Status.INITIAL
+        private set
 
     @Volatile
     override var mutexState: MutexState = MutexState.NONE
@@ -54,6 +55,12 @@ abstract class AbstractMutexRetrievalService protected constructor(
     private val notifyLock = Any()
     private val notifyExecutor = MoreExecutors.newSequentialExecutor(handleExecutor)
     private val lifecycleGeneration = AtomicLong()
+
+    /**
+     * Generation of the current lifecycle, incremented by every [start].
+     */
+    protected val currentGeneration: Long
+        get() = lifecycleGeneration.get()
 
     protected fun resetOwner() {
         mutexState = MutexState.NONE
@@ -124,12 +131,21 @@ abstract class AbstractMutexRetrievalService protected constructor(
     }
 
     override fun stop() {
+        check(tryStop()) {
+            "Cannot stop mutex:[${retriever.mutex}] from state:[$status]. Expected:[${Status.RUNNING}]"
+        }
+    }
+
+    /**
+     * Stops the service when it is [Status.RUNNING]; returns `false` without side effects otherwise.
+     */
+    private fun tryStop(): Boolean {
         log.info {
             "stop - mutex:[${retriever.mutex}] - status:[$status]"
         }
         synchronized(notifyLock) {
-            check(STATUS.compareAndSet(this, Status.RUNNING, Status.STOPPING)) {
-                "Cannot stop mutex:[${retriever.mutex}] from state:[$status]. Expected:[${Status.RUNNING}]"
+            if (!STATUS.compareAndSet(this, Status.RUNNING, Status.STOPPING)) {
+                return false
             }
         }
         try {
@@ -138,10 +154,14 @@ abstract class AbstractMutexRetrievalService protected constructor(
             safeNotifyOwner(MutexOwner.NONE, lifecycleGeneration.get())
             STATUS.set(this, Status.INITIAL)
         }
+        return true
     }
 
+    /**
+     * Idempotent: stops the service when running and is a no-op otherwise.
+     */
     @Throws(Exception::class)
     override fun close() {
-        stop()
+        tryStop()
     }
 }

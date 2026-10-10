@@ -55,10 +55,11 @@ Simba 使用 Java 的 `AtomicReferenceFieldUpdater` 实现无锁状态转换。�
 
 ```kotlin
 @Volatile
-override var status = Status.INITIAL
+final override var status = Status.INITIAL
+    private set
 
 companion object {
-    val STATUS: AtomicReferenceFieldUpdater<...> =
+    private val STATUS: AtomicReferenceFieldUpdater<...> =
         AtomicReferenceFieldUpdater.newUpdater(...)
 }
 ```
@@ -501,12 +502,12 @@ Detekt 配置：[`config/detekt/detekt.yml`](https://github.com/Ahoo-Wang/Simba/
 
 [`JdbcMutexContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendService.kt)：
 
-1. `startContend()` 创建一个 `ScheduledThreadPoolExecutor` 并调度第一次竞争
-2. `safeHandleContend()` 调用 `contend()`，`contend()` 调用 `mutexOwnerRepository.acquireAndGetOwner()`
+1. 它继承 [`LeaseContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/LeaseContendService.kt)，在 `initialDelay` 后调度第一次竞争
+2. 每个周期调用 `JdbcMutexLeaseStore.contend()`，进而调用 `mutexOwnerRepository.acquireAndGetOwner()`
 3. 仓库对 `simba_mutex` 执行 `UPDATE ... WHERE version = ?`
 4. 结果是一个表示谁获胜的 `MutexOwner`
 5. `notifyOwner()` 通过处理执行器将状态变更分发给竞争者的回调
-6. `nextSchedule()` 使用 `ContendPeriod` 计算下一次延迟并调度下一个周期
+6. 引擎使用 `ContendPeriod` 计算下一次延迟并调度下一个周期
 
 #### 步骤 3：仓库
 
@@ -577,63 +578,45 @@ dependencies {
 }
 ```
 
-#### 步骤 2：实现服务
+#### 步骤 2：实现租约存储
 
-服务类扩展 `AbstractMutexContendService` 并实现两个抽象方法。以下是骨架：
+轮询型后端实现 [`MutexLeaseStore`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexLeaseStore.kt)：每次调用执行一次原子的后端操作，不负责调度和通知。[`LeaseContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/LeaseContendService.kt) 提供竞争循环、续期、失败处理以及生命周期竞态处理。
 
 ```kotlin
-class MyBackendMutexContendService(
-    contender: MutexContender,
-    handleExecutor: Executor,
-    private val ttl: Duration,
-    private val transition: Duration,
-    // 后端特定依赖
-) : AbstractMutexContendService(contender, handleExecutor) {
-
-    private val contendPeriod = ContendPeriod(contenderId)
-
-    override fun startContend() {
-        // 1. 订阅后端中的所有权变更
-        // 2. 尝试初始获取
-        // 3. 调度下一个竞争周期
+internal class MyBackendMutexLeaseStore(/* backend client */) : MutexLeaseStore {
+    override fun contend(mutex: String, contenderId: String, renew: Boolean, config: LeaseConfig): MutexOwner {
+        // 获取（renew = true 时续期）时长为 config.ttlMillis + config.transitionMillis 的租约，
+        // 然后返回后端观测到的持有者（没有持有者时返回 MutexOwner.NONE）。
     }
 
-    override fun stopContend() {
-        // 1. 取消任何已调度的任务
-        // 2. 在后端释放锁
-        // 3. 取消订阅变更
-        // 4. notifyOwner(MutexOwner.NONE)
-    }
-
-    private fun handleContend() {
-        // 1. 尝试获取/续期锁
-        // 2. 从结果构建 MutexOwner
-        // 3. 调用 notifyOwner(mutexOwner)
-        // 4. 使用 contendPeriod.ensureNextDelay() 调度下一个周期
+    override fun release(mutex: String, contenderId: String): Boolean {
+        // 仅当 contenderId 持有租约时释放。
     }
 }
 ```
+
+把领导权委托给现成组件的事件驱动型后端（如 Zookeeper 的 `LeaderLatch`）则直接继承 `AbstractMutexContendService`。
 
 #### 步骤 3：实现工厂
 
 ```kotlin
 class MyBackendMutexContendServiceFactory(
-    private val ttl: Duration,
-    private val transition: Duration,
+    ttl: Duration,
+    transition: Duration,
     private val handleExecutor: Executor = ForkJoinPool.commonPool(),
-    // 后端特定依赖
-) : MutexContendServiceFactory {
+    private val scheduler: ScheduledExecutorService = ContendExecutors.newScheduler("simba-my-backend"),
+    private val ioExecutor: ExecutorService = ContendExecutors.newIoExecutor("simba-my-backend-io")
+) : MutexContendServiceFactory, AutoCloseable {
+    private val leaseConfig = LeaseConfig(ttl, transition)   // 校验时长
+    private val leaseStore = MyBackendMutexLeaseStore()
 
-    override fun createMutexContendService(
-        mutexContender: MutexContender
-    ): MutexContendService {
-        return MyBackendMutexContendService(
-            mutexContender,
-            handleExecutor,
-            ttl,
-            transition,
-            // ...
-        )
+    override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
+        return LeaseContendService(mutexContender, handleExecutor, leaseStore, leaseConfig, scheduler, ioExecutor)
+    }
+
+    override fun close() {
+        scheduler.shutdown()
+        ioExecutor.shutdown()
     }
 }
 ```
@@ -687,34 +670,14 @@ include("simba-{backend}")
 
 ### 示例：Redis 后端的结构
 
-以 [`SpringRedisMutexContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendService.kt) 为例进行讲解：
+[`SpringRedisMutexContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendService.kt) 继承 [`LeaseContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/LeaseContendService.kt)，在共享循环之上增加发布/订阅：
 
-1. **`startContend()`**：
-   - 调用 `startSubscribe()` 在 Redis 发布/订阅频道上注册 `MessageListener`
-   - 调用 `nextSchedule(0)` 进行立即的首次竞争尝试
-
-2. **`nextSchedule(delay)`**：
-   - 如果已经是所有者则调度 `guard()`，否则调度 `acquire()`
-   - 使用 `ScheduledExecutorService.schedule()`
-
-3. **`acquire()`**：
-   - 通过 `redisTemplate.execute()` 执行 `mutex_acquire.lua`
-   - 将结果解析为 `AcquireResult`（所有者 ID + 转换时间）
-   - 调用 `notifyOwnerAndScheduleNext()`，构建 `MutexOwner`，发送通知，并调度下一个周期
-
-4. **`guard()`**：
-   - 执行 `mutex_guard.lua` 以续期 TTL
-   - 解析结果并调度下一个周期
-
-5. **`release()`**：
-   - 执行 `mutex_release.lua` 释放锁
-   - 通过 Lua 脚本发布释放事件
-   - 通知 `MutexOwner.NONE`
-
-6. **`MutexMessageListener.onMessage()`**：
-   - 处理两种事件类型：`acquired`（另一个竞争者获胜）和 `released`（锁空闲）
-   - 收到 `released`：清除所有权并立即尝试获取
-   - 收到 `acquired`：更新本地所有权状态
+1. **`SpringRedisMutexLeaseStore`**：`contend()` 续期时执行 `mutex_guard.lua`，否则执行 `mutex_acquire.lua`，解析 `AcquireResult` 并重建 `MutexOwner` 时间线；`release()` 执行 `mutex_release.lua`，同时唤醒最早排队的竞争者。
+2. **`RedisMutexKeys`**：Kotlin 侧唯一的 key 与频道命名来源，与 Lua 脚本保持一致。
+3. **`onStart()` / `onStop()`**：订阅和退订 `MutexMessageListener`。
+4. **`MutexMessageListener.onMessage()`**：
+   - 收到 `released`：清除持有状态并调用 `contendNow()` 立即竞争
+   - 收到 `acquired`：更新观测到的持有者
 
 ### 新依赖的版本目录条目
 
@@ -747,16 +710,19 @@ Simba 在所有后端中使用一致的错误处理策略。
 以 `safe` 为前缀的方法将实际逻辑包装在 try-catch 中，记录错误但不传播异常。这防止了一个失败的竞争周期导致整个服务崩溃：
 
 ```kotlin
-// 来自 JdbcMutexContendService
-private fun safeHandleContend() {
+// 来自 LeaseContendService
+private fun contend(generation: Long) {
+    var nextDelay = leaseConfig.ttlMillis
     try {
-        val mutexOwner = contend()
-        notifyOwner(mutexOwner)
-        val nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
-        nextSchedule(nextDelay)
+        val mutexOwner = leaseStore.contend(mutex, contenderId, isOwner, leaseConfig)
+        if (adopt(generation, mutexOwner)) {
+            nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
+        }
     } catch (throwable: Throwable) {
-        log.error(throwable) { "safeHandleContend failed" }
-        nextSchedule(ttl.toMillis())  // TTL 后重试
+        log.error(throwable) { "contend failed" }
+        revokeOnFailure(generation)  // TTL 后重试
+    } finally {
+        complete(generation, nextDelay)
     }
 }
 ```

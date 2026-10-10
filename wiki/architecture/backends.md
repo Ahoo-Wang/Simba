@@ -125,21 +125,29 @@ The `WHERE owner_id = ?` clause ensures only the actual owner can release.
 ### Service Lifecycle
 
 [`JdbcMutexContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendService.kt)
-creates a `ScheduledThreadPoolExecutor` with a single thread and schedules periodic
-`safeHandleContend()` calls. Each invocation runs `acquire()`, notifies the retriever, and
-schedules the next attempt based on `ContendPeriod.ensureNextDelay()`.
+is a thin [`LeaseContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/LeaseContendService.kt) over `JdbcMutexLeaseStore`, which maps every contention (acquire or renew) to
+`MutexOwnerRepository.acquireAndGetOwner()`. The engine runs the loop: contend, notify the owner, and schedule
+the next attempt with `ContendPeriod.ensureNextDelay()`.
 
 ```kotlin
-// JdbcMutexContendService — simplified contention loop
-private fun safeHandleContend() {
-    val mutexOwner = contend()                // acquireAndGetOwner()
-    notifyOwner(mutexOwner)                   // async notification
-    val nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
-    nextSchedule(nextDelay)                   // schedule next attempt
+// LeaseContendService — simplified contention loop
+private fun contend(generation: Long) {
+    var nextDelay = leaseConfig.ttlMillis                 // retry after ttl on failure
+    try {
+        val mutexOwner = leaseStore.contend(mutex, contenderId, isOwner, leaseConfig)
+        if (adopt(generation, mutexOwner)) {             // notify, or release a stale acquisition
+            nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
+        }
+    } catch (throwable: Throwable) {
+        revokeOnFailure(generation)                      // drop local ownership
+    } finally {
+        complete(generation, nextDelay)                  // schedule the next attempt
+    }
 }
 ```
 
-On error, the service retries after `ttl` milliseconds ([line 81](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendService.kt#L81)).
+Services created by `JdbcMutexContendServiceFactory` share one trigger scheduler and one I/O executor for
+database calls; the factory owns both and shuts them down on `close()`.
 
 ## Redis Backend
 

@@ -42,7 +42,7 @@ class SimbaLocker(
 ) : AbstractMutexContender(mutex), Locker {
 
     companion object {
-        val OWNER: AtomicReferenceFieldUpdater<SimbaLocker, Thread> = AtomicReferenceFieldUpdater.newUpdater(
+        private val OWNER: AtomicReferenceFieldUpdater<SimbaLocker, Thread> = AtomicReferenceFieldUpdater.newUpdater(
             SimbaLocker::class.java,
             Thread::class.java,
             SimbaLocker::owner.name

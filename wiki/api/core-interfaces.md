@@ -160,7 +160,7 @@ interface MutexRetrievalService : AutoCloseable {
 | `running` | `Boolean` | `true` if `status` is `STARTING` or `RUNNING` |
 | `start()` | `void` | Transitions from `INITIAL` to `RUNNING`. Throws if not in `INITIAL`. |
 | `stop()` | `void` | Transitions from `RUNNING` to `INITIAL`. Throws if not in `RUNNING`. |
-| `close()` | `void` | Delegates to `stop()` |
+| `close()` | `void` | Idempotent: stops the service if `RUNNING`, no-op otherwise |
 
 ### Status Enum
 

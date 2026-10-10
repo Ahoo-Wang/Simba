@@ -13,6 +13,7 @@
 
 package me.ahoo.simba.core
 
+import me.ahoo.test.asserts.assert
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.equalTo
 import org.hamcrest.Matchers.sameInstance
@@ -128,11 +129,26 @@ class AbstractMutexRetrievalServiceTest {
     }
 
     @Test
-    fun `close delegates to stop and throws when not running`() {
+    fun `close is a no-op when not running`() {
         val service = newService()
 
-        val error = assertThrows<IllegalStateException> { service.close() }
-        assertThat(error.message, equalTo("Cannot stop mutex:[m] from state:[INITIAL]. Expected:[RUNNING]"))
+        service.close()
+
+        service.status.assert().isEqualTo(MutexRetrievalService.Status.INITIAL)
+    }
+
+    @Test
+    fun `close stops a running service and is idempotent`() {
+        val contender = FakeMutexContender("m", "c1")
+        val service = FakeMutexContendService(contender)
+        service.start()
+        service.publishOwner(MutexOwner("c1", 0, Long.MAX_VALUE, Long.MAX_VALUE)).join()
+
+        service.close()
+        service.close()
+
+        service.status.assert().isEqualTo(MutexRetrievalService.Status.INITIAL)
+        service.afterOwner.assert().isSameAs(MutexOwner.NONE)
     }
 
     @Test

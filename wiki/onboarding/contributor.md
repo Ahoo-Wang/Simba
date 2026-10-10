@@ -55,10 +55,11 @@ Simba uses Java's `AtomicReferenceFieldUpdater` for lock-free state transitions.
 
 ```kotlin
 @Volatile
-override var status = Status.INITIAL
+final override var status = Status.INITIAL
+    private set
 
 companion object {
-    val STATUS: AtomicReferenceFieldUpdater<...> =
+    private val STATUS: AtomicReferenceFieldUpdater<...> =
         AtomicReferenceFieldUpdater.newUpdater(...)
 }
 ```
@@ -501,12 +502,12 @@ Let's trace through the JDBC backend as a representative example.
 
 [`JdbcMutexContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/kotlin/me/ahoo/simba/jdbc/JdbcMutexContendService.kt):
 
-1. `startContend()` creates a `ScheduledThreadPoolExecutor` and schedules the first contention
-2. `safeHandleContend()` calls `contend()` which calls `mutexOwnerRepository.acquireAndGetOwner()`
+1. It extends [`LeaseContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/LeaseContendService.kt), which schedules the first contention after `initialDelay`
+2. Each cycle calls `JdbcMutexLeaseStore.contend()`, which calls `mutexOwnerRepository.acquireAndGetOwner()`
 3. The repository executes an `UPDATE ... WHERE version = ?` against `simba_mutex`
 4. The result is a `MutexOwner` indicating who won
 5. `notifyOwner()` dispatches the state change to the contender's callbacks via the handle executor
-6. `nextSchedule()` computes the next delay using `ContendPeriod` and schedules the next cycle
+6. The engine computes the next delay using `ContendPeriod` and schedules the next cycle
 
 #### Step 3: The Repository
 
@@ -577,63 +578,47 @@ dependencies {
 }
 ```
 
-#### Step 2: Implement the Service
+#### Step 2: Implement the Lease Store
 
-The service class extends `AbstractMutexContendService` and implements the two abstract methods. Here is the skeleton:
+A polling backend implements [`MutexLeaseStore`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/MutexLeaseStore.kt): one atomic backend operation per call, no scheduling or notification.
+[`LeaseContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/LeaseContendService.kt) supplies the contention loop, renewal, failure handling and lifecycle races.
 
 ```kotlin
-class MyBackendMutexContendService(
-    contender: MutexContender,
-    handleExecutor: Executor,
-    private val ttl: Duration,
-    private val transition: Duration,
-    // backend-specific dependencies
-) : AbstractMutexContendService(contender, handleExecutor) {
-
-    private val contendPeriod = ContendPeriod(contenderId)
-
-    override fun startContend() {
-        // 1. Subscribe to ownership changes in your backend
-        // 2. Attempt initial acquisition
-        // 3. Schedule next contention cycle
+internal class MyBackendMutexLeaseStore(/* backend client */) : MutexLeaseStore {
+    override fun contend(mutex: String, contenderId: String, renew: Boolean, config: LeaseConfig): MutexOwner {
+        // Acquire (or renew when renew = true) for config.ttlMillis + config.transitionMillis,
+        // then return the owner observed by the backend (MutexOwner.NONE when there is none).
     }
 
-    override fun stopContend() {
-        // 1. Cancel any scheduled tasks
-        // 2. Release the lock in your backend
-        // 3. Unsubscribe from changes
-        // 4. notifyOwner(MutexOwner.NONE)
-    }
-
-    private fun handleContend() {
-        // 1. Attempt to acquire/renew the lock
-        // 2. Build a MutexOwner from the result
-        // 3. Call notifyOwner(mutexOwner)
-        // 4. Schedule next cycle using contendPeriod.ensureNextDelay()
+    override fun release(mutex: String, contenderId: String): Boolean {
+        // Release only when contenderId holds the lease.
     }
 }
 ```
+
+Event-driven backends that delegate leadership to a recipe (like Zookeeper's `LeaderLatch`) extend
+`AbstractMutexContendService` directly instead.
 
 #### Step 3: Implement the Factory
 
 ```kotlin
 class MyBackendMutexContendServiceFactory(
-    private val ttl: Duration,
-    private val transition: Duration,
+    ttl: Duration,
+    transition: Duration,
     private val handleExecutor: Executor = ForkJoinPool.commonPool(),
-    // backend-specific dependencies
-) : MutexContendServiceFactory {
+    private val scheduler: ScheduledExecutorService = ContendExecutors.newScheduler("simba-my-backend"),
+    private val ioExecutor: ExecutorService = ContendExecutors.newIoExecutor("simba-my-backend-io")
+) : MutexContendServiceFactory, AutoCloseable {
+    private val leaseConfig = LeaseConfig(ttl, transition)   // validates durations
+    private val leaseStore = MyBackendMutexLeaseStore()
 
-    override fun createMutexContendService(
-        mutexContender: MutexContender
-    ): MutexContendService {
-        return MyBackendMutexContendService(
-            mutexContender,
-            handleExecutor,
-            ttl,
-            transition,
-            // ...
-        )
+    override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
+        return LeaseContendService(mutexContender, handleExecutor, leaseStore, leaseConfig, scheduler, ioExecutor)
+    }
+
+    override fun close() {
+        scheduler.shutdown()
+        ioExecutor.shutdown()
     }
 }
 ```
@@ -687,34 +672,17 @@ If using Spring Boot feature capabilities, add the corresponding feature in the 
 
 ### Example: How the Redis Backend Is Structured
 
-Walking through [`SpringRedisMutexContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendService.kt) as a concrete example:
+[`SpringRedisMutexContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/main/kotlin/me/ahoo/simba/spring/redis/SpringRedisMutexContendService.kt)
+extends [`LeaseContendService`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-core/src/main/kotlin/me/ahoo/simba/core/LeaseContendService.kt) and adds pub/sub on top of the shared loop:
 
-1. **`startContend()`**:
-   - Calls `startSubscribe()` to register a `MessageListener` on Redis pub/sub channels
-   - Calls `nextSchedule(0)` for immediate first contention attempt
-
-2. **`nextSchedule(delay)`**:
-   - Schedules either `guard()` (if already owner) or `acquire()` (if not) after the given delay
-   - Uses `ScheduledExecutorService.schedule()`
-
-3. **`acquire()`**:
-   - Executes `mutex_acquire.lua` via `redisTemplate.execute()`
-   - Parses the result into an `AcquireResult` (owner ID + transition time)
-   - Calls `notifyOwnerAndScheduleNext()` which builds a `MutexOwner`, notifies, and schedules the next cycle
-
-4. **`guard()`**:
-   - Executes `mutex_guard.lua` to renew TTL
-   - Parses result and schedules next cycle
-
-5. **`release()`**:
-   - Executes `mutex_release.lua` to release the lock
-   - Publishes release event via the Lua script
-   - Notifies `MutexOwner.NONE`
-
-6. **`MutexMessageListener.onMessage()`**:
-   - Handles two event types: `acquired` (another contender won) and `released` (lock is free)
-   - On `released`: clears ownership and immediately attempts acquisition
-   - On `acquired`: updates local ownership state
+1. **`SpringRedisMutexLeaseStore`**: `contend()` runs `mutex_guard.lua` when renewing and `mutex_acquire.lua`
+   otherwise, parses the `AcquireResult` and rebuilds the `MutexOwner` timeline; `release()` runs `mutex_release.lua`,
+   which also wakes the earliest queued contender.
+2. **`RedisMutexKeys`**: the single Kotlin source of key and channel names, aligned with the Lua scripts.
+3. **`onStart()` / `onStop()`**: subscribe and unsubscribe the `MutexMessageListener`.
+4. **`MutexMessageListener.onMessage()`**:
+   - On `released`: clears ownership and calls `contendNow()` for an immediate attempt
+   - On `acquired`: updates the observed owner
 
 ### Version Catalog Entry for New Dependencies
 
@@ -747,16 +715,19 @@ Simba uses a consistent error handling strategy across all backends.
 Methods prefixed with `safe` wrap the actual logic in a try-catch and log errors without propagating exceptions. This prevents one failed contention cycle from crashing the entire service:
 
 ```kotlin
-// From JdbcMutexContendService
-private fun safeHandleContend() {
+// From LeaseContendService
+private fun contend(generation: Long) {
+    var nextDelay = leaseConfig.ttlMillis
     try {
-        val mutexOwner = contend()
-        notifyOwner(mutexOwner)
-        val nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
-        nextSchedule(nextDelay)
+        val mutexOwner = leaseStore.contend(mutex, contenderId, isOwner, leaseConfig)
+        if (adopt(generation, mutexOwner)) {
+            nextDelay = contendPeriod.ensureNextDelay(mutexOwner)
+        }
     } catch (throwable: Throwable) {
-        log.error(throwable) { "safeHandleContend failed" }
-        nextSchedule(ttl.toMillis())  // retry after TTL
+        log.error(throwable) { "contend failed" }
+        revokeOnFailure(generation)  // retry after TTL
+    } finally {
+        complete(generation, nextDelay)
     }
 }
 ```

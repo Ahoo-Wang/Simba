@@ -160,7 +160,7 @@ interface MutexRetrievalService : AutoCloseable {
 | `running` | `Boolean` | 如果 `status` 为 `STARTING` 或 `RUNNING` 则为 `true` |
 | `start()` | `void` | 从 `INITIAL` 转换到 `RUNNING`。如果不在 `INITIAL` 状态则抛出异常。 |
 | `stop()` | `void` | 从 `RUNNING` 转换到 `INITIAL`。如果不在 `RUNNING` 状态则抛出异常。 |
-| `close()` | `void` | 委托给 `stop()` |
+| `close()` | `void` | 幂等：处于 `RUNNING` 时停止服务，否则不做任何操作 |
 
 ### Status 枚举
 

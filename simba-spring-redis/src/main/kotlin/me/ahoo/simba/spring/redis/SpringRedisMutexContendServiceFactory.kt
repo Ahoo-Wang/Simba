@@ -12,6 +12,8 @@
  */
 package me.ahoo.simba.spring.redis
 
+import me.ahoo.simba.core.ContendExecutors
+import me.ahoo.simba.core.LeaseConfig
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexContender
@@ -19,43 +21,45 @@ import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.listener.RedisMessageListenerContainer
 import java.time.Duration
 import java.util.concurrent.Executor
-import java.util.concurrent.Executors
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.ForkJoinPool
 import java.util.concurrent.ScheduledExecutorService
 
 /**
  * Spring Redis Mutex Contend Service Factory .
  *
- * The factory owns its [scheduledExecutorService] lifecycle: closing it shuts the executor
- * down, so callers sharing an executor across factories should pass a dedicated one.
+ * All created services share [scheduledExecutorService] (contention triggers) and [ioExecutor]
+ * (Redis calls). The factory owns both: [close] shuts them down, so pass dedicated executors.
  *
  * @author ahoo wang
  */
-class SpringRedisMutexContendServiceFactory(
-    private val ttl: Duration,
-    private val transition: Duration,
+@Suppress("LongParameterList")
+class SpringRedisMutexContendServiceFactory @JvmOverloads constructor(
+    ttl: Duration,
+    transition: Duration,
     private val redisTemplate: StringRedisTemplate,
     private val listenerContainer: RedisMessageListenerContainer,
     private val handleExecutor: Executor = ForkJoinPool.commonPool(),
-    private val scheduledExecutorService: ScheduledExecutorService = Executors.newScheduledThreadPool(1)
+    private val scheduledExecutorService: ScheduledExecutorService = ContendExecutors.newScheduler("simba-redis"),
+    private val ioExecutor: ExecutorService = ContendExecutors.newIoExecutor("simba-redis-io")
 ) : MutexContendServiceFactory, AutoCloseable {
-    init {
-        validateRedisDurations(ttl, transition)
-    }
+    private val leaseConfig = LeaseConfig(ttl, transition)
 
     override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
         return SpringRedisMutexContendService(
-            mutexContender,
-            handleExecutor,
-            ttl,
-            transition,
-            redisTemplate,
-            listenerContainer,
-            scheduledExecutorService
+            contender = mutexContender,
+            handleExecutor = handleExecutor,
+            ttl = leaseConfig.ttl,
+            transition = leaseConfig.transition,
+            redisTemplate = redisTemplate,
+            listenerContainer = listenerContainer,
+            scheduledExecutorService = scheduledExecutorService,
+            ioExecutor = ioExecutor
         )
     }
 
     override fun close() {
         scheduledExecutorService.shutdown()
+        ioExecutor.shutdown()
     }
 }
