@@ -34,6 +34,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executor
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class SimbaSchedulingAutoConfigurationTest {
     private val contextRunner = ApplicationContextRunner()
@@ -97,6 +98,47 @@ class SimbaSchedulingAutoConfigurationTest {
     }
 
     @Test
+    fun `a failing run does not stop later runs`() {
+        withLeaderFactory()
+            .withUserConfiguration(FailingJob::class.java)
+            .run {
+                it.getBean(FailingJob::class.java).runs.poll(2, TimeUnit.SECONDS).assert().isEqualTo(2)
+            }
+    }
+
+    @Test
+    fun `schedulers registered while running start immediately and start is idempotent`() {
+        val runs = LinkedBlockingQueue<String>()
+        withLeaderFactory()
+            .run {
+                val processor = it.getBean(SimbaScheduledBeanPostProcessor::class.java)
+                processor.start()
+                val late = SimbaScheduler(
+                    "late",
+                    it.getBean(MutexContendServiceFactory::class.java),
+                    ScheduleConfig.delay(Duration.ZERO, Duration.ofHours(1))
+                ) { runs.add("late") }
+
+                processor.postProcessAfterInitialization(late, "late")
+
+                runs.poll(2, TimeUnit.SECONDS).assert().isEqualTo("late")
+                processor.stop()
+                late.running.assert().isFalse()
+            }
+    }
+
+    @Test
+    fun `a scheduler failing to stop does not prevent shutdown`() {
+        val factory = LeaderFactory(failOnStop = true)
+        withLeaderFactory(factory)
+            .withUserConfiguration(Jobs::class.java)
+            .run {
+                it.getBean(Jobs::class.java).runs.poll(2, TimeUnit.SECONDS).assert().isEqualTo("plain")
+            }
+        factory.services.size.assert().isEqualTo(2)
+    }
+
+    @Test
     fun `scheduling can be disabled`() {
         withLeaderFactory()
             .withPropertyValues("simba.scheduling.enabled=false")
@@ -118,6 +160,9 @@ class SimbaSchedulingAutoConfigurationTest {
     @Test
     fun `invalid declarations fail startup`() {
         mapOf(
+            BlankMutex::class.java to "must set a mutex",
+            NegativeInitialDelay::class.java to "initialDelay must not be negative",
+            NegativePeriod::class.java to "fixedRate must be positive",
             BothPeriods::class.java to "exactly one of fixedDelay and fixedRate",
             NoPeriod::class.java to "exactly one of fixedDelay and fixedRate",
             ZeroPeriod::class.java to "fixedDelay must be positive",
@@ -172,6 +217,33 @@ class SimbaSchedulingAutoConfigurationTest {
         }
     }
 
+    class FailingJob {
+        private val attempts = AtomicInteger()
+        val runs = LinkedBlockingQueue<Int>()
+
+        @SimbaScheduled(mutex = "failing", fixedRate = "20ms")
+        fun run() {
+            val attempt = attempts.incrementAndGet()
+            check(attempt > 1) { "first run fails" }
+            runs.add(attempt)
+        }
+    }
+
+    class BlankMutex {
+        @SimbaScheduled(mutex = " ", fixedDelay = "1s")
+        fun run() = Unit
+    }
+
+    class NegativeInitialDelay {
+        @SimbaScheduled(mutex = "negative-initial", fixedDelay = "1s", initialDelay = "-1s")
+        fun run() = Unit
+    }
+
+    class NegativePeriod {
+        @SimbaScheduled(mutex = "negative-period", fixedRate = "-1s")
+        fun run() = Unit
+    }
+
     class BothPeriods {
         @SimbaScheduled(mutex = "both", fixedDelay = "1s", fixedRate = "1s")
         fun run() = Unit
@@ -220,20 +292,22 @@ class SimbaSchedulingAutoConfigurationTest {
     /**
      * Grants leadership on start with fencing token 42.
      */
-    class LeaderFactory : MutexContendServiceFactory {
+    class LeaderFactory(private val failOnStop: Boolean = false) : MutexContendServiceFactory {
         val services = CopyOnWriteArrayList<MutexContendService>()
 
         override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
-            return LeaderService(mutexContender).also { services.add(it) }
+            return LeaderService(mutexContender, failOnStop).also { services.add(it) }
         }
     }
 
-    private class LeaderService(contender: MutexContender) :
+    private class LeaderService(contender: MutexContender, private val failOnStop: Boolean) :
         AbstractMutexContendService(contender, Executor { it.run() }) {
         override fun startContend() {
             notifyOwner(MutexOwner(contenderId, fencingToken = 42))
         }
 
-        override fun stopContend() = Unit
+        override fun stopContend() {
+            check(!failOnStop) { "backend unavailable" }
+        }
     }
 }
