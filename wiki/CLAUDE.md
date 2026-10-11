@@ -1,5 +1,8 @@
 # CLAUDE.md
 
-<!-- Generated for repository development workflows. Do not edit directly. -->
+This file provides guidance to Claude Code (claude.ai/code) when working in the `wiki/` documentation site.
 
-Before beginning work in this repository, read `AGENTS.md` and follow all scoped AGENTS guidance.
+Rules for this directory live in `wiki/AGENTS.md`, imported below; the root `CLAUDE.md` (and `AGENTS.md`) also apply.
+Edit `AGENTS.md`, not this file.
+
+@AGENTS.md
