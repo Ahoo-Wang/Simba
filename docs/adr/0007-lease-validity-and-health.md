@@ -47,7 +47,7 @@ for finishing it; writes still carry the fencing token.
   - SQL: a conditional `UPDATE ... SET fencing_token = ? ... WHERE id = ? AND fencing_token <= ?` and treating
     zero updated rows as "stale owner".
   - Redis: a short Lua compare-and-set on a per-resource token key.
-  - In-process: an `AtomicLong` `accumulateAndGet`-style guard for resources owned by one JVM.
+  - In-process: check and write under one lock, for resources owned by one JVM.
 - `FencingSpec` in `simba-test`: given a function that performs a write with a token and reports acceptance, it
   verifies that equal tokens are accepted (retries within a term), lower tokens are rejected, and concurrent
   writers with interleaved tokens never let a lower one land after a higher one. Users run it against their own

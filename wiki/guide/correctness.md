@@ -97,16 +97,66 @@ fun settle(context: ScheduleContext) {
 }
 ```
 
+Tokens are available as `ScheduleContext.fencingToken`, `SimbaScheduler.fencingToken`, `Locker.fencingToken` and
+`MutexContendService.fencingToken`; they are `0` when this node does not own the mutex or the backend issues none.
+The guarantee only holds if the resource checks the token; Simba cannot enforce it.
+
+### Checking Tokens in the Resource
+
+The check and the write must be **one atomic step**. Reading the highest token first and writing afterwards lets a
+stale owner pass the check and land its write after a newer owner. Accept equal tokens: the owner's own retries and
+renewals carry the same token.
+
+**SQL** — one conditional `UPDATE`; zero matched rows means a stale owner:
+
 ```sql
--- inside the resource: accept the write only from the current or a newer term
+-- once per resource: insert ignore into ledger_state (id) values (?);
 update ledger_state
 set last_batch = ?, fencing_token = ?
 where id = ? and fencing_token <= ?;
 ```
 
-Tokens are available as `ScheduleContext.fencingToken`, `SimbaScheduler.fencingToken`, `Locker.fencingToken` and
-`MutexContendService.fencingToken`; they are `0` when this node does not own the mutex or the backend issues none.
-The guarantee only holds if the resource checks the token; Simba cannot enforce it.
+MySQL Connector/J reports matched rows by default, so a retry with the same token and values still counts as `1`.
+
+**Redis** — one Lua script; keep the token and the value in the same hash slot (`{resource}`) for Redis Cluster:
+
+```lua
+-- KEYS[1] = {resource}:token, KEYS[2] = {resource}:value, ARGV[1] = token, ARGV[2] = value
+local highest = tonumber(redis.call('get', KEYS[1]) or '0')
+if tonumber(ARGV[1]) < highest then
+    return 0
+end
+redis.call('set', KEYS[1], ARGV[1])
+redis.call('set', KEYS[2], ARGV[2])
+return 1
+```
+
+**In one JVM** — check and write under the same lock:
+
+```kotlin
+synchronized(state) {
+    if (fencingToken < state.highestToken) return false
+    state.highestToken = fencingToken
+    state.write(value)
+    return true
+}
+```
+
+### Verifying a Resource
+
+`simba-test` ships `FencingSpec`, a JUnit test kit for your own resource. Extend it and implement `write(resource,
+fencingToken)` and `highestToken(resource)`. It checks that increasing and equal tokens are accepted, lower ones are
+rejected, and that the highest token wins when writers race. The recipes above pass it (see
+[`JdbcFencingRecipeTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/test/kotlin/me/ahoo/simba/jdbc/JdbcFencingRecipeTest.kt)
+and
+[`RedisFencingRecipeTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/test/kotlin/me/ahoo/simba/spring/redis/RedisFencingRecipeTest.kt)).
+
+```kotlin
+class LedgerFencingTest : FencingSpec() {
+    override fun write(resource: String, fencingToken: Long): Boolean = ledger.settle(resource, fencingToken)
+    override fun highestToken(resource: String): Long = ledger.fencingToken(resource)
+}
+```
 
 | Backend | Token source | Caveat |
 |---|---|---|

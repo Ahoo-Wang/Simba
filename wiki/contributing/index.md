@@ -42,7 +42,8 @@ You need JDK 17 and Docker.
 
 ## Backend TCK
 
-`simba-test` provides `MutexContendServiceSpec`. Every backend's test extends it and supplies a factory:
+`simba-test` provides `MutexContendServiceSpec` (and `FencingSpec` for resources that check tokens, see
+[Correctness](/guide/correctness#verifying-a-resource)). Every backend's test extends it and supplies a factory:
 
 ```kotlin
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)

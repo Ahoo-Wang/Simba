@@ -87,16 +87,64 @@ fun settle(context: ScheduleContext) {
 }
 ```
 
+Token 可通过 `ScheduleContext.fencingToken`、`SimbaScheduler.fencingToken`、`Locker.fencingToken` 和
+`MutexContendService.fencingToken` 获得；当本节点不持有 mutex 或后端不签发 token 时为 `0`。只有资源检查 token，这一保证才成立；
+Simba 无法强制执行。
+
+### 在资源中检查 token
+
+检查和写入必须是 **一个原子步骤**。先读取最大 token 再写入，会让过期的持有者通过检查，并在更新的持有者之后完成写入。
+要接受相等的 token：持有者自己的重试和续期带着同一个 token。
+
+**SQL** —— 一条条件 `UPDATE`；匹配行数为零即表示过期的持有者：
+
 ```sql
--- 在资源内部：只接受当前或更新任期的写入
+-- 每个资源一次：insert ignore into ledger_state (id) values (?);
 update ledger_state
 set last_batch = ?, fencing_token = ?
 where id = ? and fencing_token <= ?;
 ```
 
-Token 可通过 `ScheduleContext.fencingToken`、`SimbaScheduler.fencingToken`、`Locker.fencingToken` 和
-`MutexContendService.fencingToken` 获得；当本节点不持有 mutex 或后端不签发 token 时为 `0`。只有资源检查 token，这一保证才成立；
-Simba 无法强制执行。
+MySQL Connector/J 默认返回匹配行数，因此用相同 token 和相同值重试仍计为 `1`。
+
+**Redis** —— 一个 Lua 脚本；在 Redis Cluster 上让 token 和值处于同一个哈希槽（`{resource}`）：
+
+```lua
+-- KEYS[1] = {resource}:token, KEYS[2] = {resource}:value, ARGV[1] = token, ARGV[2] = value
+local highest = tonumber(redis.call('get', KEYS[1]) or '0')
+if tonumber(ARGV[1]) < highest then
+    return 0
+end
+redis.call('set', KEYS[1], ARGV[1])
+redis.call('set', KEYS[2], ARGV[2])
+return 1
+```
+
+**单个 JVM 内** —— 在同一把锁下检查并写入：
+
+```kotlin
+synchronized(state) {
+    if (fencingToken < state.highestToken) return false
+    state.highestToken = fencingToken
+    state.write(value)
+    return true
+}
+```
+
+### 验证资源
+
+`simba-test` 提供 `FencingSpec`，用于测试你自己资源的 JUnit 测试套件。继承它并实现 `write(resource, fencingToken)` 和
+`highestToken(resource)`。它检查递增和相等的 token 被接受、更小的被拒绝，以及多个写入者竞争时最大的 token 胜出。上面的范式都通过了它（见
+[`JdbcFencingRecipeTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/test/kotlin/me/ahoo/simba/jdbc/JdbcFencingRecipeTest.kt)
+和
+[`RedisFencingRecipeTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/test/kotlin/me/ahoo/simba/spring/redis/RedisFencingRecipeTest.kt)）。
+
+```kotlin
+class LedgerFencingTest : FencingSpec() {
+    override fun write(resource: String, fencingToken: Long): Boolean = ledger.settle(resource, fencingToken)
+    override fun highestToken(resource: String): Long = ledger.fencingToken(resource)
+}
+```
 
 | 后端 | Token 来源 | 注意 |
 |---|---|---|
