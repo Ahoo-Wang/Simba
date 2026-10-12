@@ -275,7 +275,7 @@ open class LeaseContendService @JvmOverloads constructor(
     private fun adopt(generation: Long, mutexOwner: MutexOwner, sentAtNanos: Long): Boolean {
         synchronized(lock) {
             if (isActive(generation)) {
-                notifyOwner(mutexOwner)
+                // Publish the lease before notifying, so onAcquired already sees a positive leaseRemaining.
                 if (mutexOwner.isOwner(contenderId)) {
                     holdsLease = true
                     armWatchdog(generation, mutexOwner, sentAtNanos)
@@ -283,6 +283,7 @@ open class LeaseContendService @JvmOverloads constructor(
                 } else {
                     dropLease()
                 }
+                notifyOwner(mutexOwner)
                 return true
             }
             val restarted = status.isActive && generation != currentGeneration

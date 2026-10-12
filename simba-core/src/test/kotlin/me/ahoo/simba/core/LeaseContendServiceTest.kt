@@ -251,6 +251,23 @@ class LeaseContendServiceTest {
     }
 
     @Test
+    fun `onAcquired already sees the lease`() {
+        val seen = mutableListOf<Duration>()
+        lateinit var observed: LeaseContendService
+        val recording = object : AbstractMutexContender("m") {
+            override fun onAcquired(mutexState: MutexState) {
+                seen += observed.leaseRemaining
+            }
+        }
+        observed = TestLeaseContendService(recording, store, config, scheduler, io)
+        observed.start()
+        scheduler.runNext()
+        io.runNext()
+
+        seen.single().toMillis().assert().isBetween(1, 800)
+    }
+
+    @Test
     fun `lease remaining is zero once the watchdog revoked ownership`() {
         service.start()
         scheduler.runNext()
