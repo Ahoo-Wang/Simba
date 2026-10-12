@@ -12,6 +12,8 @@
  */
 package me.ahoo.simba.core
 
+import java.time.Duration
+
 /**
  * Mutex Contend Service.
  *
@@ -43,4 +45,47 @@ interface MutexContendService : MutexRetrievalService {
      */
     val fencingToken: Long
         get() = afterOwner.let { if (it.isOwner(contenderId)) it.fencingToken else MutexOwner.NO_FENCING_TOKEN }
+
+    /**
+     * How long this contender's local ownership stays valid: [Duration.ZERO] when it does not own the mutex,
+     * [UNBOUNDED_LEASE] when the backend does not bound ownership in time (Zookeeper).
+     *
+     * A hint for whether to *start* the next step of work, not a guarantee to finish it: a pause can outlast the
+     * remainder, so writes still carry the [fencingToken] (ADR 0007).
+     */
+    val leaseRemaining: Duration
+        get() {
+            val owner = afterOwner
+            if (!owner.isOwner(contenderId)) {
+                return Duration.ZERO
+            }
+            val remainingMillis = owner.transitionAt - owner.currentAt
+            if (remainingMillis >= UNBOUNDED_LEASE.toMillis()) {
+                return UNBOUNDED_LEASE
+            }
+            return Duration.ofMillis(remainingMillis.coerceAtLeast(0))
+        }
+
+    /**
+     * Throws [LeaseExpiredException] unless this contender owns the mutex with some lease left.
+     */
+    fun ensureLease() {
+        ensureLease(Duration.ZERO)
+    }
+
+    /**
+     * Throws [LeaseExpiredException] unless [leaseRemaining] exceeds [minRemaining], e.g. the expected duration of
+     * the next step.
+     */
+    fun ensureLease(minRemaining: Duration) {
+        checkLease(leaseRemaining, minRemaining) { "mutex:[$mutex] contenderId:[$contenderId]" }
+    }
+
+    companion object {
+        /**
+         * [leaseRemaining] of ownership that is not bounded in time.
+         */
+        @JvmField
+        val UNBOUNDED_LEASE: Duration = Duration.ofNanos(Long.MAX_VALUE)
+    }
 }

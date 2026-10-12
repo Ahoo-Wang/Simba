@@ -16,6 +16,7 @@ import me.ahoo.simba.core.AbstractMutexContender
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexState
+import java.time.Duration
 
 /**
  * Runs [work] on the leader of [mutex] only, without subclassing: work starts when this node acquires the mutex
@@ -55,6 +56,12 @@ class SimbaScheduler(
             get() = this@SimbaScheduler.mutex
         override val fencingToken: Long
             get() = this@SimbaScheduler.fencingToken
+        override val leaseRemaining: Duration
+            get() = contendService.leaseRemaining
+
+        override fun ensureLease(minRemaining: Duration) {
+            contendService.ensureLease(minRemaining)
+        }
     }
 
     private val runner = ScheduledWorkRunner(

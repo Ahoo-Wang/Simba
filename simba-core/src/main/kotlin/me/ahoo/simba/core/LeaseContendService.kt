@@ -13,6 +13,7 @@
 package me.ahoo.simba.core
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import java.time.Duration
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
@@ -78,6 +79,27 @@ open class LeaseContendService @JvmOverloads constructor(
      * `System.nanoTime()` at which the held lease ends; `null` when no bounded lease is held.
      */
     private var leaseDeadlineNanos: Long? = null
+
+    /**
+     * The held lease as [leaseRemaining] reads it without taking [lock] (which a stop holds during the release
+     * call): `null` without a lease. Written under [lock].
+     */
+    @Volatile
+    private var heldLease: HeldLease? = null
+
+    /**
+     * The watchdog deadline while this contender owns the mutex: never later than the local revocation, and
+     * measured from when the granting call was sent.
+     */
+    final override val leaseRemaining: Duration
+        get() {
+            val lease = heldLease
+            if (lease == null || !isOwner) {
+                return Duration.ZERO
+            }
+            val deadlineNanos = lease.deadlineNanos ?: return MutexContendService.UNBOUNDED_LEASE
+            return Duration.ofNanos((deadlineNanos - System.nanoTime()).coerceAtLeast(0))
+        }
 
     /**
      * Called while starting, before the first contention is scheduled.
@@ -257,6 +279,7 @@ open class LeaseContendService @JvmOverloads constructor(
                 if (mutexOwner.isOwner(contenderId)) {
                     holdsLease = true
                     armWatchdog(generation, mutexOwner, sentAtNanos)
+                    heldLease = HeldLease(leaseDeadlineNanos)
                 } else {
                     dropLease()
                 }
@@ -324,6 +347,7 @@ open class LeaseContendService @JvmOverloads constructor(
 
     private fun dropLease() {
         holdsLease = false
+        heldLease = null
         disarmWatchdog()
     }
 
@@ -335,6 +359,7 @@ open class LeaseContendService @JvmOverloads constructor(
             watchdogFuture = null
             leaseDeadlineNanos = null
             holdsLease = false
+            heldLease = null
             log.warn {
                 "onLeaseExpired - mutex:[$mutex] contenderId:[$contenderId] - lease ended without renewal, revoking."
             }
@@ -347,3 +372,8 @@ open class LeaseContendService @JvmOverloads constructor(
         }
     }
 }
+
+/**
+ * A held lease ending at [deadlineNanos] (`System.nanoTime()`), or unbounded when it is `null`.
+ */
+private class HeldLease(val deadlineNanos: Long?)

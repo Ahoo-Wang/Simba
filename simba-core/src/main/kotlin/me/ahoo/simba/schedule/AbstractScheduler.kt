@@ -16,6 +16,7 @@ import me.ahoo.simba.core.AbstractMutexContender
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexState
+import java.time.Duration
 
 /**
  * Abstract Scheduler: leader-only scheduled work by subclassing. Prefer [SimbaScheduler], which needs no subclass
@@ -55,6 +56,20 @@ abstract class AbstractScheduler(
      */
     protected val fencingToken: Long
         get() = contendService.fencingToken
+
+    /**
+     * How long the current leadership term stays valid; see [MutexContendService.leaseRemaining].
+     */
+    protected val leaseRemaining: Duration
+        get() = contendService.leaseRemaining
+
+    /**
+     * Throws [me.ahoo.simba.core.LeaseExpiredException] unless [leaseRemaining] exceeds [minRemaining].
+     */
+    @JvmOverloads
+    protected fun ensureLease(minRemaining: Duration = Duration.ZERO) {
+        contendService.ensureLease(minRemaining)
+    }
 
     inner class WorkContender(mutex: String) : AbstractMutexContender(mutex) {
         private val runner = ScheduledWorkRunner(

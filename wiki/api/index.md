@@ -46,6 +46,8 @@ Created by a factory for one contender; `AutoCloseable`.
 | `isOwner` | This contender owns the mutex (local, weakly consistent view). |
 | `isInTtl` | Owner and before `ttlAt`. |
 | `fencingToken` | Token of the current term while owner, else `0`. |
+| `leaseRemaining` | How long local ownership stays valid: `Duration.ZERO` when not owner, `UNBOUNDED_LEASE` on Zookeeper. Lease backends measure it to the lease watchdog's deadline. |
+| `ensureLease(minRemaining)` | Throws `LeaseExpiredException` unless `leaseRemaining` exceeds `minRemaining` (default zero). |
 | `afterOwner` / `beforeOwner` / `mutexState` | Last observed owner and the previous one. |
 | `hasOwner()` | Someone holds a lease that has not ended. |
 
@@ -71,6 +73,8 @@ interface Locker : AutoCloseable {
     fun acquire()                      // waits until owner
     fun acquire(timeout: Duration)     // throws TimeoutException
     val fencingToken: Long
+    val leaseRemaining: Duration        // Duration.ZERO when not held
+    fun ensureLease(minRemaining: Duration = Duration.ZERO)  // throws LeaseExpiredException
 }
 class SimbaLocker(mutex: String, contendServiceFactory: MutexContendServiceFactory) : Locker
 ```
@@ -98,11 +102,11 @@ mutex, a single-thread executor is created and runs the work; on release the run
 node that never leads holds no work thread.
 
 `ScheduleConfig.delay(initialDelay, period)` runs with a fixed delay between runs; `ScheduleConfig.rate(initialDelay,
-period)` at a fixed rate. `ScheduleContext` exposes `mutex` and `fencingToken`. A failed run is logged and the next one
+period)` at a fixed rate. `ScheduleContext` exposes `mutex`, `fencingToken`, `leaseRemaining` and `ensureLease(minRemaining)`. A failed run is logged and the next one
 still runs.
 
 `AbstractScheduler(mutex, factory)` offers the same semantics by subclassing (`config`, `worker`, `work()`,
-protected `fencingToken`); prefer `SimbaScheduler`.
+protected `fencingToken`, `leaseRemaining`, `ensureLease()`); prefer `SimbaScheduler`.
 
 ### `@SimbaScheduled` — `simba-spring-boot-starter`, `simba.spring.boot.starter.scheduling`
 

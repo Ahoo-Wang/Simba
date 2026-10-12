@@ -431,6 +431,27 @@ Both are lease lengths, unrelated to how long your work runs: renewal happens in
 
 Keep `transition` larger than the worst backend latency plus GC pause, or ownership will move under load.
 
+## Checking the Lease Before Each Step
+
+Work that runs in several steps should not rely on interruption alone, which may arrive in the middle of a step.
+Before starting a step, check how much of the lease is left:
+
+```kotlin
+@SimbaScheduled(mutex = "settlement", fixedDelay = "30s")
+fun settle(context: ScheduleContext) {
+    for (batch in pendingBatches()) {
+        context.ensureLease(Duration.ofSeconds(2)) // throws LeaseExpiredException if 2s or less remain
+        ledger.settle(batch, fencingToken = context.fencingToken)
+    }
+}
+```
+
+`leaseRemaining` and `ensureLease(minRemaining)` exist on `ScheduleContext`, `Locker`, `AbstractScheduler` and
+`MutexContendService`. On JDBC and Redis the remainder runs to the local lease watchdog's deadline, measured from when
+the granting call was sent, so it is never later than the moment the node revokes its own ownership. On Zookeeper it is
+`MutexContendService.UNBOUNDED_LEASE` while leading. A positive remainder is a reason to *start* a step, not a
+guarantee to finish it: a pause can outlast it, so writes still need a fencing token.
+
 ## Fencing Tokens
 
 The local lease guard ends ownership on time, but it cannot stop work that is already running when the process
@@ -793,6 +814,8 @@ Created by a factory for one contender; `AutoCloseable`.
 | `isOwner` | This contender owns the mutex (local, weakly consistent view). |
 | `isInTtl` | Owner and before `ttlAt`. |
 | `fencingToken` | Token of the current term while owner, else `0`. |
+| `leaseRemaining` | How long local ownership stays valid: `Duration.ZERO` when not owner, `UNBOUNDED_LEASE` on Zookeeper. Lease backends measure it to the lease watchdog's deadline. |
+| `ensureLease(minRemaining)` | Throws `LeaseExpiredException` unless `leaseRemaining` exceeds `minRemaining` (default zero). |
 | `afterOwner` / `beforeOwner` / `mutexState` | Last observed owner and the previous one. |
 | `hasOwner()` | Someone holds a lease that has not ended. |
 
@@ -818,6 +841,8 @@ interface Locker : AutoCloseable {
     fun acquire()                      // waits until owner
     fun acquire(timeout: Duration)     // throws TimeoutException
     val fencingToken: Long
+    val leaseRemaining: Duration        // Duration.ZERO when not held
+    fun ensureLease(minRemaining: Duration = Duration.ZERO)  // throws LeaseExpiredException
 }
 class SimbaLocker(mutex: String, contendServiceFactory: MutexContendServiceFactory) : Locker
 ```
@@ -845,11 +870,11 @@ mutex, a single-thread executor is created and runs the work; on release the run
 node that never leads holds no work thread.
 
 `ScheduleConfig.delay(initialDelay, period)` runs with a fixed delay between runs; `ScheduleConfig.rate(initialDelay,
-period)` at a fixed rate. `ScheduleContext` exposes `mutex` and `fencingToken`. A failed run is logged and the next one
+period)` at a fixed rate. `ScheduleContext` exposes `mutex`, `fencingToken`, `leaseRemaining` and `ensureLease(minRemaining)`. A failed run is logged and the next one
 still runs.
 
 `AbstractScheduler(mutex, factory)` offers the same semantics by subclassing (`config`, `worker`, `work()`,
-protected `fencingToken`); prefer `SimbaScheduler`.
+protected `fencingToken`, `leaseRemaining`, `ensureLease()`); prefer `SimbaScheduler`.
 
 ### `@SimbaScheduled` — `simba-spring-boot-starter`, `simba.spring.boot.starter.scheduling`
 
@@ -1029,6 +1054,7 @@ Nodes running different Simba versions contend for the same mutex, so these are 
 | [0004](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0004-leader-scheduling.md) | `SimbaScheduler` and `@SimbaScheduled` |
 | [0005](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0005-observability.md) | `ContendObserver` and Micrometer metrics |
 | [0006](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0006-actuator-endpoint.md) | Read-only `simba` Actuator endpoint |
+| [0007](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0007-lease-validity-and-health.md) | Lease validity for work, fencing recipes, health indicator |
 </doc>
 
 <doc title="Contributing" path="contributing/index.md">

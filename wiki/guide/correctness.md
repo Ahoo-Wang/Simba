@@ -59,6 +59,27 @@ Both are lease lengths, unrelated to how long your work runs: renewal happens in
 
 Keep `transition` larger than the worst backend latency plus GC pause, or ownership will move under load.
 
+## Checking the Lease Before Each Step
+
+Work that runs in several steps should not rely on interruption alone, which may arrive in the middle of a step.
+Before starting a step, check how much of the lease is left:
+
+```kotlin
+@SimbaScheduled(mutex = "settlement", fixedDelay = "30s")
+fun settle(context: ScheduleContext) {
+    for (batch in pendingBatches()) {
+        context.ensureLease(Duration.ofSeconds(2)) // throws LeaseExpiredException if 2s or less remain
+        ledger.settle(batch, fencingToken = context.fencingToken)
+    }
+}
+```
+
+`leaseRemaining` and `ensureLease(minRemaining)` exist on `ScheduleContext`, `Locker`, `AbstractScheduler` and
+`MutexContendService`. On JDBC and Redis the remainder runs to the local lease watchdog's deadline, measured from when
+the granting call was sent, so it is never later than the moment the node revokes its own ownership. On Zookeeper it is
+`MutexContendService.UNBOUNDED_LEASE` while leading. A positive remainder is a reason to *start* a step, not a
+guarantee to finish it: a pause can outlast it, so writes still need a fencing token.
+
 ## Fencing Tokens
 
 The local lease guard ends ownership on time, but it cannot stop work that is already running when the process
