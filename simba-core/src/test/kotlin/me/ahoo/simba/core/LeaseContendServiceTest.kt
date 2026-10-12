@@ -401,6 +401,56 @@ class LeaseContendServiceTest {
     }
 
     @Test
+    fun `a failed release still gives up ownership locally`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+        store.failRelease = IllegalStateException("backend unavailable")
+
+        assertThrows<IllegalStateException> { service.relinquish(Duration.ofSeconds(5)) }
+
+        service.isOwner.assert().isFalse()
+        contender.released.size.assert().isEqualTo(1)
+        scheduler.pending.single().delayMillis.assert().isBetween(4_990, 5_001)
+    }
+
+    @Test
+    fun `relinquish without a cooldown contends again at once`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+
+        service.relinquish(Duration.ZERO)
+
+        scheduler.pending.single().delayMillis.assert().isEqualTo(0)
+        scheduler.runNext()
+        io.runNext()
+        service.isOwner.assert().isTrue()
+    }
+
+    @Test
+    fun `relinquish from onAcquired does not wait for its own callback`() {
+        val released = mutableListOf<MutexState>()
+        lateinit var relinquishing: LeaseContendService
+        val stepsDown = object : AbstractMutexContender("m") {
+            override fun onAcquired(mutexState: MutexState) {
+                relinquishing.relinquish(Duration.ofSeconds(5))
+            }
+
+            override fun onReleased(mutexState: MutexState) {
+                released += mutexState
+            }
+        }
+        relinquishing = TestLeaseContendService(stepsDown, store, config, scheduler, io)
+        relinquishing.start()
+        scheduler.runNext()
+        io.runNext()
+
+        relinquishing.isOwner.assert().isFalse()
+        released.size.assert().isEqualTo(1)
+    }
+
+    @Test
     fun `relinquish requires a running service and a non-negative cooldown`() {
         assertThrows<IllegalStateException> { service.relinquish(Duration.ZERO) }
         service.start()
@@ -626,6 +676,7 @@ class LeaseContendServiceTest {
         var otherOwner: String? = null
         var failNext: Throwable? = null
         var unbounded = false
+        var failRelease: Throwable? = null
         val renewFlags = mutableListOf<Boolean>()
         var contendCalls = 0
         var releaseCalls = 0
@@ -646,6 +697,7 @@ class LeaseContendServiceTest {
 
         override fun release(mutex: String, contenderId: String): Boolean {
             releaseCalls++
+            failRelease?.let { throw it }
             if (ownerId != contenderId) {
                 return false
             }

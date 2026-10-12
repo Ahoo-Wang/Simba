@@ -154,7 +154,8 @@ open class LeaseContendService @JvmOverloads constructor(
 
     final override fun relinquish(cooldown: Duration) {
         require(!cooldown.isNegative) { "cooldown must not be negative: $cooldown" }
-        val release = synchronized(lock) {
+        var release: CompletableFuture<Void> = CompletableFuture.completedFuture(null)
+        synchronized(lock) {
             val generation = currentGeneration
             check(isActive(generation)) {
                 "Cannot relinquish mutex:[$mutex] contenderId:[$contenderId] from state:[$status]."
@@ -171,10 +172,13 @@ open class LeaseContendService @JvmOverloads constructor(
                     leaseStore.release(mutex, contenderId)
                 }
             } finally {
+                // Even if the release call failed: ownership is given up locally, the lease then just runs out.
                 schedule(0, generation)
+                // A non-owner keeps its view of the current owner.
+                if (held || isOwner) {
+                    release = notifyOwner(MutexOwner.NONE)
+                }
             }
-            // A non-owner keeps its view of the current owner.
-            if (held || isOwner) notifyOwner(MutexOwner.NONE) else CompletableFuture.completedFuture<Void>(null)
         }
         awaitNotification(release)
     }

@@ -16,6 +16,7 @@ import me.ahoo.simba.schedule.AbstractScheduler
 import me.ahoo.simba.schedule.ScheduleConfig
 import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.time.Duration
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
@@ -53,6 +54,43 @@ class AbstractSchedulerHandoverTest {
         scheduler.stop()
 
         events.toList().assert().containsExactly("work ended", "stopContend")
+    }
+
+    @Test
+    fun `an interrupted stop releases without waiting and keeps the interrupt`() {
+        val finish = CountDownLatch(1)
+        val stubborn = object : AbstractScheduler("stubborn", factory) {
+            override val config: ScheduleConfig = ScheduleConfig.delay(Duration.ZERO, Duration.ofHours(1))
+            override val worker: String = "stubborn-worker"
+            override fun work() {
+                started.countDown()
+                while (!finish.await(1, TimeUnit.SECONDS)) {
+                    Thread.interrupted()
+                }
+            }
+        }
+        val service = factory.service!!
+        service.calls = events
+        stubborn.start()
+        service.publishOwner(MutexOwner(service.contenderId)).join()
+        started.await(2, TimeUnit.SECONDS).assert().isTrue()
+
+        Thread.currentThread().interrupt()
+        stubborn.stop()
+
+        Thread.interrupted().assert().isTrue()
+        events.toList().assert().containsExactly("stopContend")
+        finish.countDown()
+    }
+
+    @Test
+    fun `contend services without relinquish support say so`() {
+        val service = object : AbstractMutexContendService(FakeMutexContender("m", "c1"), SameThreadExecutor) {
+            override fun startContend() = Unit
+            override fun stopContend() = Unit
+        }
+
+        assertThrows<UnsupportedOperationException> { service.relinquish(Duration.ZERO) }
     }
 
     @Test

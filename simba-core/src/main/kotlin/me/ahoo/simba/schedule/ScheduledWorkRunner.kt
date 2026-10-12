@@ -91,20 +91,31 @@ internal class ScheduledWorkRunner(
         cancel()
         val remaining = contendService.leaseRemaining
         val wait = if (remaining == MutexContendService.UNBOUNDED_LEASE) MAX_UNBOUNDED_HANDOVER_WAIT else remaining
-        val stopped = try {
-            running.tryLock(wait.toNanos(), TimeUnit.NANOSECONDS)
+        if (awaitIdle(wait)) {
+            return true
+        }
+        log.warn {
+            "handOver - mutex:[$mutex] - work still running after [${wait.toMillis()}ms], releasing anyway."
+        }
+        return false
+    }
+
+    /**
+     * Whether no run is in progress within [wait]; `false` when interrupted (the flag is restored).
+     */
+    private fun awaitIdle(wait: Duration): Boolean {
+        try {
+            if (running.tryLock(wait.toNanos(), TimeUnit.NANOSECONDS)) {
+                try {
+                    return true
+                } finally {
+                    running.unlock()
+                }
+            }
         } catch (interrupted: InterruptedException) {
             Thread.currentThread().interrupt()
-            false
         }
-        if (stopped) {
-            running.unlock()
-        } else {
-            log.warn {
-                "handOver - mutex:[$mutex] - work still running after [${wait.toMillis()}ms], releasing anyway."
-            }
-        }
-        return stopped
+        return false
     }
 
     fun shutdown() {
