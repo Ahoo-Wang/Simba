@@ -19,10 +19,10 @@ import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.WorkOutcome
 import me.ahoo.simba.util.Threads.defaultFactory
 import java.time.Duration
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.locks.ReentrantLock
 
 /**
  * Runs scheduled work while its contender leads: [start] on acquisition, [cancel] (interrupting) on release,
@@ -59,9 +59,10 @@ internal class ScheduledWorkRunner(
     private var workFuture: ScheduledFuture<*>? = null
 
     /**
-     * Held by the worker thread while a run is in progress.
+     * The run in progress: its thread and a latch released when it returns; `null` between runs.
      */
-    private val running = ReentrantLock()
+    @Volatile
+    private var currentRun: Pair<Thread, CountDownLatch>? = null
 
     fun start() {
         if (workFuture?.isDone == false) {
@@ -104,18 +105,17 @@ internal class ScheduledWorkRunner(
      * Whether no run is in progress within [wait]; `false` when interrupted (the flag is restored).
      */
     private fun awaitIdle(wait: Duration): Boolean {
-        try {
-            if (running.tryLock(wait.toNanos(), TimeUnit.NANOSECONDS)) {
-                try {
-                    return true
-                } finally {
-                    running.unlock()
-                }
-            }
+        val (thread, done) = currentRun ?: return true
+        if (thread === Thread.currentThread()) {
+            // Called from the run itself, which cannot wait for its own end.
+            return true
+        }
+        return try {
+            done.await(wait.toNanos(), TimeUnit.NANOSECONDS)
         } catch (interrupted: InterruptedException) {
             Thread.currentThread().interrupt()
+            false
         }
-        return false
     }
 
     fun shutdown() {
@@ -128,11 +128,13 @@ internal class ScheduledWorkRunner(
     }
 
     private fun safeWork() {
-        running.lock()
+        val done = CountDownLatch(1)
+        currentRun = Thread.currentThread() to done
         try {
             runOnce()
         } finally {
-            running.unlock()
+            currentRun = null
+            done.countDown()
         }
     }
 

@@ -120,6 +120,21 @@ class SimbaSchedulerTest {
     }
 
     @Test
+    fun `work stopping its own scheduler does not wait for itself`() {
+        val stopped = CountDownLatch(1)
+        lateinit var scheduler: SimbaScheduler
+        scheduler = SimbaScheduler("self-stop", factory, ScheduleConfig.delay(Duration.ZERO, Duration.ofHours(1))) {
+            scheduler.stop()
+            stopped.countDown()
+        }
+        scheduler.start()
+        factory.lead(scheduler)
+
+        stopped.await(2, TimeUnit.SECONDS).assert().isTrue()
+        scheduler.running.assert().isFalse()
+    }
+
+    @Test
     fun `work outliving the lease does not hold back the release`() {
         val events = ConcurrentLinkedQueue<String>()
         val started = CountDownLatch(1)
