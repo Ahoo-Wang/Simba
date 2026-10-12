@@ -5,8 +5,9 @@ description: Steps and breaking changes when upgrading to Simba 4.x.
 
 # Upgrading
 
-Simba follows [Semantic Versioning](https://semver.org/). 4.1, 4.2 and 4.3 are additive (`@SimbaScheduled` and
-`SimbaScheduler`, `ContendObserver` and Micrometer metrics, the `simba` Actuator endpoint); only 4.0 needs action.
+Simba follows [Semantic Versioning](https://semver.org/). 4.1 to 4.4 are additive (`@SimbaScheduled` and
+`SimbaScheduler`, `ContendObserver` and Micrometer metrics, the `simba` Actuator endpoint, `leaseRemaining` /
+`ensureLease`, `FencingSpec` and the `simba` health indicator); only 4.0 needs action.
 
 ## To 4.0
 
