@@ -40,7 +40,8 @@ description: 构建 Simba、运行测试、借助 TCK 添加后端，并保持�
 
 ## 后端 TCK
 
-`simba-test` 提供 `MutexContendServiceSpec`。每个后端的测试都继承它并提供一个工厂：
+`simba-test` 提供 `MutexContendServiceSpec`（以及用于检查 token 的资源的 `FencingSpec`，见
+[正确性](/zh/guide/correctness)）。每个后端的测试都继承它并提供一个工厂：
 
 ```kotlin
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)

@@ -42,7 +42,8 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
 
 - `simba-core` knows no backend and depends only on kotlin-logging. Backend behavior stays in its module; shared API
   types live in core.
-- `simba-test` holds the TCK every backend must pass: `MutexContendServiceSpec`, `LockSpec`.
+- `simba-test` holds the TCK every backend must pass (`MutexContendServiceSpec`, `LockSpec`) and `FencingSpec`, the
+  kit users run against their own token-checking resource (ADR 0007).
 - `simba-bom`, `simba-dependencies`: publication metadata. `code-coverage-report`: JaCoCo aggregation only.
 
 ### Layers (top to bottom)
