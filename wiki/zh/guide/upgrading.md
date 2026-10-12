@@ -5,8 +5,9 @@ description: 升级到 Simba 4.x 的步骤与破坏性变更。
 
 # 升级
 
-Simba 遵循 [语义化版本](https://semver.org/lang/zh-CN/)。4.1、4.2 和 4.3 都是增量功能（`@SimbaScheduled` 与 `SimbaScheduler`、
-`ContendObserver` 与 Micrometer 指标、`simba` Actuator 端点）；只有 4.0 需要采取行动。
+Simba 遵循 [语义化版本](https://semver.org/lang/zh-CN/)。4.1 至 4.4 都是增量功能（`@SimbaScheduled` 与 `SimbaScheduler`、
+`ContendObserver` 与 Micrometer 指标、`simba` Actuator 端点、`leaseRemaining` / `ensureLease`、`FencingSpec` 与 `simba` 健康检查）；
+只有 4.0 需要采取行动。
 
 ## 升级到 4.0
 
