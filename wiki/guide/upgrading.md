@@ -5,9 +5,11 @@ description: Steps and breaking changes when upgrading to Simba 4.x.
 
 # Upgrading
 
-Simba follows [Semantic Versioning](https://semver.org/). 4.1 to 4.5 are additive (`@SimbaScheduled` and
+Simba follows [Semantic Versioning](https://semver.org/). 4.1 to 4.6 are additive (`@SimbaScheduled` and
 `SimbaScheduler`, `ContendObserver` and Micrometer metrics, the `simba` Actuator endpoint, `leaseRemaining` /
-`ensureLease`, `FencingSpec` and the `simba` health indicator, `relinquish(cooldown)`); only 4.0 needs action.
+`ensureLease`, `FencingSpec` and the `simba` health indicator, `relinquish(cooldown)`, `SimbaPartitionedScheduler`); only
+4.0 needs action. To use partitioned scheduling on JDBC, add the `simba_member` table with
+[`upgrade-simba-mysql-member.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/upgrade-simba-mysql-member.sql).
 
 Since 4.5, `SimbaScheduler.stop()` and `AbstractScheduler.stop()` cancel the work and wait for a running run (at most
 the remaining lease) before releasing the mutex, instead of releasing first. Shutdown can therefore take up to that
