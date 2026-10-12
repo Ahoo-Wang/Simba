@@ -46,6 +46,8 @@ interface MutexContendServiceFactory {
 | `isOwner` | 该竞争者持有 mutex（本地弱一致视图）。 |
 | `isInTtl` | 是持有者且在 `ttlAt` 之前。 |
 | `fencingToken` | 作为持有者时当前任期的 token，否则为 `0`。 |
+| `leaseRemaining` | 本地所有权还能保持多久：不是持有者时为 `Duration.ZERO`，Zookeeper 为 `UNBOUNDED_LEASE`。租约后端以本地租约看门狗的截止时间计算。 |
+| `ensureLease(minRemaining)` | 除非 `leaseRemaining` 大于 `minRemaining`（默认为零），否则抛出 `LeaseExpiredException`。 |
 | `afterOwner` / `beforeOwner` / `mutexState` | 最近观察到的持有者及其前一个。 |
 | `hasOwner()` | 有人持有尚未结束的租约。 |
 
@@ -71,6 +73,8 @@ interface Locker : AutoCloseable {
     fun acquire()                      // 等待直到成为持有者
     fun acquire(timeout: Duration)     // 超时抛出 TimeoutException
     val fencingToken: Long
+    val leaseRemaining: Duration        // 未持有时为 Duration.ZERO
+    fun ensureLease(minRemaining: Duration = Duration.ZERO)  // 抛出 LeaseExpiredException
 }
 class SimbaLocker(mutex: String, contendServiceFactory: MutexContendServiceFactory) : Locker
 ```
@@ -96,9 +100,9 @@ class SimbaScheduler(
 释放时以中断方式取消运行。从未成为 leader 的节点不持有工作线程。
 
 `ScheduleConfig.delay(initialDelay, period)` 以固定延迟运行；`ScheduleConfig.rate(initialDelay, period)` 以固定频率运行。
-`ScheduleContext` 提供 `mutex` 和 `fencingToken`。某次运行失败会被记录日志，后续运行照常进行。
+`ScheduleContext` 提供 `mutex`、`fencingToken`、`leaseRemaining` 和 `ensureLease(minRemaining)`。某次运行失败会被记录日志，后续运行照常进行。
 
-`AbstractScheduler(mutex, factory)` 以继承方式提供相同语义（`config`、`worker`、`work()`、protected `fencingToken`）；
+`AbstractScheduler(mutex, factory)` 以继承方式提供相同语义（`config`、`worker`、`work()`、protected `fencingToken`、`leaseRemaining`、`ensureLease()`）；
 推荐使用 `SimbaScheduler`。
 
 ### `@SimbaScheduled` — `simba-spring-boot-starter`，`simba.spring.boot.starter.scheduling`

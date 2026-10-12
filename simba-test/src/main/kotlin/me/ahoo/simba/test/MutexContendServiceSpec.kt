@@ -16,6 +16,7 @@ package me.ahoo.simba.test
 import me.ahoo.simba.core.AbstractMutexContender
 import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.ContendOutcome
+import me.ahoo.simba.core.LeaseExpiredException
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexOwner
@@ -26,6 +27,7 @@ import me.ahoo.simba.schedule.SimbaScheduler
 import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
@@ -45,6 +47,7 @@ abstract class MutexContendServiceSpec {
         const val SCHEDULE_MUTEX = "schedule"
         const val SIMBA_SCHEDULER_MUTEX = "simbaScheduler"
         const val OBSERVER_MUTEX = "observer"
+        const val LEASE_REMAINING_MUTEX = "leaseRemaining"
     }
 
     abstract val mutexContendServiceFactory: MutexContendServiceFactory
@@ -123,6 +126,32 @@ abstract class MutexContendServiceSpec {
         contendService.stop()
         releasedFuture2.join()
         contendService.isOwner.assert().isFalse()
+    }
+
+    @Test
+    open fun leaseRemaining() {
+        val acquiredFuture = CompletableFuture<MutexOwner>()
+        val releasedFuture = CompletableFuture<MutexOwner>()
+        val contendService = mutexContendServiceFactory.createMutexContendService(object : AbstractMutexContender(
+            LEASE_REMAINING_MUTEX
+        ) {
+            override fun onAcquired(mutexState: MutexState) {
+                acquiredFuture.complete(mutexState.after)
+            }
+
+            override fun onReleased(mutexState: MutexState) {
+                releasedFuture.complete(mutexState.after)
+            }
+        })
+        contendService.leaseRemaining.assert().isEqualTo(Duration.ZERO)
+        contendService.start()
+        acquiredFuture.join()
+        contendService.leaseRemaining.assert().isGreaterThan(Duration.ZERO)
+        contendService.ensureLease()
+        contendService.stop()
+        releasedFuture.join()
+        contendService.leaseRemaining.assert().isEqualTo(Duration.ZERO)
+        assertThrows<LeaseExpiredException> { contendService.ensureLease() }
     }
 
     @Test

@@ -12,7 +12,10 @@
  */
 package me.ahoo.simba.locker
 
+import me.ahoo.simba.core.LeaseExpiredException
+import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexOwner
+import me.ahoo.simba.core.checkLease
 import java.time.Duration
 import java.util.concurrent.TimeoutException
 
@@ -42,4 +45,24 @@ interface Locker : AutoCloseable {
      */
     val fencingToken: Long
         get() = MutexOwner.NO_FENCING_TOKEN
+
+    /**
+     * How long the held lock stays valid, [Duration.ZERO] when not held; see [MutexContendService.leaseRemaining].
+     */
+    val leaseRemaining: Duration
+        get() = Duration.ZERO
+
+    /**
+     * Throws [LeaseExpiredException] unless the lock is held with some lease left.
+     */
+    fun ensureLease() {
+        ensureLease(Duration.ZERO)
+    }
+
+    /**
+     * Throws [LeaseExpiredException] unless [leaseRemaining] exceeds [minRemaining].
+     */
+    fun ensureLease(minRemaining: Duration) {
+        checkLease(leaseRemaining, minRemaining) { "locker" }
+    }
 }

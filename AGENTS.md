@@ -93,6 +93,9 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
   *sent*. It revokes local ownership if no renewal succeeds by then, even while a backend call hangs. A failed renew
   keeps ownership while the lease is still valid and retries with halving backoff (min 100 ms); otherwise it revokes
   and retries after `ttl`. With `transition = 0`, ownership can flap.
+- `leaseRemaining` / `ensureLease` (ADR 0007) read that watchdog deadline in `LeaseContendService` (lock-free, zero
+  until the acquisition is observed); other services derive it from `afterOwner`, unbounded on Zookeeper. It is a
+  hint to start a step, never a substitute for the fencing check.
 - The starter sets `JdbcMutexOwnerRepository.queryTimeout` to `simba.jdbc.ttl` (a call slower than the ttl could not keep ownership anyway).
 
 ### Threading
@@ -171,6 +174,6 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
 |---|---|
 | `README.md`, `README.zh-CN.md`, `llms.txt` | Entry points: what Simba is, install, one example per API (`llms.txt` mirrors `wiki/llms.txt`) |
 | `wiki/` | VitePress site, the authoritative docs; page ownership and rules in `wiki/AGENTS.md` |
-| `docs/adr/` | ADRs: 0001 lease engine, 0002 fencing token, 0003 Simba 4, 0004 leader scheduling, 0005 observability, 0006 Actuator endpoint |
+| `docs/adr/` | ADRs: 0001 lease engine, 0002 fencing token, 0003 Simba 4, 0004 leader scheduling, 0005 observability, 0006 Actuator endpoint, 0007 lease validity and health |
 | `CONTRIBUTING.md`, `SECURITY.md`, `.github/` | Contribution workflow, quality gates, SemVer and releases; vulnerability reporting; templates, labeler, CODEOWNERS |
 | `skills/simba/`, `skills/simba-testing/` | Source skill docs; do not generate marketplace artifacts here |

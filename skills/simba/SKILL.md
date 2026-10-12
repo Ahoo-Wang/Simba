@@ -171,6 +171,7 @@ val scheduler = SimbaScheduler(
     config = ScheduleConfig.delay(Duration.ZERO, Duration.ofMinutes(1))
 ) { context ->
     // Runs only while this node leads; pass context.fencingToken to protected resources.
+    context.ensureLease() // throws LeaseExpiredException once the lease is gone; check before each step
     doWork(context.fencingToken)
 }
 scheduler.start()

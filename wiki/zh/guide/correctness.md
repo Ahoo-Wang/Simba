@@ -53,6 +53,25 @@ Zookeeper 没有租约：领导权持续到 latch 关闭或会话过期（见 [�
 
 让 `transition` 大于最差的后端延迟加上 GC 暂停，否则所有权会在负载下来回转移。
 
+## 每一步之前检查租约
+
+分多步运行的工作不应只依赖中断，因为中断可能在某一步进行到一半时才到达。开始每一步之前，先检查租约还剩多少：
+
+```kotlin
+@SimbaScheduled(mutex = "settlement", fixedDelay = "30s")
+fun settle(context: ScheduleContext) {
+    for (batch in pendingBatches()) {
+        context.ensureLease(Duration.ofSeconds(2)) // 剩余不超过 2 秒时抛出 LeaseExpiredException
+        ledger.settle(batch, fencingToken = context.fencingToken)
+    }
+}
+```
+
+`ScheduleContext`、`Locker`、`AbstractScheduler` 和 `MutexContendService` 都提供 `leaseRemaining` 与
+`ensureLease(minRemaining)`。在 JDBC 和 Redis 上，剩余时间截止于本地租约看门狗的期限（从发出授予租约的那次调用时算起），
+因此永远不会晚于本节点自行撤销所有权的时刻。在 Zookeeper 上，作为 leader 时为 `MutexContendService.UNBOUNDED_LEASE`。
+剩余时间为正只是 *开始* 一步的理由，不保证能完成它：暂停可能超过剩余时间，因此写入仍然需要 fencing token。
+
 ## Fencing Token
 
 本地租约守护能按时结束所有权，但无法阻止进程暂停时已经在运行的工作。一个在 20 秒 GC 暂停开始时正在写入的调度线程，

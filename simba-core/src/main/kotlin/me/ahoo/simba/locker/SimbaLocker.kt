@@ -118,6 +118,13 @@ class SimbaLocker(
     override val fencingToken: Long
         get() = contendService.fencingToken
 
+    override val leaseRemaining: Duration
+        get() = contendService.leaseRemaining
+
+    override fun ensureLease(minRemaining: Duration) {
+        contendService.ensureLease(minRemaining)
+    }
+
     override fun onAcquired(mutexState: MutexState) {
         super.onAcquired(mutexState)
         LockSupport.unpark(OWNER[this])

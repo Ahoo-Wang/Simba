@@ -239,6 +239,91 @@ class LeaseContendServiceTest {
     }
 
     @Test
+    fun `lease remaining follows the watchdog deadline while owner`() {
+        service.leaseRemaining.assert().isEqualTo(Duration.ZERO)
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+
+        service.leaseRemaining.toMillis().assert().isBetween(1, 800)
+        service.ensureLease(Duration.ofMillis(1))
+        assertThrows<LeaseExpiredException> { service.ensureLease(Duration.ofMillis(800)) }
+    }
+
+    @Test
+    fun `onAcquired already sees the lease`() {
+        val seen = mutableListOf<Duration>()
+        lateinit var observed: LeaseContendService
+        val recording = object : AbstractMutexContender("m") {
+            override fun onAcquired(mutexState: MutexState) {
+                seen += observed.leaseRemaining
+            }
+        }
+        observed = TestLeaseContendService(recording, store, config, scheduler, io)
+        observed.start()
+        scheduler.runNext()
+        io.runNext()
+
+        seen.single().toMillis().assert().isBetween(1, 800)
+    }
+
+    @Test
+    fun `lease remaining is zero once the watchdog revoked ownership`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+
+        scheduler.watchdogs.single().run()
+
+        service.leaseRemaining.assert().isEqualTo(Duration.ZERO)
+        assertThrows<LeaseExpiredException> { service.ensureLease() }
+    }
+
+    @Test
+    fun `lease remaining is zero while another contender owns`() {
+        store.otherOwner = "c2"
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+
+        service.leaseRemaining.assert().isEqualTo(Duration.ZERO)
+    }
+
+    @Test
+    fun `lease remaining is zero while the acquisition is not yet observed`() {
+        val deferredNotifications = ManualExecutor()
+        val deferred = TestLeaseContendService(contender, store, config, scheduler, io, deferredNotifications)
+        deferred.start()
+        scheduler.runNext()
+        io.runNext()
+
+        deferred.leaseRemaining.assert().isEqualTo(Duration.ZERO)
+        deferredNotifications.runNext()
+        deferred.leaseRemaining.toMillis().assert().isBetween(1, 800)
+    }
+
+    @Test
+    fun `unbounded lease reports unbounded remaining`() {
+        store.unbounded = true
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+
+        service.leaseRemaining.assert().isEqualTo(MutexContendService.UNBOUNDED_LEASE)
+    }
+
+    @Test
+    fun `lease remaining is zero after stop`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+
+        service.stop()
+
+        service.leaseRemaining.assert().isEqualTo(Duration.ZERO)
+    }
+
+    @Test
     fun `stop disarms the watchdog`() {
         service.start()
         scheduler.runNext()

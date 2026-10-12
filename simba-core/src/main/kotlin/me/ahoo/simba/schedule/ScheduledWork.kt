@@ -12,6 +12,11 @@
  */
 package me.ahoo.simba.schedule
 
+import me.ahoo.simba.core.LeaseExpiredException
+import me.ahoo.simba.core.MutexContendService
+import me.ahoo.simba.core.checkLease
+import java.time.Duration
+
 /**
  * What scheduled work knows about the leadership term it runs in.
  *
@@ -25,6 +30,28 @@ interface ScheduleContext {
      * [me.ahoo.simba.core.MutexOwner.NO_FENCING_TOKEN] when unsupported by the backend.
      */
     val fencingToken: Long
+
+    /**
+     * How long the current leadership term stays valid; see [MutexContendService.leaseRemaining]. Check it before
+     * each step of long work instead of relying on interruption alone.
+     */
+    val leaseRemaining: Duration
+        get() = Duration.ZERO
+
+    /**
+     * Throws [LeaseExpiredException] unless this node still leads with some lease left.
+     */
+    fun ensureLease() {
+        ensureLease(Duration.ZERO)
+    }
+
+    /**
+     * Throws [LeaseExpiredException] unless [leaseRemaining] exceeds [minRemaining], e.g. the expected duration of
+     * the next step.
+     */
+    fun ensureLease(minRemaining: Duration) {
+        checkLease(leaseRemaining, minRemaining) { "mutex:[$mutex]" }
+    }
 }
 
 /**
