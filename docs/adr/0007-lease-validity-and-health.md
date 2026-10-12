@@ -64,8 +64,10 @@ dialect SPI).
   per mutex, the time of the last successful and last failed `onContend` and of the last `onLeaseExpired`
   (monotonic time).
 - Status:
-  - `DOWN` when a running polling-backend service has had only failed backend round trips for longer than its
-    `ttl + transition`: the node can neither acquire nor keep a lease.
+  - `DOWN` when a running polling-backend service had no successful backend round trip for more than twice its
+    `ttl + transition` (counted from its start): the node can neither acquire nor keep a lease. Measuring from the
+    last success instead of counting failures also catches calls that hang; twice the lease leaves room for a
+    non-owner's normal retry interval (`transitionAt` plus jitter).
   - `UP` otherwise, including when the node is not the owner — not leading is normal, not unhealthy.
 - Details per mutex: owner (yes/no), fencing token, `leaseRemaining`, last success / failure age, and whether the
   watchdog revoked ownership within the last `ttl + transition`.

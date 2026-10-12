@@ -98,7 +98,7 @@ contendService.stop();
 | [后端](https://simba.ahoo.me/zh/guide/backends) | JDBC、Redis、Zookeeper：存储、部署、运维要点 |
 | [正确性](https://simba.ahoo.me/zh/guide/correctness) | 租约、ttl/transition、fencing token、故障模式 |
 | [配置](https://simba.ahoo.me/zh/guide/configuration) | `simba.*` 属性与工厂 |
-| [可观测性](https://simba.ahoo.me/zh/guide/observability) | Micrometer 指标、`simba` Actuator 端点、告警 |
+| [可观测性](https://simba.ahoo.me/zh/guide/observability) | Micrometer 指标、`simba` Actuator 端点、健康检查、告警 |
 | [升级](https://simba.ahoo.me/zh/guide/upgrading) | 升级到 4.x |
 | [API 参考](https://simba.ahoo.me/zh/api/) | 公共类型 |
 | [架构](https://simba.ahoo.me/zh/architecture/)、[ADR](docs/adr/) | 内部实现与设计决策 |

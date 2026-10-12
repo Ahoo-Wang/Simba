@@ -89,6 +89,37 @@ management:
 
 `currentOwner` 是本节点最后观察到的 owner，所以 JDBC 和 Redis 的非 leader 节点也能看到谁是 leader；Zookeeper 节点只知道自己的情况。租约不限期时 `ttlAt` 和 `transitionAt` 为 `null`。端点没有写操作。不通过 starter 创建的工厂，需要传入 `SimbaServiceTracker` 观察者才会出现在端点里。
 
+## 健康检查
+
+启用 Spring Boot 健康检查支持（Actuator 的一部分）时，starter 会注册 `simba` 健康指示器。当一个运行中的 JDBC 或 Redis
+竞争服务超过两倍 `ttl + transition` 都没有一次成功的后端往返时，它为 `DOWN`：无论调用是失败还是挂起，该节点既无法获取也无法保持租约。
+不持有 mutex 是健康的。Zookeeper 服务只提供详情，不会变为 `DOWN`；Curator 连接由 Curator 客户端自己负责。
+
+```json
+{
+  "status": "DOWN",
+  "details": {
+    "mutexes": [
+      {
+        "mutex": "report",
+        "contenderId": "0:4242@host-a",
+        "owner": false,
+        "fencingToken": 0,
+        "sinceLastSuccess": "33012ms",
+        "failingFor": "33012ms",
+        "stale": true
+      }
+    ]
+  }
+}
+```
+
+持有者还会显示 `leaseRemaining`；如果租约看门狗在最近一个 `ttl + transition` 内撤销过所有权，会出现 `leaseExpiredAgo`。
+
+该指示器 **不** 属于 liveness 或 readiness 分组。后端故障会同时影响所有节点；重启或摘除所有节点会把协调层故障变成应用故障。
+只有确实需要时才自行加入分组（`management.endpoint.health.group.<name>.include=simba`），可用
+`management.health.simba.enabled=false` 关闭它。
+
 ## 自定义观察者
 
 实现 `ContendObserver` 即可把事件转发到其他地方。所有方法默认什么都不做；实现必须快速且线程安全，抛出的异常会被记录并忽略。

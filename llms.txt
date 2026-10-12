@@ -9,7 +9,7 @@
 - [Backends](wiki/guide/backends.md) — JDBC/MySQL, Redis and Zookeeper: storage, fencing tokens, operating notes
 - [Correctness](wiki/guide/correctness.md) — Lease model, choosing ttl/transition, fencing tokens, failure modes, callbacks
 - [Configuration](wiki/guide/configuration.md) — simba.* properties, starter beans, callback executor, factories without Spring
-- [Observability](wiki/guide/observability.md) — Micrometer metrics, simba Actuator endpoint, alert rules, custom ContendObserver
+- [Observability](wiki/guide/observability.md) — Micrometer metrics, simba Actuator endpoint, health indicator, alert rules, custom ContendObserver
 - [Upgrading](wiki/guide/upgrading.md) — Upgrading to 4.x
 
 ## Reference
@@ -20,4 +20,4 @@
 
 - [Architecture](wiki/architecture/index.md) — Modules, contend service layers, lease engine, threads, time, wire contracts, ADR index
 - [Contributing](wiki/contributing/index.md) — Build, tests, backend TCK, adding a backend, documentation
-- [Architecture Decision Records](docs/adr/) — Rationale for the lease engine, fencing tokens, 4.0, scheduling, observability, Actuator endpoint
+- [Architecture Decision Records](docs/adr/) — Rationale for the lease engine, fencing tokens, 4.0, scheduling, observability, Actuator endpoint, lease validity and health

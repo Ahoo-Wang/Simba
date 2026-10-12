@@ -37,6 +37,7 @@ description: 所有 simba.* Spring Boot 属性、回调执行器，以及不使�
 | `simbaHandleExecutor` | 总是 | 定义同名 bean |
 | `MicrometerContendObserver` | Micrometer 且存在 `MeterRegistry` bean | `simba.metrics.enabled=false` |
 | `SimbaEndpoint` | Actuator，端点已启用并暴露 | Actuator 的 `management.*` 属性 |
+| `SimbaHealthIndicator` | Spring Boot 健康检查支持 | `management.health.simba.enabled=false` |
 
 上下文中所有 `ContendObserver` bean 都会按 `@Order` 传给后端工厂。
 
