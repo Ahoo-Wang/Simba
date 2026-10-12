@@ -12,16 +12,35 @@
  */
 package me.ahoo.simba.jdbc
 
+import me.ahoo.simba.SimbaException
 import me.ahoo.simba.partition.MemberRegistry
 import me.ahoo.simba.test.MemberRegistrySpec
+import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.AfterAll
+import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
+import org.junit.jupiter.api.assertThrows
 import java.time.Duration
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 internal class JdbcMemberRegistryTest : MemberRegistrySpec() {
     private val dataSource = MySqlFixture.newDataSource()
     override val memberRegistry: MemberRegistry = JdbcMemberRegistry(dataSource, Duration.ofSeconds(5))
+
+    @Test
+    fun `invalid durations are rejected`() {
+        assertThrows<IllegalArgumentException> { memberRegistry.heartbeat("g", "m", Duration.ZERO) }
+        assertThrows<IllegalArgumentException> { JdbcMemberRegistry(dataSource, Duration.ofMillis(-1)) }
+        // A fractional timeout rounds up to whole seconds rather than to "no timeout".
+        JdbcMemberRegistry(dataSource, Duration.ofMillis(1500)).members("g").assert().isEmpty()
+    }
+
+    @Test
+    fun `database errors surface as SimbaException`() {
+        val closed = MySqlFixture.newDataSource().also { it.close() }
+
+        assertThrows<SimbaException> { JdbcMemberRegistry(closed).members("g") }
+    }
 
     @AfterAll
     fun close() {

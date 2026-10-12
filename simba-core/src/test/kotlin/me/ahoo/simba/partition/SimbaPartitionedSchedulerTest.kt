@@ -105,6 +105,45 @@ class SimbaPartitionedSchedulerTest {
     }
 
     @Test
+    fun `a joining node takes its share from the running ones`() {
+        val a = node("a")
+        a.start()
+        awaitRunsMatching(listOf("a"))
+
+        node("b").start()
+        runs.clear()
+
+        awaitRunsMatching(listOf("a", "b"))
+        a.assignedPartitions.assert().isEqualTo(PartitionAssignment.partitionsOf("a", 8, listOf("a", "b")))
+    }
+
+    @Test
+    fun `an unreachable registry keeps the current partitions and a failed leave does not fail stop`() {
+        val a = node("a")
+        a.start()
+        awaitRunsMatching(listOf("a"))
+
+        registry.failure = IllegalStateException("registry unavailable")
+        runs.clear()
+
+        awaitRunsMatching(listOf("a"))
+        a.assignedPartitions.assert().isEqualTo((0 until 8).toSet())
+        a.stop()
+        a.running.assert().isFalse()
+        registry.failure = null
+    }
+
+    @Test
+    fun `a partition that fails to start is retried on the next heartbeat`() {
+        factory.failNextStart += SimbaPartitionedScheduler.mutexOf("billing", 3)
+        val a = node("a")
+        a.start()
+
+        awaitRunsMatching(listOf("a"))
+        a.assignedPartitions.assert().isEqualTo((0 until 8).toSet())
+    }
+
+    @Test
     fun `a restarted node rejoins`() {
         val a = node("a")
         a.start()
@@ -121,6 +160,25 @@ class SimbaPartitionedSchedulerTest {
     @Test
     fun `invalid configuration and lifecycle misuse fail fast`() {
         assertThrows<IllegalArgumentException> { node("a", partitions = 0) }
+        assertThrows<IllegalArgumentException> {
+            SimbaPartitionedScheduler(
+                " ",
+                1,
+                factory,
+                registry,
+                ScheduleConfig.delay(Duration.ZERO, Duration.ofHours(1))
+            ) {}
+        }
+        assertThrows<IllegalArgumentException> {
+            SimbaPartitionedScheduler(
+                "g",
+                1,
+                factory,
+                registry,
+                ScheduleConfig.delay(Duration.ZERO, Duration.ofHours(1)),
+                membershipTtl = Duration.ZERO
+            ) {}
+        }
         val a = node("a")
         assertThrows<IllegalStateException> { a.stop() }
         a.start()

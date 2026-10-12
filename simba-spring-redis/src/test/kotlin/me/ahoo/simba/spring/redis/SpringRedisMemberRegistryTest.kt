@@ -15,13 +15,21 @@ package me.ahoo.simba.spring.redis
 import me.ahoo.simba.partition.MemberRegistry
 import me.ahoo.simba.test.MemberRegistrySpec
 import org.junit.jupiter.api.AfterAll
+import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
+import org.junit.jupiter.api.assertThrows
 import org.springframework.data.redis.core.StringRedisTemplate
+import java.time.Duration
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 internal class SpringRedisMemberRegistryTest : MemberRegistrySpec() {
     private val connectionFactory = RedisFixture.newConnectionFactory()
     override val memberRegistry: MemberRegistry = SpringRedisMemberRegistry(StringRedisTemplate(connectionFactory))
+
+    @Test
+    fun `heartbeat requires a positive ttl`() {
+        assertThrows<IllegalArgumentException> { memberRegistry.heartbeat("g", "m", Duration.ZERO) }
+    }
 
     @AfterAll
     fun close() {

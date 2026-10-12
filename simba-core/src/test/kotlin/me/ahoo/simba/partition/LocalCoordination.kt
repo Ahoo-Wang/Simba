@@ -35,6 +35,11 @@ class LocalMutexFactory(private val handleExecutor: Executor = ForkJoinPool.comm
 
     private val mutexes = ConcurrentHashMap<String, MutexState>()
 
+    /**
+     * Mutexes whose next start fails once, e.g. to exercise error handling of the callers.
+     */
+    val failNextStart: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
     override fun createMutexContendService(mutexContender: MutexContender): MutexContendService {
         return LocalService(mutexContender)
     }
@@ -45,6 +50,7 @@ class LocalMutexFactory(private val handleExecutor: Executor = ForkJoinPool.comm
             get() = mutexes.computeIfAbsent(mutex) { MutexState() }
 
         override fun startContend() {
+            check(!failNextStart.remove(mutex)) { "start of $mutex failed" }
             val state = state
             synchronized(state) {
                 if (state.owner == null) {
@@ -86,11 +92,19 @@ class LocalMutexFactory(private val handleExecutor: Executor = ForkJoinPool.comm
 class LocalMemberRegistry : MemberRegistry {
     private val groups = ConcurrentHashMap<String, MutableSet<String>>()
 
+    /**
+     * While set, every call fails as an unreachable backend would.
+     */
+    @Volatile
+    var failure: RuntimeException? = null
+
     override fun heartbeat(group: String, memberId: String, ttl: Duration) {
+        failure?.let { throw it }
         groups.computeIfAbsent(group) { ConcurrentHashMap.newKeySet() }.add(memberId)
     }
 
     override fun leave(group: String, memberId: String) {
+        failure?.let { throw it }
         groups[group]?.remove(memberId)
     }
 

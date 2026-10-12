@@ -54,5 +54,7 @@ internal class ZookeeperMemberRegistryTest : MemberRegistrySpec() {
     fun `path separators are rejected`() {
         assertThrows<IllegalArgumentException> { memberRegistry.heartbeat("a/b", "m", Duration.ofSeconds(1)) }
         assertThrows<IllegalArgumentException> { memberRegistry.leave("g", "a/b") }
+        assertThrows<IllegalArgumentException> { memberRegistry.members(" ") }
+        assertThrows<IllegalArgumentException> { memberRegistry.heartbeat("g", "", Duration.ofSeconds(1)) }
     }
 }
