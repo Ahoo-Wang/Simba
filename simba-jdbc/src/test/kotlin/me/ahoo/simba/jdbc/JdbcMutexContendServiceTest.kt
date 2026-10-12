@@ -37,6 +37,11 @@ internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
     private lateinit var jdbcMutexOwnerRepository: JdbcMutexOwnerRepository
     override lateinit var mutexContendServiceFactory: MutexContendServiceFactory
 
+    /**
+     * JDBC contenders retry only at the old lease end (ttl 2s + transition 5s, plus jitter).
+     */
+    override val relinquishCooldown: Duration = Duration.ofSeconds(12)
+
     @BeforeAll
     fun setup() {
         val hikariDataSource = MySqlFixture.newDataSource()

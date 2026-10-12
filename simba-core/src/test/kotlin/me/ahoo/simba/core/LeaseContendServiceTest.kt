@@ -324,6 +324,140 @@ class LeaseContendServiceTest {
     }
 
     @Test
+    fun `relinquish releases the lease and contends again after the cooldown`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+
+        service.relinquish(Duration.ofSeconds(5))
+
+        service.isOwner.assert().isFalse()
+        service.leaseRemaining.assert().isEqualTo(Duration.ZERO)
+        store.releaseCalls.assert().isEqualTo(1)
+        contender.released.size.assert().isEqualTo(1)
+        scheduler.watchdogs.assert().isEmpty()
+        scheduler.pending.single().delayMillis.assert().isBetween(4_990, 5_001)
+
+        scheduler.runNext()
+        io.runNext()
+
+        service.isOwner.assert().isTrue()
+        store.renewFlags.assert().containsExactly(false, false)
+    }
+
+    @Test
+    fun `relinquish while not owner pauses contention without releasing`() {
+        store.otherOwner = "c2"
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+
+        service.relinquish(Duration.ofSeconds(5))
+
+        store.releaseCalls.assert().isEqualTo(0)
+        contender.released.assert().isEmpty()
+        scheduler.pending.single().delayMillis.assert().isBetween(4_990, 5_001)
+    }
+
+    @Test
+    fun `contendNow during the cooldown waits for its end`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+        service.relinquish(Duration.ofSeconds(5))
+
+        service.requestContend()
+
+        scheduler.pending.single().delayMillis.assert().isBetween(4_990, 5_001)
+    }
+
+    @Test
+    fun `an acquisition in flight during relinquish is released unreported`() {
+        service.start()
+        scheduler.runNext()
+        val inFlight = io.take()
+        service.relinquish(Duration.ofSeconds(5))
+
+        inFlight.run()
+
+        service.isOwner.assert().isFalse()
+        contender.acquired.assert().isEmpty()
+        store.releaseCalls.assert().isEqualTo(1)
+        scheduler.watchdogs.assert().isEmpty()
+        scheduler.pending.single().delayMillis.assert().isBetween(4_990, 5_001)
+    }
+
+    @Test
+    fun `stop ends the cooldown and a restart contends at once`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+        service.relinquish(Duration.ofSeconds(5))
+
+        service.stop()
+        service.start()
+
+        scheduler.pending.single().delayMillis.assert().isEqualTo(0)
+    }
+
+    @Test
+    fun `a failed release still gives up ownership locally`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+        store.failRelease = IllegalStateException("backend unavailable")
+
+        assertThrows<IllegalStateException> { service.relinquish(Duration.ofSeconds(5)) }
+
+        service.isOwner.assert().isFalse()
+        contender.released.size.assert().isEqualTo(1)
+        scheduler.pending.single().delayMillis.assert().isBetween(4_990, 5_001)
+    }
+
+    @Test
+    fun `relinquish without a cooldown contends again at once`() {
+        service.start()
+        scheduler.runNext()
+        io.runNext()
+
+        service.relinquish(Duration.ZERO)
+
+        scheduler.pending.single().delayMillis.assert().isEqualTo(0)
+        scheduler.runNext()
+        io.runNext()
+        service.isOwner.assert().isTrue()
+    }
+
+    @Test
+    fun `relinquish from onAcquired does not wait for its own callback`() {
+        val released = mutableListOf<MutexState>()
+        lateinit var relinquishing: LeaseContendService
+        val stepsDown = object : AbstractMutexContender("m") {
+            override fun onAcquired(mutexState: MutexState) {
+                relinquishing.relinquish(Duration.ofSeconds(5))
+            }
+
+            override fun onReleased(mutexState: MutexState) {
+                released += mutexState
+            }
+        }
+        relinquishing = TestLeaseContendService(stepsDown, store, config, scheduler, io)
+        relinquishing.start()
+        scheduler.runNext()
+        io.runNext()
+
+        relinquishing.isOwner.assert().isFalse()
+        released.size.assert().isEqualTo(1)
+    }
+
+    @Test
+    fun `relinquish requires a running service and a non-negative cooldown`() {
+        assertThrows<IllegalStateException> { service.relinquish(Duration.ZERO) }
+        service.start()
+        assertThrows<IllegalArgumentException> { service.relinquish(Duration.ofMillis(-1)) }
+    }
+
+    @Test
     fun `stop disarms the watchdog`() {
         service.start()
         scheduler.runNext()
@@ -542,6 +676,7 @@ class LeaseContendServiceTest {
         var otherOwner: String? = null
         var failNext: Throwable? = null
         var unbounded = false
+        var failRelease: Throwable? = null
         val renewFlags = mutableListOf<Boolean>()
         var contendCalls = 0
         var releaseCalls = 0
@@ -562,6 +697,7 @@ class LeaseContendServiceTest {
 
         override fun release(mutex: String, contenderId: String): Boolean {
             releaseCalls++
+            failRelease?.let { throw it }
             if (ownerId != contenderId) {
                 return false
             }

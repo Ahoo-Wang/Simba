@@ -22,6 +22,7 @@ import me.ahoo.simba.core.RecordingObserver
 import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.Test
 import java.time.Duration
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -67,6 +68,98 @@ class SimbaSchedulerTest {
         interrupted.await(2, TimeUnit.SECONDS).assert().isTrue()
         scheduler.isLeader.assert().isFalse()
         scheduler.stop()
+    }
+
+    @Test
+    fun `stop releases the mutex only after the running work returned`() {
+        val events = ConcurrentLinkedQueue<String>()
+        val started = CountDownLatch(1)
+        val scheduler = SimbaScheduler("handover", factory, ScheduleConfig.delay(Duration.ZERO, Duration.ofHours(1))) {
+            started.countDown()
+            try {
+                Thread.sleep(TimeUnit.MINUTES.toMillis(1))
+            } catch (_: InterruptedException) {
+                events += "work ended"
+            }
+        }
+        factory.service!!.calls = events
+        scheduler.start()
+        factory.lead(scheduler)
+        started.await(2, TimeUnit.SECONDS).assert().isTrue()
+
+        scheduler.stop()
+
+        events.toList().assert().containsExactly("work ended", "stopContend")
+    }
+
+    @Test
+    fun `relinquish stops the work, releases, and the work resumes on the next term`() {
+        val events = ConcurrentLinkedQueue<String>()
+        val starts = LinkedBlockingQueue<Long>()
+        val scheduler = SimbaScheduler("step-down", factory, ScheduleConfig.delay(Duration.ZERO, Duration.ofHours(1))) {
+            starts.add(it.fencingToken)
+            try {
+                Thread.sleep(TimeUnit.MINUTES.toMillis(1))
+            } catch (_: InterruptedException) {
+                events += "work ended"
+            }
+        }
+        factory.service!!.calls = events
+        scheduler.start()
+        factory.lead(scheduler, fencingToken = 1)
+        starts.poll(2, TimeUnit.SECONDS).assert().isEqualTo(1L)
+
+        scheduler.relinquish(Duration.ofSeconds(5))
+
+        events.toList().assert().containsExactly("work ended", "relinquish:5000")
+        scheduler.isLeader.assert().isFalse()
+        scheduler.running.assert().isTrue()
+        factory.lead(scheduler, fencingToken = 2)
+        starts.poll(2, TimeUnit.SECONDS).assert().isEqualTo(2L)
+        scheduler.stop()
+    }
+
+    @Test
+    fun `work stopping its own scheduler does not wait for itself`() {
+        val stopped = CountDownLatch(1)
+        lateinit var scheduler: SimbaScheduler
+        scheduler = SimbaScheduler("self-stop", factory, ScheduleConfig.delay(Duration.ZERO, Duration.ofHours(1))) {
+            scheduler.stop()
+            stopped.countDown()
+        }
+        scheduler.start()
+        factory.lead(scheduler)
+
+        stopped.await(2, TimeUnit.SECONDS).assert().isTrue()
+        scheduler.running.assert().isFalse()
+    }
+
+    @Test
+    fun `work outliving the lease does not hold back the release`() {
+        val events = ConcurrentLinkedQueue<String>()
+        val started = CountDownLatch(1)
+        val finish = CountDownLatch(1)
+        val scheduler = SimbaScheduler("stubborn", factory, ScheduleConfig.delay(Duration.ZERO, Duration.ofHours(1))) {
+            started.countDown()
+            // Ignores interruption, as badly behaved work does.
+            while (!finish.await(1, TimeUnit.SECONDS)) {
+                Thread.interrupted()
+            }
+            events += "work ended"
+        }
+        val service = factory.service!!
+        service.calls = events
+        scheduler.start()
+        val now = System.currentTimeMillis()
+        service.publishOwner(
+            MutexOwner(service.contenderId, ttlAt = now + 100, transitionAt = now + 200, observedAt = now)
+        ).join()
+        started.await(2, TimeUnit.SECONDS).assert().isTrue()
+
+        scheduler.stop()
+
+        events.toList().assert().containsExactly("stopContend")
+        finish.countDown()
     }
 
     @Test

@@ -48,6 +48,7 @@ abstract class MutexContendServiceSpec {
         const val SIMBA_SCHEDULER_MUTEX = "simbaScheduler"
         const val OBSERVER_MUTEX = "observer"
         const val LEASE_REMAINING_MUTEX = "leaseRemaining"
+        const val RELINQUISH_MUTEX = "relinquish"
     }
 
     abstract val mutexContendServiceFactory: MutexContendServiceFactory
@@ -61,6 +62,12 @@ abstract class MutexContendServiceSpec {
      * Whether the backend reports [ContendObserver.onContend] (lease backends do; Zookeeper does not).
      */
     open val reportsContention: Boolean = true
+
+    /**
+     * Cooldown of [relinquish]: long enough for another contender to take over first on this backend (JDBC
+     * contenders only retry at the old lease end).
+     */
+    open val relinquishCooldown: Duration = Duration.ofSeconds(2)
 
     @Test
     open fun start() {
@@ -152,6 +159,52 @@ abstract class MutexContendServiceSpec {
         releasedFuture.join()
         contendService.leaseRemaining.assert().isEqualTo(Duration.ZERO)
         assertThrows<LeaseExpiredException> { contendService.ensureLease() }
+    }
+
+    @Test
+    open fun relinquish() {
+        val firstAcquired = LinkedBlockingQueue<MutexOwner>()
+        val first = mutexContendServiceFactory.createMutexContendService(object : AbstractMutexContender(
+            RELINQUISH_MUTEX
+        ) {
+            override fun onAcquired(mutexState: MutexState) {
+                firstAcquired.add(mutexState.after)
+            }
+        })
+        val secondSawFirst = CountDownLatch(1)
+        val secondAcquired = CompletableFuture<MutexOwner>()
+        val second = mutexContendServiceFactory.createMutexContendService(object : AbstractMutexContender(
+            RELINQUISH_MUTEX
+        ) {
+            override fun notifyOwner(mutexState: MutexState) {
+                if (mutexState.after.isOwner(first.contenderId)) {
+                    secondSawFirst.countDown()
+                }
+                super.notifyOwner(mutexState)
+            }
+
+            override fun onAcquired(mutexState: MutexState) {
+                secondAcquired.complete(mutexState.after)
+            }
+        })
+        first.start()
+        firstAcquired.poll(30, TimeUnit.SECONDS).assert().isNotNull()
+        second.start()
+        if (reportsContention) {
+            // Lease backends: make sure the second contender is scheduled against the first one's lease.
+            secondSawFirst.await(30, TimeUnit.SECONDS).assert().isTrue()
+        }
+
+        first.relinquish(relinquishCooldown)
+
+        first.isOwner.assert().isFalse()
+        first.running.assert().isTrue()
+        secondAcquired.get(30, TimeUnit.SECONDS).isOwner(second.contenderId).assert().isTrue()
+        second.stop()
+        // After the cooldown the first contender contends again and takes the released mutex back.
+        firstAcquired.poll(30, TimeUnit.SECONDS).assert().isNotNull()
+        first.isOwner.assert().isTrue()
+        first.stop()
     }
 
     @Test

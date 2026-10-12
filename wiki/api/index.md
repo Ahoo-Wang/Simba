@@ -48,6 +48,7 @@ Created by a factory for one contender; `AutoCloseable`.
 | `fencingToken` | Token of the current term while owner, else `0`. |
 | `leaseRemaining` | How long local ownership stays valid: `Duration.ZERO` when not owner, `UNBOUNDED_LEASE` on Zookeeper. Lease backends measure it to the lease watchdog's deadline. |
 | `ensureLease(minRemaining)` | Throws `LeaseExpiredException` unless `leaseRemaining` exceeds `minRemaining` (default zero). |
+| `relinquish(cooldown)` | Releases ownership if held and stays out of contention for `cooldown`, then contends again; stays `RUNNING`. Throws unless running. |
 | `afterOwner` / `beforeOwner` / `mutexState` | Last observed owner and the previous one. |
 | `hasOwner()` | Someone holds a lease that has not ended. |
 
@@ -97,16 +98,17 @@ class SimbaScheduler(
 ) : AutoCloseable
 ```
 
-Members: `start()`, `stop()`, idempotent `close()`, `running`, `isLeader`, `fencingToken`. When the node acquires the
-mutex, a single-thread executor is created and runs the work; on release the run is cancelled with interruption. A
-node that never leads holds no work thread.
+Members: `start()`, `stop()`, idempotent `close()`, `relinquish(cooldown)`, `running`, `isLeader`, `fencingToken`. When
+the node acquires the mutex, a single-thread executor is created and runs the work; on release the run is cancelled
+with interruption. A node that never leads holds no work thread. `stop()` and `relinquish(cooldown)` first cancel the
+work and wait for a running run (at most the remaining lease, 30 s when unbounded), then release the mutex.
 
 `ScheduleConfig.delay(initialDelay, period)` runs with a fixed delay between runs; `ScheduleConfig.rate(initialDelay,
 period)` at a fixed rate. `ScheduleContext` exposes `mutex`, `fencingToken`, `leaseRemaining` and `ensureLease(minRemaining)`. A failed run is logged and the next one
 still runs.
 
 `AbstractScheduler(mutex, factory)` offers the same semantics by subclassing (`config`, `worker`, `work()`,
-protected `fencingToken`, `leaseRemaining`, `ensureLease()`); prefer `SimbaScheduler`.
+protected `fencingToken`, `leaseRemaining`, `ensureLease()`, public `relinquish(cooldown)`); prefer `SimbaScheduler`.
 
 ### `@SimbaScheduled` — `simba-spring-boot-starter`, `simba.spring.boot.starter.scheduling`
 

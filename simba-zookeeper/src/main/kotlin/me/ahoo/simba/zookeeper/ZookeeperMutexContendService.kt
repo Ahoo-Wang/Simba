@@ -21,7 +21,10 @@ import org.apache.curator.framework.CuratorFramework
 import org.apache.curator.framework.recipes.leader.LeaderLatch
 import org.apache.curator.framework.recipes.leader.LeaderLatch.CloseMode
 import org.apache.curator.framework.recipes.leader.LeaderLatchListener
+import java.time.Duration
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
 
 /**
  * Zookeeper Mutex Contend Service.
@@ -39,8 +42,25 @@ class ZookeeperMutexContendService @JvmOverloads constructor(
     private var leaderLatch: LeaderLatch? = null
     private val mutexPath: String = RESOURCE_PREFIX + contender.mutex
 
-    @Suppress("TooGenericExceptionCaught")
+    /**
+     * Guards [leaderLatch] replacement by [relinquish] against lifecycle transitions.
+     */
+    private val latchLock = Any()
+
+    /**
+     * Incremented by every start, stop and relinquish; a delayed latch restart only runs if it is still current.
+     */
+    private var latchEpoch = 0L
+
     override fun startContend() {
+        synchronized(latchLock) {
+            latchEpoch++
+            startLatch()
+        }
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun startLatch() {
         val latch = LeaderLatch(curatorFramework, mutexPath, contenderId)
         latch.addListener(this)
         // Assigned before start(): isLeader() may fire during start() and reads the latch for the fencing token.
@@ -60,8 +80,50 @@ class ZookeeperMutexContendService @JvmOverloads constructor(
     }
 
     override fun stopContend() {
-        leaderLatch!!.close(CloseMode.NOTIFY_LEADER)
-        leaderLatch = null
+        synchronized(latchLock) {
+            latchEpoch++
+            // null while a relinquish cooldown is pending.
+            leaderLatch?.close(CloseMode.NOTIFY_LEADER)
+            leaderLatch = null
+        }
+    }
+
+    /**
+     * Closes the latch, so the next candidate leads at once, and joins again with a new latch after [cooldown].
+     */
+    override fun relinquish(cooldown: Duration) {
+        require(!cooldown.isNegative) { "cooldown must not be negative: $cooldown" }
+        val release = synchronized(latchLock) {
+            check(status.isActive) {
+                "Cannot relinquish mutex:[$mutex] contenderId:[$contenderId] from state:[$status]."
+            }
+            log.info {
+                "relinquish - mutex:[$mutex] contenderId:[$contenderId] - cooldown:[${cooldown.toMillis()}ms]."
+            }
+            val epoch = ++latchEpoch
+            leaderLatch?.close(CloseMode.NOTIFY_LEADER)
+            leaderLatch = null
+            CompletableFuture.delayedExecutor(cooldown.toNanos(), TimeUnit.NANOSECONDS, handleExecutor).execute {
+                rejoin(epoch)
+            }
+            // notLeader() also reports it, but asynchronously from Curator; this one can be awaited.
+            if (isOwner) notifyOwner(MutexOwner.NONE) else CompletableFuture.completedFuture<Void>(null)
+        }
+        awaitNotification(release)
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun rejoin(epoch: Long) {
+        synchronized(latchLock) {
+            if (epoch != latchEpoch || !status.isActive) {
+                return
+            }
+            try {
+                startLatch()
+            } catch (error: Throwable) {
+                log.error(error) { "rejoin - mutex:[$mutex] contenderId:[$contenderId] - failed to start the latch." }
+            }
+        }
     }
 
     override fun isLeader() {
