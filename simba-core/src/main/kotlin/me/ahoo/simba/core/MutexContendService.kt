@@ -81,6 +81,17 @@ interface MutexContendService : MutexRetrievalService {
         checkLease(leaseRemaining, minRemaining) { "mutex:[$mutex] contenderId:[$contenderId]" }
     }
 
+    /**
+     * Releases ownership if held and stays out of contention for [cooldown], then contends again; the service stays
+     * running. A non-owner pauses its contention. A later call replaces the cooldown; `stop()` ends it (ADR 0008).
+     * Like `stop()`, it returns after the release was delivered (from a callback: right after that callback).
+     *
+     * @throws IllegalStateException when the service is not running.
+     */
+    fun relinquish(cooldown: Duration) {
+        throw UnsupportedOperationException("relinquish is not supported by ${javaClass.name}.")
+    }
+
     companion object {
         /**
          * [leaseRemaining] of ownership that is not bounded in time.

@@ -39,12 +39,24 @@ abstract class AbstractScheduler(
         contendService.start()
     }
 
+    /**
+     * Stops the work first, waiting at most for the remaining lease, then stops contending (ADR 0008).
+     */
     fun stop() {
         try {
+            workContender.handOver()
             contendService.stop()
         } finally {
             workContender.shutdown()
         }
+    }
+
+    /**
+     * Stops the work, then relinquishes the mutex for [cooldown]; see [SimbaScheduler.relinquish].
+     */
+    fun relinquish(cooldown: Duration) {
+        workContender.handOver()
+        contendService.relinquish(cooldown)
     }
 
     val running: Boolean
@@ -87,6 +99,13 @@ abstract class AbstractScheduler(
         override fun onReleased(mutexState: MutexState) {
             super.onReleased(mutexState)
             runner.cancel()
+        }
+
+        /**
+         * Cancels the work and waits for a running run; see [ScheduledWorkRunner.handOver].
+         */
+        fun handOver() {
+            runner.handOver(contendService)
         }
 
         /**

@@ -13,7 +13,9 @@
 
 package me.ahoo.simba.core
 
+import java.time.Duration
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executor
 
 /**
@@ -75,6 +77,11 @@ class FakeMutexContendService(
     var stopContendCalled = false
         private set
 
+    /**
+     * Contention calls in order (`stopContend`, `relinquish:<ms>`), shared with tests that record their own events.
+     */
+    var calls: MutableCollection<String> = ConcurrentLinkedQueue()
+
     override fun startContend() {
         startContendCalled = true
         throwOnStartContend?.let { throw it }
@@ -82,7 +89,16 @@ class FakeMutexContendService(
 
     override fun stopContend() {
         stopContendCalled = true
+        calls += "stopContend"
         throwOnStopContend?.let { throw it }
+    }
+
+    /**
+     * Records the call and releases ownership locally.
+     */
+    override fun relinquish(cooldown: Duration) {
+        calls += "relinquish:${cooldown.toMillis()}"
+        notifyOwner(MutexOwner.NONE).join()
     }
 
     /** Exposes the protected [notifyOwner] for tests. */

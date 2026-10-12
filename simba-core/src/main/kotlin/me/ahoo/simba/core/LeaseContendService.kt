@@ -14,6 +14,7 @@ package me.ahoo.simba.core
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.time.Duration
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
@@ -88,6 +89,11 @@ open class LeaseContendService @JvmOverloads constructor(
     private var heldLease: HeldLease? = null
 
     /**
+     * `System.nanoTime()` until which [relinquish] keeps this service out of contention; `null` without a cooldown.
+     */
+    private var cooldownUntilNanos: Long? = null
+
+    /**
      * The watchdog deadline while this contender owns the mutex: never later than the local revocation, and
      * measured from when the granting call was sent.
      */
@@ -117,6 +123,7 @@ open class LeaseContendService @JvmOverloads constructor(
             // A contention of the previous lifecycle may still be in flight; it no longer blocks this one.
             inFlight = false
             contendRequested = false
+            cooldownUntilNanos = null
             dropLease()
             onStart()
             try {
@@ -135,6 +142,7 @@ open class LeaseContendService @JvmOverloads constructor(
     final override fun stopContend() {
         synchronized(lock) {
             cancelSchedule()
+            cooldownUntilNanos = null
             dropLease()
             try {
                 onStop()
@@ -142,6 +150,46 @@ open class LeaseContendService @JvmOverloads constructor(
                 leaseStore.release(mutex, contenderId)
             }
         }
+    }
+
+    final override fun relinquish(cooldown: Duration) {
+        require(!cooldown.isNegative) { "cooldown must not be negative: $cooldown" }
+        val release = synchronized(lock) {
+            val generation = currentGeneration
+            check(isActive(generation)) {
+                "Cannot relinquish mutex:[$mutex] contenderId:[$contenderId] from state:[$status]."
+            }
+            log.info {
+                "relinquish - mutex:[$mutex] contenderId:[$contenderId] - cooldown:[${cooldown.toMillis()}ms]."
+            }
+            cooldownUntilNanos = System.nanoTime() + cooldown.toNanos()
+            contendRequested = false
+            val held = holdsLease
+            dropLease()
+            try {
+                if (held) {
+                    leaseStore.release(mutex, contenderId)
+                }
+            } finally {
+                schedule(0, generation)
+            }
+            // A non-owner keeps its view of the current owner.
+            if (held || isOwner) notifyOwner(MutexOwner.NONE) else CompletableFuture.completedFuture<Void>(null)
+        }
+        awaitNotification(release)
+    }
+
+    /**
+     * Milliseconds left of the [relinquish] cooldown, `0` without one.
+     */
+    private fun cooldownRemainingMillis(): Long {
+        val until = cooldownUntilNanos ?: return 0
+        val remaining = until - System.nanoTime()
+        if (remaining <= 0) {
+            cooldownUntilNanos = null
+            return 0
+        }
+        return TimeUnit.NANOSECONDS.toMillis(remaining) + 1
     }
 
     /**
@@ -170,8 +218,10 @@ open class LeaseContendService @JvmOverloads constructor(
      * A rejection (the scheduler was shut down, e.g. its factory closed before this service stopped) is logged,
      * except while starting, where it must fail [start].
      */
-    private fun schedule(delay: Long, generation: Long, rethrowRejection: Boolean = false) {
+    private fun schedule(requestedDelay: Long, generation: Long, rethrowRejection: Boolean = false) {
         synchronized(lock) {
+            // During a relinquish cooldown every trigger waits for its end, and contention resumes right then.
+            val delay = cooldownRemainingMillis().takeIf { it > 0 } ?: requestedDelay
             if (!isActive(generation)) {
                 /*
                  * A contention can still be in flight when stop() runs (backend calls are not interruptible);
@@ -215,6 +265,8 @@ open class LeaseContendService @JvmOverloads constructor(
             if (!isActive(generation) || token != scheduleToken || inFlight) {
                 return
             }
+            // Every trigger scheduled during a cooldown targets its end, so a firing trigger means it is over.
+            cooldownUntilNanos = null
             scheduledFuture = null
             inFlight = true
             contendRequested = false
@@ -274,6 +326,12 @@ open class LeaseContendService @JvmOverloads constructor(
      */
     private fun adopt(generation: Long, mutexOwner: MutexOwner, sentAtNanos: Long): Boolean {
         synchronized(lock) {
+            if (isActive(generation) && mutexOwner.isOwner(contenderId) && cooldownRemainingMillis() > 0) {
+                // Won by a contention that was in flight when relinquish() ran: give it back unreported.
+                dropLease()
+                leaseStore.release(mutex, contenderId)
+                return true
+            }
             if (isActive(generation)) {
                 // Publish the lease before notifying, so onAcquired already sees a positive leaseRemaining.
                 if (mutexOwner.isOwner(contenderId)) {

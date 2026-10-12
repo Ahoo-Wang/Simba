@@ -116,6 +116,16 @@ abstract class AbstractMutexRetrievalService protected constructor(
         return CompletableFuture.runAsync({ dispatch(newOwner, generation) }, notifyExecutor)
     }
 
+    /**
+     * Waits until [notification] ran, unless called from a callback of this service: that would wait for the very
+     * drain it is part of, so the notification then runs after the callback returns.
+     */
+    protected fun awaitNotification(notification: CompletableFuture<Void>) {
+        if (!dispatching.get()) {
+            notification.join()
+        }
+    }
+
     private fun dispatch(newOwner: MutexOwner, generation: Long) {
         val outer = dispatching.get()
         dispatching.set(true)

@@ -105,8 +105,13 @@ class SimbaScheduler(
         contendService.start()
     }
 
+    /**
+     * Stops the work first, waiting at most for the remaining lease, then stops contending, which releases the
+     * mutex (ADR 0008).
+     */
     fun stop() {
         try {
+            runner.handOver(contendService)
             contendService.stop()
         } finally {
             runner.shutdown()
@@ -114,10 +119,22 @@ class SimbaScheduler(
     }
 
     /**
+     * Steps down for [cooldown] while staying a candidate: stops the work as [stop] does, then relinquishes the
+     * mutex; the work starts again when this node leads again. See [MutexContendService.relinquish].
+     */
+    fun relinquish(cooldown: Duration) {
+        runner.handOver(contendService)
+        contendService.relinquish(cooldown)
+    }
+
+    /**
      * Idempotent: stops the scheduler when running and is a no-op otherwise.
      */
     override fun close() {
         try {
+            if (contendService.running) {
+                runner.handOver(contendService)
+            }
             contendService.close()
         } finally {
             runner.shutdown()

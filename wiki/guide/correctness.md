@@ -164,6 +164,30 @@ class LedgerFencingTest : FencingSpec() {
 | Redis | `INCR simba:{mutex}:fence` on acquisition | Monotonic across restarts only with persistence (AOF) |
 | Zookeeper | `czxid` of the winning latch node | — |
 
+## Stepping Down and Handover
+
+`relinquish(cooldown)` on a contend service or a scheduler gives up ownership while staying a candidate, e.g. before a
+rolling deploy or to drain a node:
+
+```kotlin
+scheduler.relinquish(Duration.ofMinutes(2)) // stop the work, release, stay out for two minutes, then contend again
+```
+
+The service stays `RUNNING`; a non-owner just pauses its contention. A later call replaces the cooldown, and `stop()`
+ends it. How fast another node takes over depends on the backend:
+
+| Backend | Successor takes over |
+|---|---|
+| Redis | At once: the release is broadcast to every contender. |
+| Zookeeper | At once: the next latch node leads. |
+| JDBC | At its next scheduled attempt, about when the old lease would have ended. Relinquishing frees the mutex but does not shorten failover. |
+
+Schedulers hand over in a safe order. `SimbaScheduler.stop()`, `relinquish(cooldown)` and their `AbstractScheduler`
+counterparts first cancel the work, then wait until a running run returns. The wait lasts at most the remaining lease
+(30 s when the lease is unbounded). Only then do they release the mutex, so a successor does not start while this
+node's run is still finishing. Work that outlives the wait no longer delays the release, and its writes still need
+the fencing token ([ADR 0008](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0008-relinquish-and-handover.md)).
+
 ## Failure Modes
 
 | Event | What happens |

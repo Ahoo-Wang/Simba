@@ -125,3 +125,4 @@ autonumber
 | [0005](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0005-observability.md) | `ContendObserver` 与 Micrometer 指标 |
 | [0006](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0006-actuator-endpoint.md) | 只读的 `simba` Actuator 端点 |
 | [0007](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0007-lease-validity-and-health.md) | 工作可见的租约有效期、fencing 校验范式、健康检查 |
+| [0008](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0008-relinquish-and-handover.md) | `relinquish(cooldown)` 与先停工作再释放 |

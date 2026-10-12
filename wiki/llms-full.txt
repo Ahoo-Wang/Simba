@@ -536,6 +536,30 @@ class LedgerFencingTest : FencingSpec() {
 | Redis | `INCR simba:{mutex}:fence` on acquisition | Monotonic across restarts only with persistence (AOF) |
 | Zookeeper | `czxid` of the winning latch node | — |
 
+## Stepping Down and Handover
+
+`relinquish(cooldown)` on a contend service or a scheduler gives up ownership while staying a candidate, e.g. before a
+rolling deploy or to drain a node:
+
+```kotlin
+scheduler.relinquish(Duration.ofMinutes(2)) // stop the work, release, stay out for two minutes, then contend again
+```
+
+The service stays `RUNNING`; a non-owner just pauses its contention. A later call replaces the cooldown, and `stop()`
+ends it. How fast another node takes over depends on the backend:
+
+| Backend | Successor takes over |
+|---|---|
+| Redis | At once: the release is broadcast to every contender. |
+| Zookeeper | At once: the next latch node leads. |
+| JDBC | At its next scheduled attempt, about when the old lease would have ended. Relinquishing frees the mutex but does not shorten failover. |
+
+Schedulers hand over in a safe order. `SimbaScheduler.stop()`, `relinquish(cooldown)` and their `AbstractScheduler`
+counterparts first cancel the work, then wait until a running run returns. The wait lasts at most the remaining lease
+(30 s when the lease is unbounded). Only then do they release the mutex, so a successor does not start while this
+node's run is still finishing. Work that outlives the wait no longer delays the release, and its writes still need
+the fencing token ([ADR 0008](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0008-relinquish-and-handover.md)).
+
 ## Failure Modes
 
 | Event | What happens |
@@ -902,6 +926,7 @@ Created by a factory for one contender; `AutoCloseable`.
 | `fencingToken` | Token of the current term while owner, else `0`. |
 | `leaseRemaining` | How long local ownership stays valid: `Duration.ZERO` when not owner, `UNBOUNDED_LEASE` on Zookeeper. Lease backends measure it to the lease watchdog's deadline. |
 | `ensureLease(minRemaining)` | Throws `LeaseExpiredException` unless `leaseRemaining` exceeds `minRemaining` (default zero). |
+| `relinquish(cooldown)` | Releases ownership if held and stays out of contention for `cooldown`, then contends again; stays `RUNNING`. Throws unless running. |
 | `afterOwner` / `beforeOwner` / `mutexState` | Last observed owner and the previous one. |
 | `hasOwner()` | Someone holds a lease that has not ended. |
 
@@ -951,16 +976,17 @@ class SimbaScheduler(
 ) : AutoCloseable
 ```
 
-Members: `start()`, `stop()`, idempotent `close()`, `running`, `isLeader`, `fencingToken`. When the node acquires the
-mutex, a single-thread executor is created and runs the work; on release the run is cancelled with interruption. A
-node that never leads holds no work thread.
+Members: `start()`, `stop()`, idempotent `close()`, `relinquish(cooldown)`, `running`, `isLeader`, `fencingToken`. When
+the node acquires the mutex, a single-thread executor is created and runs the work; on release the run is cancelled
+with interruption. A node that never leads holds no work thread. `stop()` and `relinquish(cooldown)` first cancel the
+work and wait for a running run (at most the remaining lease, 30 s when unbounded), then release the mutex.
 
 `ScheduleConfig.delay(initialDelay, period)` runs with a fixed delay between runs; `ScheduleConfig.rate(initialDelay,
 period)` at a fixed rate. `ScheduleContext` exposes `mutex`, `fencingToken`, `leaseRemaining` and `ensureLease(minRemaining)`. A failed run is logged and the next one
 still runs.
 
 `AbstractScheduler(mutex, factory)` offers the same semantics by subclassing (`config`, `worker`, `work()`,
-protected `fencingToken`, `leaseRemaining`, `ensureLease()`); prefer `SimbaScheduler`.
+protected `fencingToken`, `leaseRemaining`, `ensureLease()`, public `relinquish(cooldown)`); prefer `SimbaScheduler`.
 
 ### `@SimbaScheduled` — `simba-spring-boot-starter`, `simba.spring.boot.starter.scheduling`
 
@@ -1141,6 +1167,7 @@ Nodes running different Simba versions contend for the same mutex, so these are 
 | [0005](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0005-observability.md) | `ContendObserver` and Micrometer metrics |
 | [0006](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0006-actuator-endpoint.md) | Read-only `simba` Actuator endpoint |
 | [0007](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0007-lease-validity-and-health.md) | Lease validity for work, fencing recipes, health indicator |
+| [0008](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0008-relinquish-and-handover.md) | `relinquish(cooldown)` and stopping work before releasing |
 </doc>
 
 <doc title="Contributing" path="contributing/index.md">

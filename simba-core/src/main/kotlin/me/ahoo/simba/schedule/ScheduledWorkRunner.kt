@@ -18,9 +18,11 @@ import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.WorkOutcome
 import me.ahoo.simba.util.Threads.defaultFactory
+import java.time.Duration
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
 
 /**
  * Runs scheduled work while its contender leads: [start] on acquisition, [cancel] (interrupting) on release,
@@ -38,6 +40,11 @@ internal class ScheduledWorkRunner(
         private val log = KotlinLogging.logger {}
 
         /**
+         * Longest [handOver] wait when the lease is unbounded (Zookeeper).
+         */
+        val MAX_UNBOUNDED_HANDOVER_WAIT: Duration = Duration.ofSeconds(30)
+
+        /**
          * The observer of the contend service the scheduler runs on, so work events go where contention events go.
          */
         fun observerOf(contendService: MutexContendService): ContendObserver {
@@ -50,6 +57,11 @@ internal class ScheduledWorkRunner(
 
     @Volatile
     private var workFuture: ScheduledFuture<*>? = null
+
+    /**
+     * Held by the worker thread while a run is in progress.
+     */
+    private val running = ReentrantLock()
 
     fun start() {
         if (workFuture?.isDone == false) {
@@ -70,6 +82,31 @@ internal class ScheduledWorkRunner(
         workFuture?.cancel(true)
     }
 
+    /**
+     * Cancels the work and waits until a running run returned, at most for the lease the [contendService] still holds
+     * ([MAX_UNBOUNDED_HANDOVER_WAIT] when unbounded), so the lease is released only after the work stopped (ADR 0008).
+     * Returns whether the work stopped in time. From a run itself it returns at once.
+     */
+    fun handOver(contendService: MutexContendService): Boolean {
+        cancel()
+        val remaining = contendService.leaseRemaining
+        val wait = if (remaining == MutexContendService.UNBOUNDED_LEASE) MAX_UNBOUNDED_HANDOVER_WAIT else remaining
+        val stopped = try {
+            running.tryLock(wait.toNanos(), TimeUnit.NANOSECONDS)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (stopped) {
+            running.unlock()
+        } else {
+            log.warn {
+                "handOver - mutex:[$mutex] - work still running after [${wait.toMillis()}ms], releasing anyway."
+            }
+        }
+        return stopped
+    }
+
     fun shutdown() {
         executor?.shutdown()
         executor = null
@@ -79,8 +116,17 @@ internal class ScheduledWorkRunner(
         return executor ?: ScheduledThreadPoolExecutor(1, defaultFactory(worker())).also { executor = it }
     }
 
-    @Suppress("TooGenericExceptionCaught")
     private fun safeWork() {
+        running.lock()
+        try {
+            runOnce()
+        } finally {
+            running.unlock()
+        }
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun runOnce() {
         val startedAtNanos = System.nanoTime()
         val outcome = try {
             work()

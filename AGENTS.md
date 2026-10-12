@@ -98,6 +98,10 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
 - `leaseRemaining` / `ensureLease` (ADR 0007) read that watchdog deadline in `LeaseContendService` (lock-free, zero
   until the acquisition is observed); other services derive it from `afterOwner`, unbounded on Zookeeper. It is a
   hint to start a step, never a substitute for the fencing check.
+- `relinquish(cooldown)` (ADR 0008) keeps the service `RUNNING`. `LeaseContendService` releases the held lease and
+  defers every trigger (reschedules, `contendNow`) to the cooldown end, and gives back an in-flight acquisition won
+  meanwhile unreported. Zookeeper closes the latch and rejoins after the cooldown unless the latch epoch changed.
+  `start()` and `stop()` clear the cooldown.
 - The starter sets `JdbcMutexOwnerRepository.queryTimeout` to `simba.jdbc.ttl` (a call slower than the ttl could not keep ownership anyway).
 
 ### Threading
@@ -112,7 +116,8 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
   constructed service defaults to its own idle-reclaimed scheduler and runs I/O on the trigger thread.
 - `SimbaLocker` is owned by one thread at a time; interruption does not cancel `acquire()` (the flag is restored).
 - `SimbaScheduler` and `AbstractScheduler` share `ScheduledWorkRunner`: the worker executor is created on acquire,
-  work is cancelled with interrupt on release, and the executor is shut down on `stop()`.
+  work is cancelled with interrupt on release, and the executor is shut down on `stop()`. `stop()` / `relinquish()`
+  first cancel the work and wait for a running run (at most `leaseRemaining`, 30 s when unbounded), then release.
 - `ContendObserver` (ADR 0005) receives contention, ownership, watchdog and work events; observer failures are logged
   and ignored. New backend factories/services take it as a trailing optional parameter.
 
@@ -176,6 +181,6 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
 |---|---|
 | `README.md`, `README.zh-CN.md`, `llms.txt` | Entry points: what Simba is, install, one example per API (`llms.txt` mirrors `wiki/llms.txt`) |
 | `wiki/` | VitePress site, the authoritative docs; page ownership and rules in `wiki/AGENTS.md` |
-| `docs/adr/` | ADRs: 0001 lease engine, 0002 fencing token, 0003 Simba 4, 0004 leader scheduling, 0005 observability, 0006 Actuator endpoint, 0007 lease validity and health |
+| `docs/adr/` | ADRs: 0001 lease engine, 0002 fencing token, 0003 Simba 4, 0004 leader scheduling, 0005 observability, 0006 Actuator endpoint, 0007 lease validity and health, 0008 relinquish and handover |
 | `CONTRIBUTING.md`, `SECURITY.md`, `.github/` | Contribution workflow, quality gates, SemVer and releases; vulnerability reporting; templates, labeler, CODEOWNERS |
 | `skills/simba/`, `skills/simba-testing/` | Source skill docs; do not generate marketplace artifacts here |

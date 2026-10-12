@@ -152,6 +152,26 @@ class LedgerFencingTest : FencingSpec() {
 | Redis | 获取时 `INCR simba:{mutex}:fence` | 只有开启持久化（AOF）才能跨重启保持单调 |
 | Zookeeper | 获胜 latch 节点的 `czxid` | — |
 
+## 主动让出与交接
+
+竞争服务和调度器上的 `relinquish(cooldown)` 会放弃所有权但仍保持候选资格，例如在滚动发布前或排空节点时：
+
+```kotlin
+scheduler.relinquish(Duration.ofMinutes(2)) // 停止工作、释放，两分钟内不参与竞争，之后重新竞争
+```
+
+服务保持 `RUNNING`；非持有者只是暂停竞争。再次调用会替换冷却时间，`stop()` 会结束冷却。其他节点接管的速度取决于后端：
+
+| 后端 | 后继者何时接管 |
+|---|---|
+| Redis | 立即：释放会广播给所有竞争者。 |
+| Zookeeper | 立即：下一个 latch 节点成为 leader。 |
+| JDBC | 在它下一次计划的尝试时，大约是原租约本应结束的时刻。让出会释放 mutex，但不会缩短故障转移时间。 |
+
+调度器按安全的顺序交接。`SimbaScheduler.stop()`、`relinquish(cooldown)` 以及 `AbstractScheduler` 的对应方法，会先取消工作，
+再等待正在进行的运行返回。等待时间最多为剩余租约（租约不限期时为 30 秒）。之后才释放 mutex，因此后继者不会在本节点的运行
+尚未结束时开始。超过等待时间仍在运行的工作不会再推迟释放，它的写入仍然需要 fencing token（[ADR 0008](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0008-relinquish-and-handover.md)）。
+
 ## 故障模式
 
 | 事件 | 结果 |
