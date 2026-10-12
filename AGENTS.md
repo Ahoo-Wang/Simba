@@ -50,7 +50,8 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
 
 1. **User APIs** (`simba-core`): `MutexContender` callbacks (`AbstractMutexContender`); `SimbaLocker` (blocking
    lock); `SimbaScheduler` / `AbstractScheduler` (leader-only periodic work, ADR 0004). Starter adds
-   `@SimbaScheduled`, Micrometer metrics, and the Actuator endpoint `simba` (ADR 0005, 0006).
+   `@SimbaScheduled`, Micrometer metrics, the Actuator endpoint `simba` and the `simba` health indicator (ADR 0005,
+   0006, 0007).
 2. **`MutexContendService`** (one per contender and mutex, created by a `MutexContendServiceFactory`):
    lifecycle, generations, ordered notification. Base: `AbstractMutexRetrievalService` → `AbstractMutexContendService`.
 3. **Contention engine**: `LeaseContendService` (ADR 0001) is the shared polling loop for JDBC and Redis: scheduling,

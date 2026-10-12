@@ -89,6 +89,40 @@ management:
 
 `currentOwner` is the owner this node last observed, so non-leaders on JDBC and Redis show who leads; Zookeeper nodes only know about themselves. `ttlAt` and `transitionAt` are `null` for unbounded leases. The endpoint has no write operations. Services from factories built outside the starter appear only if the factory is given the `SimbaServiceTracker` observer.
 
+## Health Indicator
+
+With Spring Boot health support (part of Actuator), the starter registers the `simba` health indicator. It is `DOWN`
+when a running JDBC or Redis contend service had no successful backend round trip for more than twice its
+`ttl + transition`: the node can neither acquire nor keep a lease, whether its calls fail or hang. Not owning a mutex
+is healthy. Zookeeper services add details but never `DOWN`; Curator's connection is the Curator client's concern.
+
+```json
+{
+  "status": "DOWN",
+  "details": {
+    "mutexes": [
+      {
+        "mutex": "report",
+        "contenderId": "0:4242@host-a",
+        "owner": false,
+        "fencingToken": 0,
+        "sinceLastSuccess": "33012ms",
+        "failingFor": "33012ms",
+        "stale": true
+      }
+    ]
+  }
+}
+```
+
+An owner also shows `leaseRemaining`, and `leaseExpiredAgo` appears when the lease watchdog revoked ownership within the
+last `ttl + transition`.
+
+The indicator is **not** part of the liveness or readiness groups. A backend outage hits every node at once;
+restarting or unrouting all of them would turn a coordination outage into an application outage. Add it to a group
+yourself (`management.endpoint.health.group.<name>.include=simba`) only if that is what you want, and disable it with
+`management.health.simba.enabled=false`.
+
 ## Custom Observers
 
 Implement `ContendObserver` to forward events elsewhere. Every method defaults to a no-op; implementations must be fast and thread-safe, and exceptions are logged and ignored.

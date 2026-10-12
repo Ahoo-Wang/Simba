@@ -101,7 +101,7 @@ contendService.stop();
 | [Backends](https://simba.ahoo.me/guide/backends) | JDBC, Redis, Zookeeper: storage, setup, operating notes |
 | [Correctness](https://simba.ahoo.me/guide/correctness) | Leases, ttl/transition, fencing tokens, failure modes |
 | [Configuration](https://simba.ahoo.me/guide/configuration) | `simba.*` properties and factories |
-| [Observability](https://simba.ahoo.me/guide/observability) | Micrometer metrics, `simba` Actuator endpoint, alerts |
+| [Observability](https://simba.ahoo.me/guide/observability) | Micrometer metrics, `simba` Actuator endpoint, health indicator, alerts |
 | [Upgrading](https://simba.ahoo.me/guide/upgrading) | Upgrading to 4.x |
 | [API Reference](https://simba.ahoo.me/api/) | Public types |
 | [Architecture](https://simba.ahoo.me/architecture/), [ADRs](docs/adr/) | Internals and design decisions |

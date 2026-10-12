@@ -38,6 +38,7 @@ Durations accept Spring Boot formats (`10s`, `500ms`, `PT1M`). `ttl` must be pos
 | `simbaHandleExecutor` | Always | A bean with the same name |
 | `MicrometerContendObserver` | Micrometer and a `MeterRegistry` bean | `simba.metrics.enabled=false` |
 | `SimbaEndpoint` | Actuator, endpoint enabled and exposed | Actuator `management.*` properties |
+| `SimbaHealthIndicator` | Spring Boot health support | `management.health.simba.enabled=false` |
 
 Every `ContendObserver` bean in the context is passed to the backend factory, in `@Order`.
 
