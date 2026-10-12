@@ -5,9 +5,13 @@ description: Steps and breaking changes when upgrading to Simba 4.x.
 
 # Upgrading
 
-Simba follows [Semantic Versioning](https://semver.org/). 4.1 to 4.4 are additive (`@SimbaScheduled` and
+Simba follows [Semantic Versioning](https://semver.org/). 4.1 to 4.5 are additive (`@SimbaScheduled` and
 `SimbaScheduler`, `ContendObserver` and Micrometer metrics, the `simba` Actuator endpoint, `leaseRemaining` /
-`ensureLease`, `FencingSpec` and the `simba` health indicator); only 4.0 needs action.
+`ensureLease`, `FencingSpec` and the `simba` health indicator, `relinquish(cooldown)`); only 4.0 needs action.
+
+Since 4.5, `SimbaScheduler.stop()` and `AbstractScheduler.stop()` cancel the work and wait for a running run (at most
+the remaining lease) before releasing the mutex, instead of releasing first. Shutdown can therefore take up to that
+long when work ignores interruption.
 
 ## To 4.0
 

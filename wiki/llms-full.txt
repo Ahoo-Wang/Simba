@@ -74,33 +74,33 @@ The starter only contains auto-configuration. Add it together with **exactly one
 ::: code-group
 
 ```kotlin [JDBC (Gradle)]
-implementation("me.ahoo.simba:simba-spring-boot-starter:4.4.0")
-implementation("me.ahoo.simba:simba-jdbc:4.4.0")
+implementation("me.ahoo.simba:simba-spring-boot-starter:4.5.0")
+implementation("me.ahoo.simba:simba-jdbc:4.5.0")
 implementation("org.springframework.boot:spring-boot-starter-jdbc")
 runtimeOnly("com.mysql:mysql-connector-j")
 ```
 
 ```kotlin [Redis (Gradle)]
-implementation("me.ahoo.simba:simba-spring-boot-starter:4.4.0")
-implementation("me.ahoo.simba:simba-spring-redis:4.4.0")
+implementation("me.ahoo.simba:simba-spring-boot-starter:4.5.0")
+implementation("me.ahoo.simba:simba-spring-redis:4.5.0")
 implementation("org.springframework.boot:spring-boot-starter-data-redis")
 ```
 
 ```kotlin [Zookeeper (Gradle)]
-implementation("me.ahoo.simba:simba-spring-boot-starter:4.4.0")
-implementation("me.ahoo.simba:simba-zookeeper:4.4.0")
+implementation("me.ahoo.simba:simba-spring-boot-starter:4.5.0")
+implementation("me.ahoo.simba:simba-zookeeper:4.5.0")
 ```
 
 ```xml [JDBC (Maven)]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
-    <version>4.4.0</version>
+    <version>4.5.0</version>
 </dependency>
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-jdbc</artifactId>
-    <version>4.4.0</version>
+    <version>4.5.0</version>
 </dependency>
 <dependency>
     <groupId>org.springframework.boot</groupId>
@@ -117,12 +117,12 @@ implementation("me.ahoo.simba:simba-zookeeper:4.4.0")
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
-    <version>4.4.0</version>
+    <version>4.5.0</version>
 </dependency>
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-redis</artifactId>
-    <version>4.4.0</version>
+    <version>4.5.0</version>
 </dependency>
 <dependency>
     <groupId>org.springframework.boot</groupId>
@@ -134,12 +134,12 @@ implementation("me.ahoo.simba:simba-zookeeper:4.4.0")
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
-    <version>4.4.0</version>
+    <version>4.5.0</version>
 </dependency>
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-zookeeper</artifactId>
-    <version>4.4.0</version>
+    <version>4.5.0</version>
 </dependency>
 ```
 
@@ -824,9 +824,13 @@ val factory = SpringRedisMutexContendServiceFactory(
 <doc title="Upgrading" path="guide/upgrading.md">
 # Upgrading
 
-Simba follows [Semantic Versioning](https://semver.org/). 4.1 to 4.4 are additive (`@SimbaScheduled` and
+Simba follows [Semantic Versioning](https://semver.org/). 4.1 to 4.5 are additive (`@SimbaScheduled` and
 `SimbaScheduler`, `ContendObserver` and Micrometer metrics, the `simba` Actuator endpoint, `leaseRemaining` /
-`ensureLease`, `FencingSpec` and the `simba` health indicator); only 4.0 needs action.
+`ensureLease`, `FencingSpec` and the `simba` health indicator, `relinquish(cooldown)`); only 4.0 needs action.
+
+Since 4.5, `SimbaScheduler.stop()` and `AbstractScheduler.stop()` cancel the work and wait for a running run (at most
+the remaining lease) before releasing the mutex, instead of releasing first. Shutdown can therefore take up to that
+long when work ignores interruption.
 
 ## To 4.0
 

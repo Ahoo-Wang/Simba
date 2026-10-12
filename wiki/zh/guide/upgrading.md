@@ -5,9 +5,12 @@ description: 升级到 Simba 4.x 的步骤与破坏性变更。
 
 # 升级
 
-Simba 遵循 [语义化版本](https://semver.org/lang/zh-CN/)。4.1 至 4.4 都是增量功能（`@SimbaScheduled` 与 `SimbaScheduler`、
-`ContendObserver` 与 Micrometer 指标、`simba` Actuator 端点、`leaseRemaining` / `ensureLease`、`FencingSpec` 与 `simba` 健康检查）；
-只有 4.0 需要采取行动。
+Simba 遵循 [语义化版本](https://semver.org/lang/zh-CN/)。4.1 至 4.5 都是增量功能（`@SimbaScheduled` 与 `SimbaScheduler`、
+`ContendObserver` 与 Micrometer 指标、`simba` Actuator 端点、`leaseRemaining` / `ensureLease`、`FencingSpec` 与 `simba` 健康检查、
+`relinquish(cooldown)`）；只有 4.0 需要采取行动。
+
+从 4.5 起，`SimbaScheduler.stop()` 和 `AbstractScheduler.stop()` 会先取消工作并等待正在进行的运行（最多为剩余租约），再释放 mutex，
+而不是先释放。因此当工作忽略中断时，关闭可能需要等待这么久。
 
 ## 升级到 4.0
 

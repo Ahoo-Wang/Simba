@@ -15,33 +15,33 @@ Starter 只包含自动配置。将它与 **恰好一组** 后端依赖一起添
 ::: code-group
 
 ```kotlin [JDBC (Gradle)]
-implementation("me.ahoo.simba:simba-spring-boot-starter:4.4.0")
-implementation("me.ahoo.simba:simba-jdbc:4.4.0")
+implementation("me.ahoo.simba:simba-spring-boot-starter:4.5.0")
+implementation("me.ahoo.simba:simba-jdbc:4.5.0")
 implementation("org.springframework.boot:spring-boot-starter-jdbc")
 runtimeOnly("com.mysql:mysql-connector-j")
 ```
 
 ```kotlin [Redis (Gradle)]
-implementation("me.ahoo.simba:simba-spring-boot-starter:4.4.0")
-implementation("me.ahoo.simba:simba-spring-redis:4.4.0")
+implementation("me.ahoo.simba:simba-spring-boot-starter:4.5.0")
+implementation("me.ahoo.simba:simba-spring-redis:4.5.0")
 implementation("org.springframework.boot:spring-boot-starter-data-redis")
 ```
 
 ```kotlin [Zookeeper (Gradle)]
-implementation("me.ahoo.simba:simba-spring-boot-starter:4.4.0")
-implementation("me.ahoo.simba:simba-zookeeper:4.4.0")
+implementation("me.ahoo.simba:simba-spring-boot-starter:4.5.0")
+implementation("me.ahoo.simba:simba-zookeeper:4.5.0")
 ```
 
 ```xml [JDBC (Maven)]
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
-    <version>4.4.0</version>
+    <version>4.5.0</version>
 </dependency>
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-jdbc</artifactId>
-    <version>4.4.0</version>
+    <version>4.5.0</version>
 </dependency>
 <dependency>
     <groupId>org.springframework.boot</groupId>
@@ -58,12 +58,12 @@ implementation("me.ahoo.simba:simba-zookeeper:4.4.0")
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
-    <version>4.4.0</version>
+    <version>4.5.0</version>
 </dependency>
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-redis</artifactId>
-    <version>4.4.0</version>
+    <version>4.5.0</version>
 </dependency>
 <dependency>
     <groupId>org.springframework.boot</groupId>
@@ -75,12 +75,12 @@ implementation("me.ahoo.simba:simba-zookeeper:4.4.0")
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-spring-boot-starter</artifactId>
-    <version>4.4.0</version>
+    <version>4.5.0</version>
 </dependency>
 <dependency>
     <groupId>me.ahoo.simba</groupId>
     <artifactId>simba-zookeeper</artifactId>
-    <version>4.4.0</version>
+    <version>4.5.0</version>
 </dependency>
 ```
 
