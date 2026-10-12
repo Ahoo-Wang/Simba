@@ -14,8 +14,10 @@ package me.ahoo.simba.spring.boot.starter.zookeeper
 
 import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.partition.MemberRegistry
 import me.ahoo.simba.spring.boot.starter.ContendObservers
 import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
+import me.ahoo.simba.zookeeper.ZookeeperMemberRegistry
 import me.ahoo.simba.zookeeper.ZookeeperMutexContendServiceFactory
 import org.apache.curator.framework.CuratorFramework
 import org.springframework.beans.factory.ObjectProvider
@@ -40,6 +42,16 @@ import java.util.concurrent.Executor
 )
 @EnableConfigurationProperties(ZookeeperProperties::class)
 class SimbaZookeeperAutoConfiguration {
+    /**
+     * Membership for partitioned leadership (ADR 0009).
+     */
+    @Bean
+    @ConditionalOnBean(CuratorFramework::class)
+    @ConditionalOnMissingBean
+    fun zookeeperMemberRegistry(curatorFramework: CuratorFramework): MemberRegistry {
+        return ZookeeperMemberRegistry(curatorFramework)
+    }
+
     @Bean
     @ConditionalOnBean(CuratorFramework::class)
     @ConditionalOnMissingBean

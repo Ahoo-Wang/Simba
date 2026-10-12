@@ -14,6 +14,7 @@ package me.ahoo.simba.spring.boot.starter.zookeeper
 
 import io.mockk.mockk
 import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.partition.MemberRegistry
 import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 import org.apache.curator.framework.CuratorFramework
 import org.assertj.core.api.AssertionsForInterfaceTypes.assertThat
@@ -39,6 +40,7 @@ internal class SimbaZookeeperAutoConfigurationTest {
                     .hasSingleBean(SimbaZookeeperAutoConfiguration::class.java)
                     .hasSingleBean(ZookeeperProperties::class.java)
                     .hasSingleBean(MutexContendServiceFactory::class.java)
+                    .hasSingleBean(MemberRegistry::class.java)
             }
     }
 

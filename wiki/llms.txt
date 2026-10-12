@@ -5,8 +5,8 @@
 ## Guide
 
 - [Introduction](wiki/guide/index.md) — What Simba guarantees and does not, choosing an API and a backend
-- [Quick Start](wiki/guide/quick-start.md) — Dependencies, backend setup, @SimbaScheduled, SimbaLocker, MutexContender, use without Spring
-- [Backends](wiki/guide/backends.md) — JDBC/MySQL, Redis and Zookeeper: storage, fencing tokens, operating notes
+- [Quick Start](wiki/guide/quick-start.md) — Dependencies, backend setup, @SimbaScheduled, SimbaPartitionedScheduler, SimbaLocker, MutexContender, use without Spring
+- [Backends](wiki/guide/backends.md) — JDBC/MySQL, Redis and Zookeeper: storage, fencing tokens, membership, operating notes
 - [Correctness](wiki/guide/correctness.md) — Lease model, choosing ttl/transition, fencing tokens, failure modes, callbacks
 - [Configuration](wiki/guide/configuration.md) — simba.* properties, starter beans, callback executor, factories without Spring
 - [Observability](wiki/guide/observability.md) — Micrometer metrics, simba Actuator endpoint, health indicator, alert rules, custom ContendObserver
@@ -20,4 +20,4 @@
 
 - [Architecture](wiki/architecture/index.md) — Modules, contend service layers, lease engine, threads, time, wire contracts, ADR index
 - [Contributing](wiki/contributing/index.md) — Build, tests, backend TCK, adding a backend, documentation
-- [Architecture Decision Records](docs/adr/) — Rationale for the lease engine, fencing tokens, 4.0, scheduling, observability, Actuator endpoint, lease validity and health
+- [Architecture Decision Records](docs/adr/) — Rationale for the lease engine, fencing tokens, 4.0, scheduling, observability, Actuator endpoint, lease validity and health, relinquish, partitioned leadership

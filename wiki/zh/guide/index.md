@@ -32,10 +32,11 @@ Simba 没有独立的服务端：它作为库运行在你的应用里，使用�
 | 你想要…… | 使用 | 页面 |
 |---|---|---|
 | 只在 leader 上周期性执行某个方法 | `@SimbaScheduled`（Spring）或 `SimbaScheduler` | [快速开始](/zh/guide/quick-start#仅在-leader-上调度) |
+| 把 N 个分区的工作分摊到所有节点，每个分区只在一个节点上运行 | `SimbaPartitionedScheduler` | [快速开始](/zh/guide/quick-start#分区调度) |
 | 阻塞线程直到持有锁，用完释放 | `SimbaLocker` | [快速开始](/zh/guide/quick-start#simbalocker) |
 | 在应用运行期间响应领导权变化 | `MutexContender` + `MutexContendService` | [快速开始](/zh/guide/quick-start#mutexcontender) |
 
-三者都构建在同一个竞争服务之上；[API 参考](/zh/api/) 记录了每个类型。
+它们都构建在同一个竞争服务之上；[API 参考](/zh/api/) 记录了每个类型。
 
 ## 选择后端
 

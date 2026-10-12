@@ -21,6 +21,9 @@ import me.ahoo.simba.core.MutexContendService
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexOwner
 import me.ahoo.simba.core.MutexState
+import me.ahoo.simba.partition.MemberRegistry
+import me.ahoo.simba.partition.PartitionAssignment
+import me.ahoo.simba.partition.SimbaPartitionedScheduler
 import me.ahoo.simba.schedule.AbstractScheduler
 import me.ahoo.simba.schedule.ScheduleConfig
 import me.ahoo.simba.schedule.SimbaScheduler
@@ -68,6 +71,11 @@ abstract class MutexContendServiceSpec {
      * contenders only retry at the old lease end).
      */
     open val relinquishCooldown: Duration = Duration.ofSeconds(2)
+
+    /**
+     * This backend's [MemberRegistry]; `null` skips [partitionedScheduler].
+     */
+    open fun createMemberRegistry(): MemberRegistry? = null
 
     @Test
     open fun start() {
@@ -205,6 +213,54 @@ abstract class MutexContendServiceSpec {
         firstAcquired.poll(30, TimeUnit.SECONDS).assert().isNotNull()
         first.isOwner.assert().isTrue()
         first.stop()
+    }
+
+    @Test
+    open fun partitionedScheduler() {
+        val registry = createMemberRegistry()
+        Assumptions.assumeTrue(registry != null)
+        val group = "partitioned-${System.nanoTime()}"
+        val partitions = 4
+        val runs = LinkedBlockingQueue<Pair<String, Int>>()
+        val nodes = listOf("a", "b").map { member ->
+            SimbaPartitionedScheduler(
+                group = group,
+                partitions = partitions,
+                contendServiceFactory = mutexContendServiceFactory,
+                memberRegistry = registry!!,
+                config = ScheduleConfig.rate(Duration.ZERO, Duration.ofMillis(100)),
+                membershipTtl = Duration.ofSeconds(3),
+                memberId = member
+            ) { runs.add(member to it.partition) }
+        }
+
+        /**
+         * Waits until every partition ran on its owner among [members]; runs of earlier views are skipped.
+         */
+        fun awaitRunsMatching(members: List<String>) {
+            val pending = (0 until partitions).toMutableSet()
+            while (pending.isNotEmpty()) {
+                val (member, partition) = checkNotNull(runs.poll(30, TimeUnit.SECONDS)) {
+                    "partitions $pending did not run on their owner among $members"
+                }
+                if (PartitionAssignment.ownerOf(partition, members) == member) {
+                    pending -= partition
+                }
+            }
+        }
+
+        try {
+            nodes.forEach { it.start() }
+            awaitRunsMatching(listOf("a", "b"))
+
+            nodes[1].stop()
+            runs.clear()
+
+            awaitRunsMatching(listOf("a"))
+            nodes[0].ownedPartitions.assert().isEqualTo((0 until partitions).toSet())
+        } finally {
+            nodes.forEach { it.close() }
+        }
     }
 
     @Test

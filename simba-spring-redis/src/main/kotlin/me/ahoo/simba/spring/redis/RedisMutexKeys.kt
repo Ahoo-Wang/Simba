@@ -36,3 +36,8 @@ internal class RedisMutexKeys(mutex: String) {
      */
     val tokenKey: String = "$mutexKey:token"
 }
+
+/**
+ * Members of a partition group (ADR 0009): a sorted set scored by membership expiry in Redis time.
+ */
+internal fun membersKeyOf(group: String): String = "${Simba.SIMBA}:{$group}:members"

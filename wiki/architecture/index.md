@@ -135,3 +135,4 @@ Nodes running different Simba versions contend for the same mutex, so these are 
 | [0006](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0006-actuator-endpoint.md) | Read-only `simba` Actuator endpoint |
 | [0007](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0007-lease-validity-and-health.md) | Lease validity for work, fencing recipes, health indicator |
 | [0008](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0008-relinquish-and-handover.md) | `relinquish(cooldown)` and stopping work before releasing |
+| [0009](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0009-partitioned-leadership.md) | Partitioned leadership: `MemberRegistry`, rendezvous assignment, `SimbaPartitionedScheduler` |

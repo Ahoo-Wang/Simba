@@ -24,3 +24,11 @@ create table if not exists simba_mutex
     version       int unsigned not null,
     fencing_token bigint unsigned not null default 0 comment 'incremented once per ownership term (simba.jdbc.fencing)'
 );
+
+create table if not exists simba_member
+(
+    group_name varchar(66) not null comment 'partition group (ADR 0009)',
+    member_id  varchar(128) not null,
+    expire_at  bigint unsigned not null comment 'membership expiry, epoch millis in database time',
+    primary key (group_name, member_id)
+);

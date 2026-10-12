@@ -15,6 +15,7 @@ package me.ahoo.simba.spring.boot.starter.jdbc
 import io.mockk.mockk
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.jdbc.MutexOwnerRepository
+import me.ahoo.simba.partition.MemberRegistry
 import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 import org.assertj.core.api.AssertionsForInterfaceTypes.assertThat
 import org.junit.jupiter.api.Test
@@ -42,6 +43,7 @@ internal class SimbaJdbcAutoConfigurationTest {
                     .hasSingleBean(JdbcProperties::class.java)
                     .hasSingleBean(MutexOwnerRepository::class.java)
                     .hasSingleBean(MutexContendServiceFactory::class.java)
+                    .hasSingleBean(MemberRegistry::class.java)
             }
     }
 

@@ -107,6 +107,30 @@ class SimbaScheduler(
 `AbstractScheduler(mutex, factory)` 以继承方式提供相同语义（`config`、`worker`、`work()`、protected `fencingToken`、`leaseRemaining`、`ensureLease()`，以及 public `relinquish(cooldown)`）；
 推荐使用 `SimbaScheduler`。
 
+### `SimbaPartitionedScheduler` — `simba.partition`
+
+```kotlin
+class SimbaPartitionedScheduler(
+    group: String,
+    partitions: Int,
+    contendServiceFactory: MutexContendServiceFactory,
+    memberRegistry: MemberRegistry,
+    config: ScheduleConfig,
+    membershipTtl: Duration = 15s,
+    memberId: String = 自动生成,
+    worker: String = group,
+    work: PartitionedWork            // fun interface: work(context: PartitionContext)
+) : AutoCloseable
+```
+
+成员：`start()`（加入组，注册表不可达时失败）、`stop()`（停止所有分区后离开组）、幂等的 `close()`、`running`、`members`、
+`assignedPartitions`、`ownedPartitions`。节点每 `membershipTtl / 3` 发一次心跳，并对 `PartitionAssignment.ownerOf(partition, members)`
+分配给自己的每个分区，在 mutex `{group}.{partition}` 上运行一个 `SimbaScheduler`。`PartitionContext` 在 `ScheduleContext`
+基础上增加了 `group`、`partition` 和 `partitions`。注册表不可达时，节点保留当前的分区。
+
+`MemberRegistry`（`heartbeat(group, memberId, ttl)`、`leave`、`members`）由 `JdbcMemberRegistry`、`SpringRedisMemberRegistry` 和
+`ZookeeperMemberRegistry` 实现；`simba-test` 提供 `MemberRegistrySpec`。
+
 ### `@SimbaScheduled` — `simba-spring-boot-starter`，`simba.spring.boot.starter.scheduling`
 
 | 属性 | 说明 |

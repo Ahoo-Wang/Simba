@@ -14,8 +14,10 @@ package me.ahoo.simba.spring.boot.starter.redis
 
 import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.partition.MemberRegistry
 import me.ahoo.simba.spring.boot.starter.ContendObservers
 import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
+import me.ahoo.simba.spring.redis.SpringRedisMemberRegistry
 import me.ahoo.simba.spring.redis.SpringRedisMutexContendServiceFactory
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Qualifier
@@ -56,6 +58,16 @@ class SimbaSpringRedisAutoConfiguration(private val redisProperties: RedisProper
         val container = RedisMessageListenerContainer()
         container.setConnectionFactory(connectionFactory)
         return container
+    }
+
+    /**
+     * Membership for partitioned leadership (ADR 0009).
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(StringRedisTemplate::class)
+    fun redisMemberRegistry(redisTemplate: StringRedisTemplate): MemberRegistry {
+        return SpringRedisMemberRegistry(redisTemplate)
     }
 
     @Bean(destroyMethod = "close")

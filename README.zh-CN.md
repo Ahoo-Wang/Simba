@@ -61,6 +61,17 @@ public class ReportJobs {
 该方法只在 leader 上运行；节点失去领导权时会被中断。不使用 Spring 时，使用
 `SimbaScheduler(mutex, factory, ScheduleConfig.delay(...)) { context -> ... }`。
 
+### 分区调度
+
+```kotlin
+SimbaPartitionedScheduler("billing", 16, mutexContendServiceFactory, memberRegistry,
+    ScheduleConfig.delay(Duration.ZERO, Duration.ofMinutes(1))) { context ->
+    billing.settle(context.partition, context.fencingToken)
+}.start()
+```
+
+16 个分区中的每一个同一时刻只在一个节点上运行，并由存活的节点均匀分担。
+
 ### SimbaLocker
 
 ```java

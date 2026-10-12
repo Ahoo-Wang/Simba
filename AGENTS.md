@@ -42,14 +42,15 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
 
 - `simba-core` knows no backend and depends only on kotlin-logging. Backend behavior stays in its module; shared API
   types live in core.
-- `simba-test` holds the TCK every backend must pass (`MutexContendServiceSpec`, `LockSpec`) and `FencingSpec`, the
-  kit users run against their own token-checking resource (ADR 0007).
+- `simba-test` holds the TCK every backend must pass (`MutexContendServiceSpec`, `LockSpec`, `MemberRegistrySpec`)
+  and `FencingSpec`, the kit users run against their own token-checking resource (ADR 0007).
 - `simba-bom`, `simba-dependencies`: publication metadata. `code-coverage-report`: JaCoCo aggregation only.
 
 ### Layers (top to bottom)
 
 1. **User APIs** (`simba-core`): `MutexContender` callbacks (`AbstractMutexContender`); `SimbaLocker` (blocking
-   lock); `SimbaScheduler` / `AbstractScheduler` (leader-only periodic work, ADR 0004). Starter adds
+   lock); `SimbaScheduler` / `AbstractScheduler` (leader-only periodic work, ADR 0004); `SimbaPartitionedScheduler`
+   (partitions spread over the live members of a group, ADR 0009). Starter adds
    `@SimbaScheduled`, Micrometer metrics, the Actuator endpoint `simba` and the `simba` health indicator (ADR 0005,
    0006, 0007).
 2. **`MutexContendService`** (one per contender and mutex, created by a `MutexContendServiceFactory`):
@@ -131,6 +132,11 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
 - Redis names are built in both Kotlin (`RedisMutexKeys`) and Lua (`simba-spring-redis/src/main/resources/mutex_*.lua`):
   `simba:{mutex}` (lease key and channel), `simba:{mutex}:fence`, `simba:{mutex}:token`. Pub/sub messages are
   `{event}@@{ownerId}`; scripts take keys via `KEYS` and return arrays. Simba 4.0 requires every node on 3.2+.
+- Partitioned leadership (ADR 0009): `PartitionAssignment.weight` (FNV-1a 64 of `"$partition@$member"` mixed with
+  SplitMix64) must stay identical across versions, as must partition mutex names `{group}.{partition}`. Membership:
+  Redis sorted set `simba:{group}:members` scored by expiry in Redis `TIME` (`member_*.lua`); JDBC table
+  `simba_member(group_name, member_id, expire_at)` in database time; Zookeeper ephemeral nodes
+  `/simba-members/{group}/{memberId}`.
 - JDBC schema (MySQL-specific SQL):
   `simba_mutex(mutex, acquired_at, ttl_at, transition_at, owner_id varchar(128), version, fencing_token)`.
   Existing tables get `fencing_token` from `upgrade-simba-mysql-fencing-token.sql`.
@@ -181,6 +187,6 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
 |---|---|
 | `README.md`, `README.zh-CN.md`, `llms.txt` | Entry points: what Simba is, install, one example per API (`llms.txt` mirrors `wiki/llms.txt`) |
 | `wiki/` | VitePress site, the authoritative docs; page ownership and rules in `wiki/AGENTS.md` |
-| `docs/adr/` | ADRs: 0001 lease engine, 0002 fencing token, 0003 Simba 4, 0004 leader scheduling, 0005 observability, 0006 Actuator endpoint, 0007 lease validity and health, 0008 relinquish and handover |
+| `docs/adr/` | ADRs: 0001 lease engine, 0002 fencing token, 0003 Simba 4, 0004 leader scheduling, 0005 observability, 0006 Actuator endpoint, 0007 lease validity and health, 0008 relinquish and handover, 0009 partitioned leadership |
 | `CONTRIBUTING.md`, `SECURITY.md`, `.github/` | Contribution workflow, quality gates, SemVer and releases; vulnerability reporting; templates, labeler, CODEOWNERS |
 | `skills/simba/`, `skills/simba-testing/` | Source skill docs; do not generate marketplace artifacts here |

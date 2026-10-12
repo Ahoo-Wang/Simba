@@ -17,6 +17,7 @@ import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContendServiceFactory
 import me.ahoo.simba.core.MutexOwner
 import me.ahoo.simba.core.MutexState
+import me.ahoo.simba.partition.MemberRegistry
 import me.ahoo.simba.test.MutexContendServiceSpec
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.equalTo
@@ -35,6 +36,7 @@ import java.util.concurrent.atomic.AtomicInteger
 internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
 
     private lateinit var jdbcMutexOwnerRepository: JdbcMutexOwnerRepository
+    private lateinit var memberRegistry: JdbcMemberRegistry
     override lateinit var mutexContendServiceFactory: MutexContendServiceFactory
 
     /**
@@ -46,6 +48,7 @@ internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
     fun setup() {
         val hikariDataSource = MySqlFixture.newDataSource()
         jdbcMutexOwnerRepository = JdbcMutexOwnerRepository(hikariDataSource)
+        memberRegistry = JdbcMemberRegistry(hikariDataSource)
         mutexContendServiceFactory = JdbcMutexContendServiceFactory(
             mutexOwnerRepository = jdbcMutexOwnerRepository,
             initialDelay = Duration.ofSeconds(2),
@@ -61,6 +64,8 @@ internal class JdbcMutexContendServiceTest : MutexContendServiceSpec() {
         jdbcMutexOwnerRepository.tryInitMutex(SIMBA_SCHEDULER_MUTEX)
         jdbcMutexOwnerRepository.tryInitMutex(OBSERVER_MUTEX)
     }
+
+    override fun createMemberRegistry(): MemberRegistry = memberRegistry
 
     override fun createObservedFactory(observer: ContendObserver): MutexContendServiceFactory {
         return JdbcMutexContendServiceFactory(
