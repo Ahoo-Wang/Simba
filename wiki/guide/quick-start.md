@@ -149,6 +149,27 @@ single `ScheduleContext`. Durations use Spring Boot formats (`10s`, `500ms`, `PT
 The work runs on its own thread and is **interrupted** when the node loses leadership, so make it respond to
 interruption.
 
+### Partitioned Scheduling
+
+Spread work over every node: each of the `partitions` runs on exactly one node at a time, and the nodes share them
+evenly. Every node runs the same code:
+
+```kotlin
+SimbaPartitionedScheduler(
+    group = "billing",
+    partitions = 16,
+    contendServiceFactory = factory,
+    memberRegistry = memberRegistry,   // a MemberRegistry bean from the starter
+    config = ScheduleConfig.delay(Duration.ZERO, Duration.ofMinutes(1))
+) { context ->
+    billing.settle(shard = context.partition, fencingToken = context.fencingToken)
+}.start()
+```
+
+Nodes register in the group and split the partitions by rendezvous hashing. When a node joins or leaves, only its
+share moves. Each partition is its own mutex (`billing.3`) with its own fencing token, and moves hand over like
+`SimbaScheduler.stop()`. On JDBC, create the `simba_member` table first ([Backends](/guide/backends#membership-for-partitioned-scheduling)).
+
 ### SimbaLocker
 
 Block the calling thread until it owns the mutex; `close()` releases it:

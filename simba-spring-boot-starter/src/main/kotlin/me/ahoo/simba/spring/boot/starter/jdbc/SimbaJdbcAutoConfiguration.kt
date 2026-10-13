@@ -14,9 +14,11 @@ package me.ahoo.simba.spring.boot.starter.jdbc
 
 import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.jdbc.JdbcMemberRegistry
 import me.ahoo.simba.jdbc.JdbcMutexContendServiceFactory
 import me.ahoo.simba.jdbc.JdbcMutexOwnerRepository
 import me.ahoo.simba.jdbc.MutexOwnerRepository
+import me.ahoo.simba.partition.MemberRegistry
 import me.ahoo.simba.spring.boot.starter.ContendObservers
 import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 import org.springframework.beans.factory.ObjectProvider
@@ -53,6 +55,16 @@ class SimbaJdbcAutoConfiguration(private val jdbcProperties: JdbcProperties) {
             queryTimeout = jdbcProperties.ttl,
             fencing = jdbcProperties.fencing
         )
+    }
+
+    /**
+     * Membership for partitioned leadership (ADR 0009); needs the `simba_member` table only once it is used.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnSingleCandidate(DataSource::class)
+    fun jdbcMemberRegistry(dataSource: DataSource): MemberRegistry {
+        return JdbcMemberRegistry(dataSource, queryTimeout = jdbcProperties.ttl)
     }
 
     @Bean

@@ -14,6 +14,7 @@ package me.ahoo.simba.spring.redis
 
 import me.ahoo.simba.core.ContendObserver
 import me.ahoo.simba.core.MutexContendServiceFactory
+import me.ahoo.simba.partition.MemberRegistry
 import me.ahoo.simba.test.MutexContendServiceSpec
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll
@@ -55,6 +56,8 @@ internal class SpringRedisMutexContendServiceTest : MutexContendServiceSpec() {
             scheduledExecutorService = Executors.newScheduledThreadPool(1)
         )
     }
+
+    override fun createMemberRegistry(): MemberRegistry = SpringRedisMemberRegistry(stringRedisTemplate)
 
     override fun createObservedFactory(observer: ContendObserver): MutexContendServiceFactory {
         return SpringRedisMutexContendServiceFactory(

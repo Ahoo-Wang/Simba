@@ -39,10 +39,11 @@ highest it has seen. If duplicated work is merely wasteful (a report generated t
 | You want to... | Use | Page |
 |---|---|---|
 | Run a method periodically on the leader only | `@SimbaScheduled` (Spring) or `SimbaScheduler` | [Quick Start](/guide/quick-start#leader-only-scheduling) |
+| Spread N partitions of work over all nodes, each partition on one node | `SimbaPartitionedScheduler` | [Quick Start](/guide/quick-start#partitioned-scheduling) |
 | Block a thread until it holds the lock, then release it | `SimbaLocker` | [Quick Start](/guide/quick-start#simbalocker) |
 | React to leadership changes for as long as the application runs | `MutexContender` + `MutexContendService` | [Quick Start](/guide/quick-start#mutexcontender) |
 
-All three are built on the same contend service; the [API reference](/api/) documents each type.
+All of them are built on the same contend service; the [API reference](/api/) documents each type.
 
 ## Choose a Backend
 

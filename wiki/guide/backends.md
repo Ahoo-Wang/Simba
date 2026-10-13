@@ -89,6 +89,30 @@ container node that ZooKeeper deletes when empty, which restarts the sequence.)
   [`simba` endpoint](/guide/observability#actuator-endpoint) shows no current owner on them. Contention metrics are
   not reported because Curator performs the contention.
 
+## Membership for Partitioned Scheduling
+
+`SimbaPartitionedScheduler` needs to know which nodes are alive. Each backend provides a `MemberRegistry`; the starter
+registers it as a bean ([ADR 0009](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0009-partitioned-leadership.md)).
+
+| Backend | Storage | Expiry |
+|---|---|---|
+| JDBC | Table `simba_member`, one row per member | `expire_at` in database time; refreshed by heartbeats |
+| Redis | Sorted set `simba:{group}:members`, scored by expiry | Redis `TIME`, pruned on every heartbeat and read |
+| Zookeeper | Ephemeral node `/simba-members/{group}/{memberId}` | With the Curator session |
+
+The JDBC table is in `init-simba-mysql.sql`. For an existing schema, run
+[`upgrade-simba-mysql-member.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/upgrade-simba-mysql-member.sql). Only partitioned scheduling needs it; mutexes work without it.
+
+```sql
+create table if not exists simba_member
+(
+    group_name varchar(66)     not null,
+    member_id  varchar(128)    not null,
+    expire_at  bigint unsigned not null,
+    primary key (group_name, member_id)
+);
+```
+
 ## Selecting a Backend in Spring Boot
 
 Each backend activates when its module is on the classpath, `simba.enabled` and `simba.<backend>.enabled` are `true`

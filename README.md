@@ -64,6 +64,17 @@ public class ReportJobs {
 The method runs on the leader only; it is interrupted when the node loses leadership. Without Spring, use
 `SimbaScheduler(mutex, factory, ScheduleConfig.delay(...)) { context -> ... }`.
 
+### Partitioned scheduling
+
+```kotlin
+SimbaPartitionedScheduler("billing", 16, mutexContendServiceFactory, memberRegistry,
+    ScheduleConfig.delay(Duration.ZERO, Duration.ofMinutes(1))) { context ->
+    billing.settle(context.partition, context.fencingToken)
+}.start()
+```
+
+Each of the 16 partitions runs on one node at a time, and the live nodes share them evenly.
+
 ### SimbaLocker
 
 ```java

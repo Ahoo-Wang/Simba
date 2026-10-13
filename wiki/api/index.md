@@ -110,6 +110,31 @@ still runs.
 `AbstractScheduler(mutex, factory)` offers the same semantics by subclassing (`config`, `worker`, `work()`,
 protected `fencingToken`, `leaseRemaining`, `ensureLease()`, public `relinquish(cooldown)`); prefer `SimbaScheduler`.
 
+### `SimbaPartitionedScheduler` — `simba.partition`
+
+```kotlin
+class SimbaPartitionedScheduler(
+    group: String,
+    partitions: Int,
+    contendServiceFactory: MutexContendServiceFactory,
+    memberRegistry: MemberRegistry,
+    config: ScheduleConfig,
+    membershipTtl: Duration = 15s,
+    memberId: String = generated,
+    worker: String = group,
+    work: PartitionedWork            // fun interface: work(context: PartitionContext)
+) : AutoCloseable
+```
+
+Members: `start()` (joins the group, failing when the registry is unreachable), `stop()` (stops every partition, then
+leaves), idempotent `close()`, `running`, `members`, `assignedPartitions`, `ownedPartitions`. The node heartbeats every
+`membershipTtl / 3` and runs a `SimbaScheduler` on mutex `{group}.{partition}` for each partition that
+`PartitionAssignment.ownerOf(partition, members)` gives it. `PartitionContext` extends `ScheduleContext` with
+`group`, `partition` and `partitions`. When the registry is unreachable, the node keeps its current partitions.
+
+`MemberRegistry` (`heartbeat(group, memberId, ttl)`, `leave`, `members`) is implemented by `JdbcMemberRegistry`,
+`SpringRedisMemberRegistry` and `ZookeeperMemberRegistry`; `simba-test` provides `MemberRegistrySpec`.
+
 ### `@SimbaScheduled` — `simba-spring-boot-starter`, `simba.spring.boot.starter.scheduling`
 
 | Attribute | Description |

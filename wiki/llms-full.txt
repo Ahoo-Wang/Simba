@@ -35,10 +35,11 @@ highest it has seen. If duplicated work is merely wasteful (a report generated t
 | You want to... | Use | Page |
 |---|---|---|
 | Run a method periodically on the leader only | `@SimbaScheduled` (Spring) or `SimbaScheduler` | [Quick Start](/guide/quick-start#leader-only-scheduling) |
+| Spread N partitions of work over all nodes, each partition on one node | `SimbaPartitionedScheduler` | [Quick Start](/guide/quick-start#partitioned-scheduling) |
 | Block a thread until it holds the lock, then release it | `SimbaLocker` | [Quick Start](/guide/quick-start#simbalocker) |
 | React to leadership changes for as long as the application runs | `MutexContender` + `MutexContendService` | [Quick Start](/guide/quick-start#mutexcontender) |
 
-All three are built on the same contend service; the [API reference](/api/) documents each type.
+All of them are built on the same contend service; the [API reference](/api/) documents each type.
 
 ## Choose a Backend
 
@@ -208,6 +209,27 @@ single `ScheduleContext`. Durations use Spring Boot formats (`10s`, `500ms`, `PT
 The work runs on its own thread and is **interrupted** when the node loses leadership, so make it respond to
 interruption.
 
+### Partitioned Scheduling
+
+Spread work over every node: each of the `partitions` runs on exactly one node at a time, and the nodes share them
+evenly. Every node runs the same code:
+
+```kotlin
+SimbaPartitionedScheduler(
+    group = "billing",
+    partitions = 16,
+    contendServiceFactory = factory,
+    memberRegistry = memberRegistry,   // a MemberRegistry bean from the starter
+    config = ScheduleConfig.delay(Duration.ZERO, Duration.ofMinutes(1))
+) { context ->
+    billing.settle(shard = context.partition, fencingToken = context.fencingToken)
+}.start()
+```
+
+Nodes register in the group and split the partitions by rendezvous hashing. When a node joins or leaves, only its
+share moves. Each partition is its own mutex (`billing.3`) with its own fencing token, and moves hand over like
+`SimbaScheduler.stop()`. On JDBC, create the `simba_member` table first ([Backends](/guide/backends#membership-for-partitioned-scheduling)).
+
 ### SimbaLocker
 
 Block the calling thread until it owns the mutex; `close()` releases it:
@@ -366,6 +388,30 @@ container node that ZooKeeper deletes when empty, which restarts the sequence.)
 - Simba observes only its own leadership on Zookeeper: non-leaders do not know who leads, and the
   [`simba` endpoint](/guide/observability#actuator-endpoint) shows no current owner on them. Contention metrics are
   not reported because Curator performs the contention.
+
+## Membership for Partitioned Scheduling
+
+`SimbaPartitionedScheduler` needs to know which nodes are alive. Each backend provides a `MemberRegistry`; the starter
+registers it as a bean ([ADR 0009](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0009-partitioned-leadership.md)).
+
+| Backend | Storage | Expiry |
+|---|---|---|
+| JDBC | Table `simba_member`, one row per member | `expire_at` in database time; refreshed by heartbeats |
+| Redis | Sorted set `simba:{group}:members`, scored by expiry | Redis `TIME`, pruned on every heartbeat and read |
+| Zookeeper | Ephemeral node `/simba-members/{group}/{memberId}` | With the Curator session |
+
+The JDBC table is in `init-simba-mysql.sql`. For an existing schema, run
+[`upgrade-simba-mysql-member.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/upgrade-simba-mysql-member.sql). Only partitioned scheduling needs it; mutexes work without it.
+
+```sql
+create table if not exists simba_member
+(
+    group_name varchar(66)     not null,
+    member_id  varchar(128)    not null,
+    expire_at  bigint unsigned not null,
+    primary key (group_name, member_id)
+);
+```
 
 ## Selecting a Backend in Spring Boot
 
@@ -994,6 +1040,31 @@ still runs.
 `AbstractScheduler(mutex, factory)` offers the same semantics by subclassing (`config`, `worker`, `work()`,
 protected `fencingToken`, `leaseRemaining`, `ensureLease()`, public `relinquish(cooldown)`); prefer `SimbaScheduler`.
 
+### `SimbaPartitionedScheduler` — `simba.partition`
+
+```kotlin
+class SimbaPartitionedScheduler(
+    group: String,
+    partitions: Int,
+    contendServiceFactory: MutexContendServiceFactory,
+    memberRegistry: MemberRegistry,
+    config: ScheduleConfig,
+    membershipTtl: Duration = 15s,
+    memberId: String = generated,
+    worker: String = group,
+    work: PartitionedWork            // fun interface: work(context: PartitionContext)
+) : AutoCloseable
+```
+
+Members: `start()` (joins the group, failing when the registry is unreachable), `stop()` (stops every partition, then
+leaves), idempotent `close()`, `running`, `members`, `assignedPartitions`, `ownedPartitions`. The node heartbeats every
+`membershipTtl / 3` and runs a `SimbaScheduler` on mutex `{group}.{partition}` for each partition that
+`PartitionAssignment.ownerOf(partition, members)` gives it. `PartitionContext` extends `ScheduleContext` with
+`group`, `partition` and `partitions`. When the registry is unreachable, the node keeps its current partitions.
+
+`MemberRegistry` (`heartbeat(group, memberId, ttl)`, `leave`, `members`) is implemented by `JdbcMemberRegistry`,
+`SpringRedisMemberRegistry` and `ZookeeperMemberRegistry`; `simba-test` provides `MemberRegistrySpec`.
+
 ### `@SimbaScheduled` — `simba-spring-boot-starter`, `simba.spring.boot.starter.scheduling`
 
 | Attribute | Description |
@@ -1174,6 +1245,7 @@ Nodes running different Simba versions contend for the same mutex, so these are 
 | [0006](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0006-actuator-endpoint.md) | Read-only `simba` Actuator endpoint |
 | [0007](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0007-lease-validity-and-health.md) | Lease validity for work, fencing recipes, health indicator |
 | [0008](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0008-relinquish-and-handover.md) | `relinquish(cooldown)` and stopping work before releasing |
+| [0009](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0009-partitioned-leadership.md) | Partitioned leadership: `MemberRegistry`, rendezvous assignment, `SimbaPartitionedScheduler` |
 </doc>
 
 <doc title="Contributing" path="contributing/index.md">

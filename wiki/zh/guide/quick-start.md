@@ -147,6 +147,26 @@ class ReportJobs(private val reports: ReportService) {
 时长使用 Spring Boot 格式（`10s`、`500ms`、`PT1M`），并支持 `${...}` 占位符。工作在独立线程上运行，节点失去领导权时会被
 **中断**，因此请让它响应中断。
 
+### 分区调度
+
+把工作分摊到所有节点：`partitions` 个分区中的每一个，同一时刻只在一个节点上运行，并在节点间均匀分配。每个节点运行相同的代码：
+
+```kotlin
+SimbaPartitionedScheduler(
+    group = "billing",
+    partitions = 16,
+    contendServiceFactory = factory,
+    memberRegistry = memberRegistry,   // starter 提供的 MemberRegistry bean
+    config = ScheduleConfig.delay(Duration.ZERO, Duration.ofMinutes(1))
+) { context ->
+    billing.settle(shard = context.partition, fencingToken = context.fencingToken)
+}.start()
+```
+
+节点在组内注册，并用会合哈希（rendezvous hashing）划分分区。节点加入或离开时，只有它那一份会移动。每个分区是一个独立的 mutex
+（`billing.3`），有自己的 fencing token，分区移动时的交接方式与 `SimbaScheduler.stop()` 相同。使用 JDBC 时，先创建 `simba_member`
+表（见[后端](/zh/guide/backends#分区调度的成员注册)）。
+
 ### SimbaLocker
 
 阻塞调用线程直到持有 mutex；`close()` 释放它：

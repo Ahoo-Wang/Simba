@@ -18,6 +18,7 @@ import me.ahoo.simba.core.MutexContender
 import me.ahoo.simba.core.MutexOwner
 import me.ahoo.simba.core.MutexRetrievalService.Status
 import me.ahoo.simba.core.MutexState
+import me.ahoo.simba.partition.MemberRegistry
 import me.ahoo.simba.test.MutexContendServiceSpec
 import org.apache.curator.framework.CuratorFramework
 import org.apache.curator.framework.CuratorFrameworkFactory
@@ -57,6 +58,8 @@ private class CountingContender(
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 internal class ZookeeperMutexContendServiceTest : MutexContendServiceSpec() {
     lateinit var curatorFramework: CuratorFramework
+
+    override fun createMemberRegistry(): MemberRegistry = ZookeeperMemberRegistry(curatorFramework)
     override lateinit var mutexContendServiceFactory: MutexContendServiceFactory
     lateinit var testingServer: TestingServer
 

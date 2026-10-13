@@ -78,6 +78,29 @@ starter 不会创建它。
 - 在 Zookeeper 上 Simba 只观察自己的领导权：非 leader 不知道谁是 leader，它们的 [`simba` 端点](/zh/guide/observability#actuator-端点)
   不显示当前持有者。由于竞争由 Curator 执行，不会上报竞争指标。
 
+## 分区调度的成员注册
+
+`SimbaPartitionedScheduler` 需要知道哪些节点存活。每个后端都提供一个 `MemberRegistry`，starter 会把它注册为 bean（[ADR 0009](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0009-partitioned-leadership.md)）。
+
+| 后端 | 存储 | 过期 |
+|---|---|---|
+| JDBC | `simba_member` 表，每个成员一行 | `expire_at` 使用数据库时间，由心跳刷新 |
+| Redis | 有序集合 `simba:{group}:members`，分数为过期时间 | Redis `TIME`，每次心跳和读取时清理 |
+| Zookeeper | 临时节点 `/simba-members/{group}/{memberId}` | 随 Curator 会话结束 |
+
+JDBC 表已包含在 `init-simba-mysql.sql` 中。已有的库请执行 [`upgrade-simba-mysql-member.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/upgrade-simba-mysql-member.sql)。只有分区调度需要这张表，
+mutex 不依赖它。
+
+```sql
+create table if not exists simba_member
+(
+    group_name varchar(66)     not null,
+    member_id  varchar(128)    not null,
+    expire_at  bigint unsigned not null,
+    primary key (group_name, member_id)
+);
+```
+
 ## 在 Spring Boot 中选择后端
 
 当后端模块位于 classpath、`simba.enabled` 与 `simba.<backend>.enabled` 为 `true`（默认）并且其基础设施 bean 存在时，该后端被激活。

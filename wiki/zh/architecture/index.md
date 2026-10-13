@@ -126,3 +126,4 @@ autonumber
 | [0006](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0006-actuator-endpoint.md) | 只读的 `simba` Actuator 端点 |
 | [0007](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0007-lease-validity-and-health.md) | 工作可见的租约有效期、fencing 校验范式、健康检查 |
 | [0008](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0008-relinquish-and-handover.md) | `relinquish(cooldown)` 与先停工作再释放 |
+| [0009](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0009-partitioned-leadership.md) | 分区领导权：`MemberRegistry`、会合哈希分配、`SimbaPartitionedScheduler` |
