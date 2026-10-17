@@ -11,7 +11,7 @@
     "sync:llms": "node scripts/sync-llms-full.mjs",
     "check:llms": "node scripts/sync-llms-full.mjs --check"
   },
-  "packageManager": "pnpm@12.11.2",
+  "packageManager": "pnpm@12.14.0",
   "devDependencies": {
     "mermaid": "^11.17.2",
     "sitemap": "^9.0.1",
