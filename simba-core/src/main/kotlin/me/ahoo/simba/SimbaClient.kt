@@ -40,7 +40,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class SimbaClient private constructor(builder: Builder) : AutoCloseable {
     private val ownedExecutors = ArrayList<ExecutorService>()
     private val shell: EngineShell
-    private val elections = ConcurrentHashMap<LeaseName, Election>()
+    private val started = ConcurrentHashMap.newKeySet<LeaseName>()
     private val closing = AtomicBoolean(false)
     private val closed = CompletableFuture<Void>()
 
@@ -59,12 +59,16 @@ class SimbaClient private constructor(builder: Builder) : AutoCloseable {
         shell.boot()
     }
 
-    /** The election for [name]; the same object for the same name. */
+    /**
+     * The election for [name]. Handles of the same name share one election; nothing is kept per name once it is
+     * stopped, so one-off names do not accumulate.
+     */
     fun election(name: String): Election {
         check(!closing.get()) { "SimbaClient is closed." }
-        val leaseName = LeaseName(name)
-        return elections.computeIfAbsent(leaseName) { ShellElection(it) }
+        return ShellElection(LeaseName(name))
     }
+
+    internal fun dispatcherCount(): Int = shell.dispatcherCount().join()
 
     /** Revokes every term, closes the session and stops the engine; completes after the last callback ran. */
     fun closeAsync(): CompletionStage<Void> {
@@ -86,16 +90,14 @@ class SimbaClient private constructor(builder: Builder) : AutoCloseable {
     }
 
     private inner class ShellElection(override val name: LeaseName) : Election {
-        private val started = AtomicBoolean(false)
-
         override fun start(listener: LeadershipListener) {
             check(!closing.get()) { "SimbaClient is closed." }
-            check(started.compareAndSet(false, true)) { "Election [$name] is already started." }
+            check(started.add(name)) { "Election [$name] is already started." }
             shell.start(name, listener)
         }
 
         override fun stop(): CompletionStage<Void> {
-            if (!started.compareAndSet(true, false)) {
+            if (!started.remove(name)) {
                 return CompletableFuture.completedStage(null)
             }
             return shell.stop(name).minimalCompletionStage()

@@ -61,16 +61,62 @@ internal class EngineShell(
     private val dispatchers = HashMap<LeaseName, Dispatcher>()
     private val hintSubscription = backend.subscribe { hint -> post(Event.Hint(hint)) }
 
-    private class Dispatcher(val executor: SequentialExecutor, var listener: LeadershipListener?)
-
-    fun boot() = post(Event.Boot)
-
-    fun start(name: LeaseName, listener: LeadershipListener) = onLoop {
-        dispatcher(name).listener = listener
-        handle(Event.Start(name))
+    /**
+     * [active] while the election is started; [starts] counts starts. A stopped dispatcher is dropped once the
+     * callbacks of its last stop ran, unless it was started again since.
+     */
+    private class Dispatcher(val executor: SequentialExecutor) {
+        var listener: LeadershipListener? = null
+        var active = false
+        var starts = 0L
     }
 
-    fun stop(name: LeaseName): CompletableFuture<Void> = CompletableFuture<Void>().also { post(Event.Stop(name, it)) }
+    fun boot() {
+        post(Event.Boot)
+    }
+
+    fun start(name: LeaseName, listener: LeadershipListener) {
+        onLoop {
+            val dispatcher = dispatcher(name)
+            dispatcher.listener = listener
+            dispatcher.active = true
+            dispatcher.starts++
+            handle(Event.Start(name))
+        }
+    }
+
+    fun stop(name: LeaseName): CompletableFuture<Void> {
+        val done = CompletableFuture<Void>()
+        val stopped = CompletableFuture<Void>()
+        val accepted = onLoop {
+            val dispatcher = dispatchers[name]
+            dispatcher?.active = false
+            val starts = dispatcher?.starts
+            // `done` completes on the dispatcher after the stop's callbacks; then drop the dispatcher unless it was
+            // started again since, and only then report the stop.
+            done.whenComplete { _, _ ->
+                val posted = onLoop {
+                    val current = dispatchers[name]
+                    if (current != null && !current.active && current.starts == starts) {
+                        dispatchers.remove(name)
+                    }
+                    stopped.complete(null)
+                }
+                if (!posted) {
+                    stopped.complete(null)
+                }
+            }
+            handle(Event.Stop(name, done))
+        }
+        if (!accepted) {
+            stopped.complete(null)
+        }
+        return stopped
+    }
+
+    /** Dispatchers kept, one per started election or stop still draining; for tests. */
+    internal fun dispatcherCount(): CompletableFuture<Int> =
+        CompletableFuture<Int>().also { count -> onLoop { count.complete(dispatchers.size) } }
 
     fun stepDown(name: LeaseName, cooldownNanos: Long): CompletableFuture<Void> =
         CompletableFuture<Void>().also { post(Event.StepDown(name, cooldownNanos, it)) }
@@ -99,9 +145,12 @@ internal class EngineShell(
         }
     }
 
-    private fun post(event: Event) = onLoop { handle(event) }
+    private fun post(event: Event) {
+        onLoop { handle(event) }
+    }
 
-    private fun onLoop(action: () -> Unit) {
+    /** Runs [action] on the loop; `false` when the loop is already shut down. */
+    private fun onLoop(action: () -> Unit): Boolean {
         try {
             loop.execute {
                 try {
@@ -112,7 +161,9 @@ internal class EngineShell(
             }
         } catch (error: RejectedExecutionException) {
             log.debug(error) { "Simba engine is closed; event dropped." }
+            return false
         }
+        return true
     }
 
     private fun handle(event: Event) {
@@ -179,7 +230,7 @@ internal class EngineShell(
     }
 
     private fun dispatcher(name: LeaseName): Dispatcher =
-        dispatchers.getOrPut(name) { Dispatcher(SequentialExecutor(callbackExecutor), null) }
+        dispatchers.getOrPut(name) { Dispatcher(SequentialExecutor(callbackExecutor)) }
 
     /** Captures the listener now, on the loop, so a restart with another listener never receives older callbacks. */
     private fun dispatch(name: LeaseName, callback: (LeadershipListener) -> Unit) {

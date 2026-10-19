@@ -205,7 +205,44 @@ class EngineTest {
         effects.assert().contains(Effect.Complete(null, done))
     }
 
+    @Test
+    fun `state stays bounded across many one-off names`() {
+        open()
+        repeat(ONE_OFF_NAMES) { index ->
+            val oneOff = LeaseName("invoice-$index")
+            on(Event.Start(oneOff))
+            val acquire = call<BackendRequest.Acquire>()
+            on(Event.Reply(acquire.requestId, BackendResult.Acquired(mapOf(oneOff to AcquireResult.Granted(1)))))
+            on(Event.Stop(oneOff, CompletableFuture()))
+            val release = call<BackendRequest.Release>()
+            // Every other release fails: the next keep-alive, which no longer lists the lease, forgets it instead.
+            val result = if (index % 2 == 0) BackendResult.Done else BackendResult.Failed(IllegalStateException("lost"))
+            on(Event.Reply(release.requestId, result))
+        }
+        active.abandoned.size.assert().isEqualTo(ONE_OFF_NAMES / 2)
+        on(Event.Timer(active.renewTimer!!), now = SECOND)
+        val live = KeepAliveResult.Live(Duration.ofSeconds(3), emptyMap())
+        on(Event.Reply(call<BackendRequest.KeepAlive>().requestId, BackendResult.KeptAlive(live)), now = SECOND)
+
+        state.elections.assert().isEmpty()
+        state.pending.assert().isEmpty()
+        active.abandoned.assert().isEmpty()
+    }
+
+    @Test
+    fun `an abandoned token with a request in flight is kept`() {
+        open()
+        elect(token = 2)
+        on(Event.StepDown(name, cooldown = 0, CompletableFuture()))
+        val release = call<BackendRequest.Release>()
+        on(Event.Timer(effects.filterIsInstance<Effect.Arm>().single().id))
+        on(Event.Reply(release.requestId, BackendResult.Done))
+
+        active.abandoned[name].assert().isEqualTo(2L)
+    }
+
     companion object {
+        const val ONE_OFF_NAMES = 1_000
         const val MILLIS = 1_000_000L
         const val SECOND = 1_000 * MILLIS
     }

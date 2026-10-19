@@ -35,9 +35,15 @@ sealed interface Event {
 
     data class Start(val name: LeaseName) : Event
 
+    /**
+     * Stops the election. A held term is revoked, then its lease released, then [done] completes.
+     *
+     * TODO(ADR 0010 contract 3, phase 5): once work is bound to terms, release only after [WorkExited] for the term
+     * or after the term's remaining time, whichever comes first; with no work bound, release at once as today.
+     */
     data class Stop(val name: LeaseName, val done: CompletableFuture<Void>) : Event
 
-    /** [cooldown] in nanoseconds. */
+    /** Gives up the held term like [Stop] (same TODO about waiting for work) and pauses for [cooldown] nanoseconds. */
     data class StepDown(val name: LeaseName, val cooldown: Long, val done: CompletableFuture<Void>) : Event
 
     data class Close(val done: CompletableFuture<Void>) : Event
@@ -48,6 +54,12 @@ sealed interface Event {
     data class Reply(val requestId: Long, val result: BackendResult) : Event
 
     data class Hint(val hint: BackendHint) : Event
+
+    /**
+     * Reserved for phase 5 (ADR 0010 contract 3): the work bound to [term] of [name] exited, so the lease of a
+     * stopping or stepping-down term may be released. Ignored until work is bound to terms.
+     */
+    data class WorkExited(val name: LeaseName, val term: Long) : Event
 }
 
 /** Output of [step], executed in order by a shell. */

@@ -65,6 +65,7 @@ private class Transition(state: EngineState, private val now: Long) {
             is Event.Timer -> timer(event.id)
             is Event.Reply -> reply(event.requestId, event.result)
             is Event.Hint -> hint(event.hint)
+            is Event.WorkExited -> Unit
         }
     }
 
@@ -185,7 +186,7 @@ private class Transition(state: EngineState, private val now: Long) {
             is BackendRequest.OpenSession -> onOpened(requestId, sent.sentAt, result)
             is BackendRequest.KeepAlive -> onKeepAlive(requestId, sent.sentAt, result)
             is BackendRequest.Acquire -> onAcquire(requestId, request, result)
-            is BackendRequest.Release -> Unit
+            is BackendRequest.Release -> onReleased(request, result)
             is BackendRequest.CloseSession -> onClosed(requestId)
         }
     }
@@ -293,6 +294,41 @@ private class Transition(state: EngineState, private val now: Long) {
         if (orphans.isNotEmpty()) {
             orphans.forEach { (name, token) -> abandon(name, token) }
             call(BackendRequest.Release(current.id, orphans))
+        }
+        forget(current.abandoned.keys.filter { it !in owned })
+    }
+
+    /** A confirmed release frees its token at the backend, so the name no longer needs to be remembered. */
+    private fun onReleased(request: BackendRequest.Release, result: BackendResult) {
+        val current = session as? SessionState.Active ?: return
+        if (result == BackendResult.Done && current.id == request.session) {
+            forget(request.leases.keys)
+        }
+    }
+
+    /**
+     * Drops [names] from the abandoned tokens, except names with a request in flight: once the backend no longer
+     * holds an abandoned token for this session and nothing in flight can answer it, any later grant carries a
+     * fresh, higher token. Keeps the state bounded by the names in use, not every name ever used.
+     */
+    private fun forget(names: Collection<LeaseName>) {
+        val current = session as SessionState.Active
+        if (names.isEmpty() || current.abandoned.isEmpty()) {
+            return
+        }
+        val busy = pending.values.asSequence()
+            .map { it.request }
+            .flatMap {
+                when {
+                    it is BackendRequest.Acquire && it.session == current.id -> it.names.asSequence()
+                    it is BackendRequest.Release && it.session == current.id -> it.leases.keys.asSequence()
+                    else -> emptySequence()
+                }
+            }
+            .toSet()
+        val forgotten = names.filter { it !in busy }
+        if (forgotten.isNotEmpty()) {
+            session = current.copy(abandoned = current.abandoned - forgotten.toSet())
         }
     }
 
