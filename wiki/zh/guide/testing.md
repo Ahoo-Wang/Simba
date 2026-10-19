@@ -143,7 +143,6 @@ class MyLeaseBackendTest : LeaseBackendSpec() {
 | `lease` | 30 s | 必须比测试活得更久的会话的租约 |
 | `shortLease` | 1 s | 测试会让其过期的会话的租约；在真实时间上请保持较短 |
 | `clock` | `null` | 测试可控制时后端的时钟；否则基于时间的测试会轮询直到租约耗尽 |
-| `leasesExpireIndependently` | `false` | 租约是否独立过期，而不是随其会话过期（Redis） |
 | `timeout` | 30 s | 测试等待任何事物的上限 |
 
 每个测试都使用全新的租约名和组名，因此存储可以在测试之间共享。JDBC、Redis 和 Zookeeper 后端在 Simba 自己的构建中运行此规范；

@@ -130,7 +130,7 @@ See [Observability](/guide/observability).
 
 ```kotlin
 interface LeaseBackend : AutoCloseable {
-    val capabilities: Capabilities                    // releaseHints, membershipHints, maxBatch
+    val capabilities: Capabilities                    // releaseHints, membershipHints
     fun openSession(lease: Duration, metadata: Map<String, String> = emptyMap()): SessionGrant
     fun keepAlive(session: SessionId, lease: Duration, held: Set<LeaseName>): KeepAliveResult   // Live(remaining, owned) | Expired
     fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult>      // Granted(token) | HeldBy(session, token)
@@ -145,11 +145,16 @@ interface LeaseBackend : AutoCloseable {
 
 Rules every implementation follows (checked by [`LeaseBackendSpec`](/guide/testing#backend-tck)):
 
-- every method is one backend round trip (or one per slot), with no scheduling, no notification and no local state;
+- every method makes a bounded number of backend calls, without waiting, scheduling, notifying or keeping local lease
+  state;
 - every remaining duration is computed with the backend's clock and returned as a duration, never a timestamp;
 - a token is greater than zero, strictly increases with every new term of its name and never resets;
 - a session expires once it was not kept alive for its lease, even if the transport keeps a connection alive;
 - an expired session is never revived: `keepAlive` answers `Expired`, `acquire` throws `SessionExpiredException`;
+- `keepAlive` reports every lease the session owns, whatever `held` says, and an owned lease lasts at least as long
+  as its session, also on a backend whose leases expire on their own;
+- inputs are validated alike, with `IllegalArgumentException`: leases of at least 1 ms, group names under the
+  `LeaseName` rules, at most `LeaseBackend.MAX_BATCH` (64) names per `acquire`;
 - `release` frees only leases the session still owns with exactly the given token, so a stale release is a no-op;
 - hints only accelerate; losing one never affects correctness.
 

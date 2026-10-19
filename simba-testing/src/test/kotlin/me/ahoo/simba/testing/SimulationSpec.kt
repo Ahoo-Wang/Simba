@@ -33,6 +33,16 @@ class SimulationSpec {
     }
 
     @Test
+    fun `invariants hold when leases expire on their own`() {
+        val range = only?.let { it..it } ?: 0 until seeds
+        var elections = 0L
+        for (seed in range) {
+            elections += Simulation(seed, SELF_EXPIRING).run().elections
+        }
+        elections.assert().isGreaterThan(0)
+    }
+
+    @Test
     fun `a seed replays exactly`() {
         Simulation(SAMPLE_SEED).run().assert().isEqualTo(Simulation(SAMPLE_SEED).run())
     }
@@ -63,5 +73,6 @@ class SimulationSpec {
     companion object {
         const val DEFAULT_SEEDS = 10_000L
         const val SAMPLE_SEED = 42L
+        val SELF_EXPIRING = SimulationParams(selfExpiringLeases = true)
     }
 }
