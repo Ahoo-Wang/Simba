@@ -93,7 +93,9 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
    optional hints. No scheduling, no notification, no local lease state; remaining durations come back as durations
    measured by the backend's clock. Keep-alive reports every owned lease (`held` is only a hint); inputs are validated
    alike (`LeaseBackend.requireLease` ≥ 1 ms, `requireGroup` = `LeaseName` rules, `requireBatch` ≤ `MAX_BATCH` 64).
-   `InMemoryLeaseBackend(selfExpiringLeases = true)` models Redis-style leases; `SimulationSpec` runs both modes.
+   `InMemoryLeaseBackend(selfExpiringLeases = true)` models Redis-style leases (Cluster: a grant lasts one full lease;
+   with `sessionBoundGrants = true`, single node: only what the session has left); `SimulationSpec` runs all three
+   modes.
 
 ## Invariants
 
@@ -188,7 +190,10 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   held and unchanged for a lease. Close: delete session, free indexed leases and groups, drop indexes (retry-safe).
   Groups: zset `simba:group:{g}` scored by expiry.
   Release publishes `released` on the lease key, the only broadcast. With `routeBySlot` (Cluster) every script call
-  keeps to one hash slot. Group names follow the `LeaseName` rules. `wait-replicas` makes a new term wait for `WAIT`.
+  keeps to one hash slot; every call after the session-slot one carries that call's Redis time + session lease +
+  `maxClockSkew` and grants or extends nothing beyond it (a late acquire or join fails), and keep-alive forgets a
+  lost index entry only `lease + 2 × maxClockSkew` after its attempt. On a single node the second keep-alive call is
+  capped at the session's new expiry. Group names follow the `LeaseName` rules. `wait-replicas` makes a new term wait for `WAIT`.
 - Zookeeper (`ZookeeperLeaseBackend`): one raw `ZooKeeper` client per session, never reconnected to another session;
   `SessionId` = zk session id as 16 hex digits. Leases are ephemeral `/simba/leases/{name}`, owner = `ephemeralOwner`,
   token = czxid (strictly increasing, not consecutive). Members are ephemeral `/simba/groups/{g}/{sid}`. A local

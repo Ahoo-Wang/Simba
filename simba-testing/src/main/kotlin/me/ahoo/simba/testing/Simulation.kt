@@ -48,6 +48,8 @@ import java.util.concurrent.TimeoutException
  *   [selfExitShare] within [maxWork], and otherwise within [maxWork] after its term is revoked (often after the
  *   handover timed out).
  * @property selfExpiringLeases runs [InMemoryLeaseBackend] with leases that expire on their own, as on Redis.
+ * @property sessionBoundGrants with [selfExpiringLeases], a grant lasts only as long as its session has left, as on a
+ *   single Redis node, instead of one full lease.
  */
 class SimulationParams private constructor(builder: Builder) {
     /** The defaults; see [builder] to change knobs. */
@@ -71,6 +73,7 @@ class SimulationParams private constructor(builder: Builder) {
     val selfExitShare: Double = builder.selfExitShare
     val maxWork: Duration = builder.maxWork ?: config.leaseDuration.multipliedBy(2)
     val selfExpiringLeases: Boolean = builder.selfExpiringLeases
+    val sessionBoundGrants: Boolean = builder.sessionBoundGrants
 
     /**
      * I4 bound, measured from the start of the quiet phase: fault-phase messages land within two delays, a cooldown
@@ -102,8 +105,9 @@ class SimulationParams private constructor(builder: Builder) {
             .selfExitShare(selfExitShare)
             .maxWork(maxWork)
             .selfExpiringLeases(selfExpiringLeases)
+            .sessionBoundGrants(sessionBoundGrants)
 
-    private fun values(): List<Any> = listOf(config, minNodes, maxNodes, minNames, maxNames, maxDelay, maxDropRate, quietMaxDelay, clockRateSpread, meanPauseInterval, maxPause, meanOperationInterval, faultPhase, quietPhase, workShare, selfExitShare, maxWork, selfExpiringLeases)
+    private fun values(): List<Any> = listOf(config, minNodes, maxNodes, minNames, maxNames, maxDelay, maxDropRate, quietMaxDelay, clockRateSpread, meanPauseInterval, maxPause, meanOperationInterval, faultPhase, quietPhase, workShare, selfExitShare, maxWork, selfExpiringLeases, sessionBoundGrants)
 
     override fun equals(other: Any?): Boolean = this === other || other is SimulationParams && values() == other.values()
 
@@ -115,7 +119,7 @@ class SimulationParams private constructor(builder: Builder) {
             "maxNames=$maxNames, maxDelay=$maxDelay, maxDropRate=$maxDropRate, quietMaxDelay=$quietMaxDelay, " +
             "clockRateSpread=$clockRateSpread, meanPauseInterval=$meanPauseInterval, maxPause=$maxPause, meanOperationInterval=$meanOperationInterval, " +
             "faultPhase=$faultPhase, quietPhase=$quietPhase, workShare=$workShare, selfExitShare=$selfExitShare, " +
-            "maxWork=$maxWork, selfExpiringLeases=$selfExpiringLeases)"
+            "maxWork=$maxWork, selfExpiringLeases=$selfExpiringLeases, sessionBoundGrants=$sessionBoundGrants)"
 
     /** Builds [SimulationParams]; `clockRateSpread` defaults to the config's drift, `maxPause` and `maxWork` to two leases. */
     class Builder internal constructor() {
@@ -161,6 +165,8 @@ class SimulationParams private constructor(builder: Builder) {
             private set
         internal var selfExpiringLeases: Boolean = false
             private set
+        internal var sessionBoundGrants: Boolean = false
+            private set
 
         fun config(config: SimbaConfig) = apply { this.config = config }
 
@@ -199,6 +205,8 @@ class SimulationParams private constructor(builder: Builder) {
         fun maxWork(maxWork: Duration) = apply { this.maxWork = maxWork }
 
         fun selfExpiringLeases(selfExpiringLeases: Boolean) = apply { this.selfExpiringLeases = selfExpiringLeases }
+
+        fun sessionBoundGrants(sessionBoundGrants: Boolean) = apply { this.sessionBoundGrants = sessionBoundGrants }
 
         fun build(): SimulationParams = SimulationParams(this)
     }
@@ -269,7 +277,9 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
     private val random = SplittableRandom(seed)
     private val clock = VirtualClock()
     private var sessionCounter = 0
-    private val backend = InMemoryLeaseBackend(clock, params.selfExpiringLeases) { SessionId("s${++sessionCounter}") }
+    private val backend = InMemoryLeaseBackend(clock, params.selfExpiringLeases, params.sessionBoundGrants) {
+        SessionId("s${++sessionCounter}")
+    }
     private val engineConfig = EngineConfig.of(params.config)
     private val queue = PriorityQueue<Task>(compareBy<Task>({ it.at }, { it.seq }))
     private var seq = 0L

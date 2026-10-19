@@ -129,9 +129,13 @@ then drops its indexes, so a close repeated after a failure finishes the job.
 ### Cluster
 
 On a Redis Cluster (`RedisScripting.clustered`, or `simba.redis.route-by-slot=true`) every script call keeps to one
-hash slot: a call first touches the session's slot, then runs one script per slot of the remaining keys. The lease
-and session slots may then live on nodes whose clocks differ; a skew between them shortens or lengthens leases by that
-much.
+hash slot: a call first touches the session's slot, then runs one script per slot of the remaining keys. Those later
+scripts can reach Redis long after the first one (a starved thread, a driver holding commands until it reconnects),
+when the session may have died. Each carries the session call's Redis time plus the session lease plus
+`maxClockSkew` (constructor parameter, default 1 s): nothing is granted or extended beyond that point, and an acquire
+or join that arrives after it changes nothing and fails. Keep-alive drops a lost lease from the session's index only
+once no such acquire can still take it, so `owned` stays complete. The lease and session slots may live on nodes
+whose clocks differ; a skew beyond `maxClockSkew` can end a lease before its session.
 
 ### Token Regression after a Failover
 
