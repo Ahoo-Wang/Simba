@@ -172,6 +172,14 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
   `simba_lease` rows are never deleted (the token never resets); release clears `session_id` only. A lease belongs to
   its `session_id` only while that session is live. The MySQL acquire assigns `token` before `session_id` (left-to-right
   `SET`). The 5.x `simba_member` differs from the 4.x table: use a separate database until 4.x JDBC is removed.
+- Redis (`me.ahoo.simba.redis.RedisLeaseBackend` in `simba-spring-redis`, Lua in `resources/me/ahoo/simba/redis/`):
+  lease hash `simba:lease:{name}` = `{session, token, expires}` never expires and is never deleted (release clears
+  `session`); `expires` is Redis `TIME`. Session hash `simba:session:{sid}` (PX) plus `:leases` / `:groups` index sets
+  in the same slot; keep-alive, acquire and join fail once it is gone. A new term lasts as long as its session and
+  keep-alive extends only `held`, so leases expire on their own. Groups: zset `simba:group:{g}` scored by expiry.
+  Release publishes `released` on the lease key, the only broadcast. Core logic sees Redis only through
+  `RedisScripting` (`SpringRedisScripting` adapts Spring Data Redis); with `routeBySlot` (Cluster) every script call
+  keeps to one hash slot. Group names follow the `LeaseName` rules.
 - Zookeeper (`ZookeeperLeaseBackend`): one raw `ZooKeeper` client per session, never reconnected to another session;
   `SessionId` = zk session id as 16 hex digits. Leases are ephemeral `/simba/leases/{name}`, owner = `ephemeralOwner`,
   token = czxid (strictly increasing, not consecutive; the SPI and TCK only require strict increase). The client
