@@ -22,7 +22,7 @@ Simba 是一个用于 **选主与分布式互斥** 的 JVM 库。应用的各个
 
 ## 安装
 
-添加 Spring Boot starter 和 **一个** 后端（Java 17+）：
+添加 Spring Boot starter 和 **一个** 后端（Java 21+）：
 
 ```kotlin
 implementation("me.ahoo.simba:simba-spring-boot-starter:${simbaVersion}")

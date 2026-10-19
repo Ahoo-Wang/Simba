@@ -24,7 +24,7 @@ Read [Correctness](https://simba.ahoo.me/guide/correctness) before protecting an
 
 ## Installation
 
-Add the Spring Boot starter and **one** backend (Java 17+):
+Add the Spring Boot starter and **one** backend (Java 21+):
 
 ```kotlin
 implementation("me.ahoo.simba:simba-spring-boot-starter:${simbaVersion}")

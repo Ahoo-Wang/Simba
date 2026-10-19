@@ -12,7 +12,7 @@ description: 构建 Simba、运行测试、借助 TCK 添加后端，并保持�
 
 ## 构建与测试
 
-需要 JDK 17 和 Docker。
+需要 JDK 21 和 Docker。
 
 ```bash
 ./gradlew build                                   # 所有模块
@@ -20,7 +20,7 @@ description: 构建 Simba、运行测试、借助 TCK 添加后端，并保持�
 ./gradlew simba-core:test --tests me.ahoo.simba.core.LeaseContendServiceTest
 ./gradlew simba-example:check -PexampleBackend=jdbc   # jdbc | redis | zookeeper（默认：redis）
 ./gradlew codeCoverageReport                      # 聚合 JaCoCo 报告
-./gradlew check -PtestJavaVersion=25              # 在其他 JDK 上运行测试；字节码仍为 17
+./gradlew check -PtestJavaVersion=25              # 在其他 JDK 上运行测试；字节码仍为 21
 ```
 
 | 模块 | 测试基础设施 |

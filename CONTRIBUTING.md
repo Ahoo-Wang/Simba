@@ -4,7 +4,7 @@ Thanks for helping. This page is the contract for changes; the [contributor guid
 
 ## Development setup
 
-- JDK 17 and Docker (the JDBC and Redis tests start MySQL and Redis with Testcontainers). `-PtestJavaVersion=N` runs the tests on another installed JDK; bytecode always targets 17.
+- JDK 21 and Docker (the JDBC and Redis tests start MySQL and Redis with Testcontainers). `-PtestJavaVersion=N` runs the tests on another installed JDK; bytecode always targets 21.
 - `./gradlew check` runs all tests, detekt (static analysis and formatting) and the license-header check.
 - Wiki: Node.js 22.12+ and pnpm, see `wiki/AGENTS.md`.
 

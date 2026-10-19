@@ -13,3 +13,9 @@
 dependencies {
     api("io.github.oshai:kotlin-logging-jvm")
 }
+
+kotlin {
+    compilerOptions {
+        optIn.add("me.ahoo.simba.engine.InternalSimbaApi")
+    }
+}

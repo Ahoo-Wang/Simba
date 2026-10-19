@@ -5,7 +5,7 @@ description: Add Simba to a Spring Boot or plain JVM application, configure one 
 
 # Quick Start
 
-Requirements: JDK 17+, and a running MySQL, Redis or Zookeeper. The examples use Spring Boot 4.1 with its dependency
+Requirements: JDK 21+, and a running MySQL, Redis or Zookeeper. The examples use Spring Boot 4.1 with its dependency
 management; without Spring Boot, see [Without Spring](#without-spring).
 
 ## 1. Add Dependencies

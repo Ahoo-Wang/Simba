@@ -1,6 +1,6 @@
 # Simba - Agent Instructions
 
-Simba is a JVM (Kotlin, Java 17 bytecode) distributed mutex / leader-election library over JDBC (MySQL), Redis, or
+Simba is a JVM (Kotlin, Java 21 bytecode) distributed mutex / leader-election library over JDBC (MySQL), Redis, or
 Zookeeper. Its whole contract: per mutex, at most one contender *observes itself* as owner of a time-bounded lease,
 and every contender receives ordered acquire/release callbacks.
 
@@ -18,13 +18,13 @@ This file records what is not obvious from the code. Describe the code as it is;
 ./gradlew <module>:check                                 # Tests + detekt (autoCorrect rewrites sources)
 ./gradlew <module>:test --tests <fully.qualified.TestClass>
 ./gradlew simba-example:check -PexampleBackend=jdbc|redis|zookeeper   # default: redis
-./gradlew test -PtestJavaVersion=25                      # Tests on another JDK; bytecode stays 17
+./gradlew test -PtestJavaVersion=25                      # Tests on another JDK; bytecode stays 21
 ./gradlew codeCoverageReport                             # Aggregated JaCoCo report
 ```
 
 | Module check | Needs |
 |---|---|
-| `simba-core`, `simba-zookeeper`, `simba-spring-boot-starter` | Nothing (Zookeeper tests use embedded Curator `TestingServer`) |
+| `simba-core`, `simba-testing`, `simba-zookeeper`, `simba-spring-boot-starter` | Nothing (Zookeeper tests use embedded Curator `TestingServer`) |
 | `simba-spring-redis` | Docker: Testcontainers `redis:7.4-alpine` (`RedisFixture`) |
 | `simba-jdbc` | Docker: Testcontainers `mysql:8.4` (`MySqlFixture`, schema from `simba-jdbc/src/init-script/init-simba-mysql.sql`) |
 
@@ -140,6 +140,20 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
 - JDBC schema (MySQL-specific SQL):
   `simba_mutex(mutex, acquired_at, ttl_at, transition_at, owner_id varchar(128), version, fencing_token)`.
   Existing tables get `fencing_token` from `upgrade-simba-mysql-fencing-token.sql`.
+
+### Simba 5 engine (ADR 0010, phase 1; lives beside 4.x until phase 5)
+
+- Packages `me.ahoo.simba.spi` (`LeaseBackend`), `me.ahoo.simba.event`, `me.ahoo.simba.engine`; public API `SimbaClient`,
+  `Election`, `Term` in `me.ahoo.simba`. `simba-testing`: `InMemoryLeaseBackend`, `VirtualClock`, `Simulation`.
+- `engine.step(state, event, now)` is pure: no threads, clock or I/O. `EngineShell` runs it on one loop thread;
+  `Simulation` runs it in virtual time. Engine types are `@InternalSimbaApi` (opt-in), not public API.
+- A term is adopted only from the reply to the election's current attempt, before the session's local deadline
+  (`sentAt + remaining × (1 − drift) − margin`), and only with a token above every token the session released.
+  A term is revoked before its lease is released; releases carry the token, so a late one is a no-op.
+- Keep-alive replies list the leases the session owns: a term adopted before the request but missing from the reply is
+  revoked (`TAKEN_OVER`); an owned lease nobody holds or is acquiring is released.
+- Engine changes must keep `SimulationSpec` (I1–I4 over 10⁴ seeds) green; replay a failure with
+  `./gradlew simba-testing:test -Psimba.simulation.seed=N`.
 
 ## Change Playbooks
 
