@@ -65,11 +65,14 @@ With Micrometer on the classpath and a `MeterRegistry` bean, the starter registe
 |---|---|---|---|
 | `simba.session.renew` | Timer | — | Latency of successful keep-alives |
 | `simba.session.state` | Gauge | `state` (`opening`, `live`, `suspended`, `closed`) | `1` for the current session status |
-| `simba.leadership` | Gauge | `name` | `1` while this node holds a term of the name |
-| `simba.revocations` | Counter | `name`, `reason` | Ended terms, by `RevokeReason` (lowercase) |
+| `simba.leadership` | Gauge | `name` | `1` while this node holds a term of the name, `0` after it lost one |
+| `simba.revocations` | Counter | `reason` | Ended terms of every election and lock, by `RevokeReason` (lowercase), including `stopped` and `stepped_down` |
 | `simba.work` | Timer | `name`, `outcome` | Leader work runs (`completed`, `failed`, `cancelled`) |
 
-Partition elections appear as names too (`{group}.{partition}`). Without Spring, add
+Partition elections appear as names too (`{group}.{partition}`). To keep the number of series bounded, a name's
+`simba.leadership` series exists only from its first term until a term ends by `stopped` (the election stopped, the
+client closed, or a lock was released): a released lock leaves no series behind and never reads as "no leader", and
+revocations carry no name. Without Spring, add
 `MicrometerSimbaEventListener(registry)` to the builder yourself.
 
 ## Alert Rules
@@ -93,11 +96,11 @@ groups:
       - alert: SimbaTermsLost
         expr: increase(simba_revocations_total{reason=~"deadline_passed|session_expired|taken_over"}[10m]) > 0
         annotations:
-          summary: "{{ $labels.name }} lost a term ({{ $labels.reason }}); protect writes with fencing tokens"
+          summary: "{{ $labels.instance }} lost a term ({{ $labels.reason }}); protect writes with fencing tokens"
       - alert: SimbaLeadershipFlapping
-        expr: increase(simba_revocations_total[10m]) > 3
+        expr: increase(simba_revocations_total{reason!~"stopped|stepped_down"}[10m]) > 3
         annotations:
-          summary: "Leadership of {{ $labels.name }} moves too often"
+          summary: "Leadership on {{ $labels.instance }} moves too often"
       - alert: SimbaWorkFailing
         expr: increase(simba_work_seconds_count{outcome="failed"}[10m]) > 0
         annotations:

@@ -59,6 +59,7 @@ management:
 | `SimbaEndpoint`（`simba`） | classpath 上有 Actuator 且端点可用（已启用并已暴露） |
 | `SimbaHealthIndicator`（`simba`） | classpath 上有 Actuator 且 `management.health.simba.enabled` |
 
+除基础设施 bean（`SimbaBackendSelection`，即 `simba.backend` 的启动检查，以及 `SimbaScheduledBeanPostProcessor`）外，
 所有 bean 都是 `@ConditionalOnMissingBean`：自行定义即可替换。若要在属性之外定制客户端（执行器、固定的
 seed），请用 `Simba.builder()` 自行定义 `Simba` bean。
 
@@ -66,6 +67,8 @@ seed），请用 `Simba.builder()` 自行定义 `Simba` bean。
 
 `@SimbaScheduled` 在某个选举的 leader 上运行一个 bean 方法；`@SimbaPartitioned` 为本节点作为 leader 的组内每个分区运行该方法。
 两者都在上下文刷新后启动、在关闭时停止。它们的属性和方法签名见 [Leader 任务与分区](/zh/guide/leader-work#spring-annotations)页面。
+两种注解选举的租约名（`@SimbaScheduled` 的 `name`、`@SimbaPartitioned` 的 `{group}.{partition}`）和组名必须彼此唯一，
+冲突时启动失败。
 
 ## 关闭顺序 {#shutdown-order}
 
