@@ -161,6 +161,11 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
   `simba_lease` rows are never deleted (the token never resets); release clears `session_id` only. A lease belongs to
   its `session_id` only while that session is live. The MySQL acquire assigns `token` before `session_id` (left-to-right
   `SET`). The 5.x `simba_member` differs from the 4.x table: use a separate database until 4.x JDBC is removed.
+- Zookeeper (`ZookeeperLeaseBackend`): one raw `ZooKeeper` client per session, never reconnected to another session;
+  `SessionId` = zk session id as 16 hex digits. Leases are ephemeral `/simba/leases/{name}`, owner = `ephemeralOwner`,
+  token = czxid (strictly increasing, not consecutive; the SPI and TCK only require strict increase). The client
+  heartbeats on its own, so a local watchdog closes a session no keep-alive started within `lease`; remaining is
+  `min(lease, negotiated timeout)`. A disconnected client fails `keepAlive` / `acquire`; a zk-expired one is `Expired`.
 
 ## Change Playbooks
 

@@ -23,7 +23,10 @@ import java.time.Duration
  * - every method is one backend round trip (or one per slot), with no scheduling, no notification and no local
  *   state;
  * - every remaining duration is computed with the backend's clock and returned as a *duration*, never a timestamp;
- * - a lease's token is a per-name counter that never resets and advances by one on every new term;
+ * - a lease's token is greater than zero, strictly increases with every new term of its name and never resets (a
+ *   counter advancing by one, or a globally increasing id such as a Zookeeper czxid);
+ * - a session expires once it was not kept alive for its lease, even when the transport keeps a connection alive on
+ *   its own (heartbeats);
  * - an expired session is never revived: [keepAlive] answers [KeepAliveResult.Expired] and [acquire] throws
  *   [SessionExpiredException];
  * - hints only accelerate; losing one never affects correctness.
@@ -42,7 +45,8 @@ interface LeaseBackend : AutoCloseable {
 
     /**
      * Tries to acquire every name in [names] for [session]. A lease that is free, or owned by an expired session,
-     * moves to [session] with its token advanced by one; a name [session] already owns answers its current token.
+     * moves to [session] with a token greater than every earlier one of that name; a name [session] already owns
+     * answers its current token.
      */
     fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult>
 
