@@ -1,6 +1,6 @@
 # Simba - Agent Instructions
 
-Simba is a JVM (Kotlin, Java 17 bytecode) distributed mutex / leader-election library over JDBC (MySQL), Redis, or
+Simba is a JVM (Kotlin, Java 21 bytecode) distributed mutex / leader-election library over JDBC (MySQL), Redis, or
 Zookeeper. Its whole contract: per mutex, at most one contender *observes itself* as owner of a time-bounded lease,
 and every contender receives ordered acquire/release callbacks.
 
@@ -18,7 +18,7 @@ This file records what is not obvious from the code. Describe the code as it is;
 ./gradlew <module>:check                                 # Tests + detekt (autoCorrect rewrites sources)
 ./gradlew <module>:test --tests <fully.qualified.TestClass>
 ./gradlew simba-example:check -PexampleBackend=jdbc|redis|zookeeper   # default: redis
-./gradlew test -PtestJavaVersion=25                      # Tests on another JDK; bytecode stays 17
+./gradlew test -PtestJavaVersion=25                      # Tests on another JDK; bytecode stays 21
 ./gradlew codeCoverageReport                             # Aggregated JaCoCo report
 ```
 

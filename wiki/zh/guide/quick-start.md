@@ -5,7 +5,7 @@ description: 在 Spring Boot 或普通 JVM 应用中引入 Simba，配置一个�
 
 # 快速开始
 
-要求：JDK 17+，以及一个运行中的 MySQL、Redis 或 Zookeeper。示例使用 Spring Boot 4.1 及其依赖管理；不使用 Spring Boot 时请参阅
+要求：JDK 21+，以及一个运行中的 MySQL、Redis 或 Zookeeper。示例使用 Spring Boot 4.1 及其依赖管理；不使用 Spring Boot 时请参阅
 [不使用 Spring](#不使用-spring)。
 
 ## 1. 添加依赖

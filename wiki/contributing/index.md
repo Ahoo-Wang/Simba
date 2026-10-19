@@ -12,7 +12,7 @@ Read [Architecture](/architecture/) first; the invariants an agent or reviewer c
 
 ## Build and Test
 
-You need JDK 17 and Docker.
+You need JDK 21 and Docker.
 
 ```bash
 ./gradlew build                                   # all modules
@@ -20,7 +20,7 @@ You need JDK 17 and Docker.
 ./gradlew simba-core:test --tests me.ahoo.simba.core.LeaseContendServiceTest
 ./gradlew simba-example:check -PexampleBackend=jdbc   # jdbc | redis | zookeeper (default: redis)
 ./gradlew codeCoverageReport                      # aggregated JaCoCo report
-./gradlew check -PtestJavaVersion=25              # run tests on another JDK; bytecode stays 17
+./gradlew check -PtestJavaVersion=25              # run tests on another JDK; bytecode stays 21
 ```
 
 | Module | Test infrastructure |

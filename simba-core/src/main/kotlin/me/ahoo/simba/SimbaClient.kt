@@ -122,7 +122,7 @@ class SimbaClient private constructor(builder: Builder) : AutoCloseable {
 
         fun config(config: SimbaConfig) = apply { this.config = config }
 
-        /** Runs backend calls; default one virtual thread per call (Java 21+) or a cached daemon pool. */
+        /** Runs backend calls; default one virtual thread per call. */
         fun ioExecutor(executor: Executor) = apply { ioExecutor = executor }
 
         /** Runs leadership callbacks, serially per election; default as [ioExecutor]. */

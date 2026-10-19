@@ -65,7 +65,7 @@ Pick the one you already run. The [Backends](/guide/backends) page covers setup 
 <doc title="Quick Start" path="guide/quick-start.md">
 # Quick Start
 
-Requirements: JDK 17+, and a running MySQL, Redis or Zookeeper. The examples use Spring Boot 4.1 with its dependency
+Requirements: JDK 21+, and a running MySQL, Redis or Zookeeper. The examples use Spring Boot 4.1 with its dependency
 management; without Spring Boot, see [Without Spring](#without-spring).
 
 ## 1. Add Dependencies
@@ -1258,7 +1258,7 @@ Read [Architecture](/architecture/) first; the invariants an agent or reviewer c
 
 ## Build and Test
 
-You need JDK 17 and Docker.
+You need JDK 21 and Docker.
 
 ```bash
 ./gradlew build                                   # all modules
@@ -1266,7 +1266,7 @@ You need JDK 17 and Docker.
 ./gradlew simba-core:test --tests me.ahoo.simba.core.LeaseContendServiceTest
 ./gradlew simba-example:check -PexampleBackend=jdbc   # jdbc | redis | zookeeper (default: redis)
 ./gradlew codeCoverageReport                      # aggregated JaCoCo report
-./gradlew check -PtestJavaVersion=25              # run tests on another JDK; bytecode stays 17
+./gradlew check -PtestJavaVersion=25              # run tests on another JDK; bytecode stays 21
 ```
 
 | Module | Test infrastructure |
