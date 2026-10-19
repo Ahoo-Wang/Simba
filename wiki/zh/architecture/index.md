@@ -115,7 +115,8 @@ stateDiagram-v2
 - **租约名称：** 1–128 个 `[A-Za-z0-9._:-]` 字符；组 `g` 的分区 `p` 为 `{g}.{p}`。
 - **分区分配：** `PartitionAssignment.weight`（对 `"$partition@$member"` 计算 FNV-1a 64 并与 SplitMix64 混合，成员为会话 id）。
 - **JDBC：** 表 `simba_session`、`simba_lease`、`simba_member`；`simba_lease` 行永不删除，释放只清空 `session_id`；
-  所有时间比较都使用方言的 `now`；MySQL 的获取在 `session_id` 之前赋值 `token`（`SET` 从左到右求值）。
+  所有时间比较都使用方言的 `now`（UTC epoch 毫秒）；接管时以 `for share` 读取持有者的会话行，与其续约串行化；MySQL 的获取在
+  `session_id` 之前赋值 `token`（`SET` 从左到右求值）。
 - **Redis：** `simba:lease:{name}` = `{session, token, expires}`（永不过期、永不删除），`simba:session:{sid}`（`PX`）及
   `:leases` / `:groups`，按过期时间计分的 `simba:group:{g}`，`released` 发布在租约键上；启用 `routeBySlot` 时每次脚本调用都限制在一个 hash slot 内。
 - **Zookeeper：** 临时节点 `/simba/leases/{name}`（token = `czxid`）、`/simba/groups/{g}/{sid}`。

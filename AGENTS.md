@@ -120,9 +120,13 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   `{g}.{p}`; `PartitionAssignment.weight` (FNV-1a 64 of `"$partition@$member"` mixed with SplitMix64, members = session
   ids) must stay identical across versions.
 - JDBC (`JdbcLeaseBackend` + `Dialect`): tables `simba_session`, `simba_lease`, `simba_member`; every time comparison
-  uses the dialect's `now` (database epoch ms, constant within a statement). `simba_lease` rows are never deleted (the
-  token never resets); release clears `session_id` only. A lease belongs to its `session_id` only while that session
-  is live. The MySQL acquire assigns `token` before `session_id` (left-to-right `SET`).
+  uses the dialect's `now` (database UTC epoch ms, constant within a statement, never through the session
+  `time_zone`). `simba_lease` rows are never deleted (the token never resets); release clears `session_id` only. A
+  lease belongs to its `session_id` only while that session is live. The MySQL acquire assigns `token` before
+  `session_id` (left-to-right `SET`). Anything that frees a lease because its session expired (take-over, purge) must
+  read that session row with a lock (`for share` / `for update`), never the statement snapshot: otherwise it can race a
+  keep-alive that commits concurrently, at READ COMMITTED on both databases. Lease and group names are case-sensitive
+  (binary collations). `purgeExpired()` runs at most once per `purgeInterval` after `openSession` / `keepAlive`.
 - Redis (`me.ahoo.simba.redis.RedisLeaseBackend`, Lua in `simba-redis/src/main/resources/me/ahoo/simba/redis/`): lease
   hash `simba:lease:{name}` = `{session, token, expires}` never expires and is never deleted (release clears
   `session`); `expires` is Redis `TIME`. Session hash `simba:session:{sid}` (PX) plus `:leases` / `:groups` index sets

@@ -122,7 +122,8 @@ Nodes of the same major version may run together, so these must not change withi
 - **Partition assignment:** `PartitionAssignment.weight` (FNV-1a 64 of `"$partition@$member"` mixed with SplitMix64,
   members are session ids).
 - **JDBC:** tables `simba_session`, `simba_lease`, `simba_member`; `simba_lease` rows are never deleted and release
-  clears `session_id` only; every time comparison uses the dialect's `now`; the MySQL acquire assigns `token` before
+  clears `session_id` only; every time comparison uses the dialect's `now` (UTC epoch ms); the take-over reads the
+  holder's session row `for share`, serializing with its keep-alive; the MySQL acquire assigns `token` before
   `session_id` (left-to-right `SET`).
 - **Redis:** `simba:lease:{name}` = `{session, token, expires}` (never expires, never deleted),
   `simba:session:{sid}` (`PX`) with `:leases` / `:groups`, `simba:group:{g}` scored by expiry, `released` published on
