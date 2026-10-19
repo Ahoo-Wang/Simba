@@ -86,7 +86,9 @@ Lease names are case-sensitive (binary collation on MySQL, `"C"` on PostgreSQL).
 ## Redis 7
 
 Module `simba-redis` (driver-neutral, Lua scripts behind the `RedisScripting` port) and `simba-spring-redis`
-(`SpringRedisScripting`, the Spring Data Redis adapter):
+(`SpringRedisScripting`, the Spring Data Redis adapter). `SpringRedisScripting` needs Lettuce, the Spring Boot default
+client: with Jedis, subscriptions block the calling thread and `WAIT` is unavailable, so the starter fails startup on a
+non-Lettuce `RedisConnectionFactory`:
 
 ```kotlin
 val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))

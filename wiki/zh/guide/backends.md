@@ -77,7 +77,8 @@ create table if not exists simba_member
 ## Redis 7 {#redis-7}
 
 模块 `simba-redis`（与驱动无关，Lua 脚本位于 `RedisScripting` 端口之后）和 `simba-spring-redis`
-（`SpringRedisScripting`，Spring Data Redis 适配器）：
+（`SpringRedisScripting`，Spring Data Redis 适配器）。`SpringRedisScripting` 需要 Spring Boot 默认的 Lettuce 客户端：
+使用 Jedis 时订阅会阻塞调用线程，也无法使用 `WAIT`，因此 starter 遇到非 Lettuce 的 `RedisConnectionFactory` 会启动失败：
 
 ```kotlin
 val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))

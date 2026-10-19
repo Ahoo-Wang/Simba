@@ -16,5 +16,5 @@ dependencies {
     api(project(":simba-core"))
     api("org.apache.curator:curator-framework")
     testImplementation(project(":simba-tck"))
-    testImplementation("org.apache.curator:curator-test")
+    testImplementation(libs.curator.test)
 }

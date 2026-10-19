@@ -60,7 +60,10 @@ class SimbaScheduledBeanPostProcessor :
 
     private val lock = Any()
     private val pending = mutableListOf<ScheduledMethod>()
-    private val names = mutableSetOf<String>()
+
+    /** Lease names and groups claimed by registered methods, with the method claiming them. */
+    private val leases = mutableMapOf<String, String>()
+    private val groups = mutableMapOf<String, String>()
     private val running = mutableListOf<RunningMethod>()
 
     @Volatile
@@ -114,7 +117,7 @@ class SimbaScheduledBeanPostProcessor :
         check(name.isNotBlank()) { "$where must set a name." }
         val schedule = schedule(where, annotation.fixedDelay, annotation.fixedRate, annotation.initialDelay)
         val invoke = invoker(bean, method)
-        return ScheduledMethod(where, "election [$name]") { simba ->
+        return ScheduledMethod(where, setOf(name)) { simba ->
             val task = simba.election(name).schedule(schedule) { term ->
                 if (takesTerm) invoke(arrayOf(term)) else invoke(emptyArray())
             }
@@ -139,7 +142,8 @@ class SimbaScheduledBeanPostProcessor :
         check(annotation.partitions > 0) { "$where partitions must be positive." }
         val schedule = schedule(where, annotation.fixedDelay, annotation.fixedRate, annotation.initialDelay)
         val invoke = invoker(bean, method)
-        return ScheduledMethod(where, "group [$group]") { simba ->
+        val leases = (0 until annotation.partitions).mapTo(LinkedHashSet()) { "$group.$it" }
+        return ScheduledMethod(where, leases, group) { simba ->
             val task = simba.group(group, annotation.partitions).schedule(schedule) { term, partition ->
                 invoke(arrayOf(term, partition))
             }
@@ -191,7 +195,14 @@ class SimbaScheduledBeanPostProcessor :
 
     private fun register(method: ScheduledMethod) {
         synchronized(lock) {
-            check(names.add(method.key)) { "${method.where}: ${method.key} is already used by another method." }
+            method.group?.let { group ->
+                groups[group]?.let { other -> error("${method.where}: group [$group] is already used by $other.") }
+            }
+            method.leases.firstOrNull { it in leases }?.let { lease ->
+                error("${method.where}: election [$lease] is already used by ${leases[lease]}.")
+            }
+            method.group?.let { groups[it] = method.where }
+            method.leases.forEach { leases[it] = method.where }
             if (started) {
                 running += method.start(simba())
             } else {
@@ -241,10 +252,14 @@ class SimbaScheduledBeanPostProcessor :
         stop()
     }
 
-    /** One annotated method; [key] (the election or group) is unique per application. */
+    /**
+     * One annotated method: the lease names it elects ([leases], `{group}.{partition}` for a group) and its [group]
+     * are unique per application.
+     */
     private class ScheduledMethod(
         val where: String,
-        val key: String,
+        val leases: Set<String>,
+        val group: String? = null,
         private val run: (Simba) -> () -> CompletionStage<Void>,
     ) {
         fun start(simba: Simba): RunningMethod = RunningMethod(where, run(simba))

@@ -17,6 +17,7 @@ import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.Gauge
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Timer
+import me.ahoo.simba.RevokeReason
 import me.ahoo.simba.event.SessionStatus
 import me.ahoo.simba.event.SimbaEvent
 import me.ahoo.simba.event.SimbaEventListener
@@ -32,11 +33,13 @@ import java.util.concurrent.atomic.AtomicReference
  * |---|---|---|
  * | `simba.session.renew` | timer: successful keep-alive latency | |
  * | `simba.session.state` | gauge: 1 for the current session status, 0 otherwise | `state` |
- * | `simba.leadership` | gauge: 1 while this node holds a term of the name | `name` |
- * | `simba.revocations` | counter: ended terms | `name`, `reason` |
+ * | `simba.leadership` | gauge: 1 while this node holds a term of the name, 0 after losing it | `name` |
+ * | `simba.revocations` | counter: ended terms, every reason | `reason` |
  * | `simba.work` | timer: leader work runs | `name`, `outcome` |
  *
- * Partition elections count as names too (`{group}.{partition}`).
+ * Partition elections count as names too (`{group}.{partition}`). To keep the number of series bounded, a name's
+ * `simba.leadership` gauge exists only from its first term until the term ends by a stop (`STOPPED`: the election
+ * stopped, the client closed, or a lock was released), and revocations carry no name.
  */
 class MicrometerSimbaEventListener(private val registry: MeterRegistry) : SimbaEventListener {
     companion object {
@@ -49,7 +52,9 @@ class MicrometerSimbaEventListener(private val registry: MeterRegistry) : SimbaE
     }
 
     private val state = AtomicReference(SessionStatus.OPENING)
-    private val leaders = ConcurrentHashMap<LeaseName, AtomicInteger>()
+    private val leaders = ConcurrentHashMap<LeaseName, Leader>()
+
+    private class Leader(val held: AtomicInteger, val gauge: Gauge)
     private val renew = Timer.builder(SESSION_RENEW)
         .description("Successful session keep-alive round trips")
         .register(registry)
@@ -73,12 +78,16 @@ class MicrometerSimbaEventListener(private val registry: MeterRegistry) : SimbaE
 
             is SimbaEvent.SessionSuspended -> state.set(SessionStatus.SUSPENDED)
             is SimbaEvent.SessionExpired -> state.set(SessionStatus.OPENING)
-            is SimbaEvent.Elected -> leader(event.name).set(1)
+            is SimbaEvent.Elected -> leader(event.name).held.set(1)
             is SimbaEvent.Revoked -> {
-                leader(event.name).set(0)
+                if (event.reason == RevokeReason.STOPPED) {
+                    leaders.remove(event.name)?.let { registry.remove(it.gauge) }
+                } else {
+                    leaders[event.name]?.held?.set(0)
+                }
                 Counter.builder(REVOCATIONS)
                     .description("Terms this node lost or gave up")
-                    .tags(NAME, event.name.value, "reason", event.reason.tag())
+                    .tag("reason", event.reason.tag())
                     .register(registry)
                     .increment()
             }
@@ -93,14 +102,14 @@ class MicrometerSimbaEventListener(private val registry: MeterRegistry) : SimbaE
         }
     }
 
-    private fun leader(name: LeaseName): AtomicInteger =
+    private fun leader(name: LeaseName): Leader =
         leaders.computeIfAbsent(name) { key ->
-            AtomicInteger().also { held ->
-                Gauge.builder(LEADERSHIP, held) { it.get().toDouble() }
-                    .description("1 while this node holds a term of the name")
-                    .tag(NAME, key.value)
-                    .register(registry)
-            }
+            val held = AtomicInteger()
+            val gauge = Gauge.builder(LEADERSHIP, held) { it.get().toDouble() }
+                .description("1 while this node holds a term of the name")
+                .tag(NAME, key.value)
+                .register(registry)
+            Leader(held, gauge)
         }
 
     private fun Enum<*>.tag(): String = name.lowercase()
