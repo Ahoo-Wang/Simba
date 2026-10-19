@@ -30,6 +30,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Runs [step] on a single event-loop thread and executes its effects: backend calls on [ioExecutor] with a timeout
@@ -64,6 +65,7 @@ internal class EngineShell(
     private val terms = TermRegistry(ticker)
     private val dispatchers = HashMap<LeaseName, Dispatcher>()
     private val groupViews = HashMap<String, (SessionId?, List<SessionId>) -> Unit>()
+    private val handled = AtomicLong()
     private val hintSubscription = backend.subscribe { hint -> post(Event.Hint(hint)) }
 
     /**
@@ -113,9 +115,12 @@ internal class EngineShell(
         }
     }
 
-    /** The work bound to term [term] of [name] exited. */
-    fun workExited(name: LeaseName, term: Long) {
-        post(Event.WorkExited(name, term))
+    /** The work bound to term [term] of [name] exited; [event], if any, is published in the same loop task. */
+    fun workExited(name: LeaseName, term: Long, event: SimbaEvent? = null) {
+        onLoop {
+            event?.let(::publishNow)
+            handle(Event.WorkExited(name, term))
+        }
     }
 
     /** Publishes [event] to the listeners from the loop, in order with the engine's own events. */
@@ -144,23 +149,31 @@ internal class EngineShell(
     }
 
     /**
-     * Completes once the loop has nothing queued. Meaningful only with an external [Scheduler] (the loop then holds
-     * no delayed timers) and a direct I/O executor; tests use it to let the engine settle before moving virtual time.
+     * Completes, with the number of loop tasks handled so far, once the loop has nothing queued. Meaningful only with
+     * an external [Scheduler] (the loop then holds no delayed timers) and a direct I/O executor; tests use it to let
+     * engines settle before moving virtual time: two rounds with the same counts mean nothing ran in between.
      */
-    fun idle(): CompletableFuture<Void> {
-        val idle = CompletableFuture<Void>()
+    fun idle(): CompletableFuture<Long> {
+        val idle = CompletableFuture<Long>()
         fun check() {
-            if (loop.queue.isEmpty()) {
-                idle.complete(null)
-            } else if (!onLoop(::check)) {
-                idle.complete(null)
+            if (loop.queue.isEmpty() || !submit(::check)) {
+                idle.complete(handled.get())
             }
         }
-        if (!onLoop(::check)) {
-            idle.complete(null)
+        if (!submit(::check)) {
+            idle.complete(handled.get())
         }
         return idle
     }
+
+    /** Runs [action] on the loop without counting it as handled. */
+    private fun submit(action: () -> Unit): Boolean =
+        try {
+            loop.execute(action)
+            true
+        } catch (_: RejectedExecutionException) {
+            false
+        }
 
     /** Elections, dispatchers and groups kept by the engine; for tests of bounded state. */
     fun footprint(): CompletableFuture<Footprint> =
@@ -174,11 +187,12 @@ internal class EngineShell(
                         dispatchers = dispatchers.size,
                         groups = state.groups.size + groupViews.size,
                         terms = terms.active.size,
+                        abandoned = (state.session as? SessionState.Active)?.abandoned?.size ?: 0,
                     )
                 )
             }
             if (!posted) {
-                footprint.complete(Footprint(0, 0, 0, 0, 0, 0))
+                footprint.complete(Footprint(0, 0, 0, 0, 0, 0, 0))
             }
         }
 
@@ -250,6 +264,7 @@ internal class EngineShell(
     private fun onLoop(action: () -> Unit): Boolean {
         try {
             loop.execute {
+                handled.incrementAndGet()
                 try {
                     action()
                 } catch (error: Throwable) {
@@ -359,4 +374,5 @@ internal data class Footprint(
     val dispatchers: Int,
     val groups: Int,
     val terms: Int,
+    val abandoned: Int,
 )

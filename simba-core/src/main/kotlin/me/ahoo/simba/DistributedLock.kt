@@ -1,0 +1,55 @@
+/*
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package me.ahoo.simba
+
+import me.ahoo.simba.spi.LeaseName
+import java.time.Duration
+import java.util.concurrent.CompletionStage
+
+/**
+ * A lock on one lease name of a client session (ADR 0010 §6). The returned [LockTerm] is the credential: it is not
+ * bound to a thread, and closing it releases the lease. Within one client a name has at most one holder; another
+ * acquire of the same name waits until it is released.
+ *
+ * A held lock ends early when its term is revoked (session expired, deadline passed, taken over); it is then
+ * released for good rather than re-acquired, so check [Term.isValid] or pass [Term.token] to the protected resource.
+ */
+interface DistributedLock {
+    val name: LeaseName
+
+    /**
+     * Waits up to [timeout] (on the client's clock) for a term; throws [LockTimeoutException] when none was won in
+     * time. Interrupting the caller abandons the attempt and rethrows the [InterruptedException].
+     */
+    fun acquire(timeout: Duration): LockTerm
+
+    /**
+     * One attempt: the term when this client wins the first answered attempt; `null` when another session or this
+     * client holds the lease, or when no attempt is answered within one lease duration (backend unreachable).
+     */
+    fun tryAcquire(): LockTerm?
+}
+
+/** A held [DistributedLock]: a [Term] that releases its lease when closed. */
+interface LockTerm : Term, AutoCloseable {
+    /** Revokes the term and releases the lease; idempotent. */
+    fun releaseAsync(): CompletionStage<Void>
+
+    /** [releaseAsync] and wait, except inside a leadership callback or leader work. */
+    override fun close()
+}
+
+/** [DistributedLock.acquire] won no term within its timeout. */
+class LockTimeoutException(val name: LeaseName, val timeout: Duration) :
+    SimbaException("Lock [$name] was not acquired within [$timeout].")
