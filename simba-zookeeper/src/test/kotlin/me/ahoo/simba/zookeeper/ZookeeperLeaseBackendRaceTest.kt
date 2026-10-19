@@ -17,6 +17,7 @@ import me.ahoo.simba.spi.AcquireResult
 import me.ahoo.simba.spi.BackendHint
 import me.ahoo.simba.spi.KeepAliveResult
 import me.ahoo.simba.spi.LeaseName
+import me.ahoo.simba.spi.SessionExpiredException
 import me.ahoo.simba.spi.SessionId
 import me.ahoo.test.asserts.assert
 import org.apache.curator.test.TestingServer
@@ -124,6 +125,39 @@ class ZookeeperLeaseBackendRaceTest {
                 backend.acquire(owner, setOf(name)).assert()
                     .isEqualTo(mapOf(name to AcquireResult.HeldBy(contender, contenderToken)))
                 backend.release(contender, mapOf(name to contenderToken))
+            }
+        } finally {
+            pool.shutdownNow()
+        }
+    }
+
+    @Test
+    fun callsRacingASessionCloseSeeAnExpiredSessionNeverASuspendedOne() {
+        val name = name()
+        val group = "group-${UUID.randomUUID()}"
+        val pool = Executors.newFixedThreadPool(3)
+        try {
+            repeat(ROUNDS) {
+                val session = backend.openSession(lease).id
+                val start = CountDownLatch(1)
+                val calls = listOf<() -> Any>(
+                    { backend.join(session, group) },
+                    { backend.acquire(session, setOf(name)) },
+                    { backend.keepAlive(session, lease, setOf(name)) },
+                ).map { call ->
+                    CompletableFuture.supplyAsync({
+                        start.await()
+                        // Until the close lands every call succeeds; afterwards each must report expiry.
+                        while (backend.zooKeeperOf(session) != null) {
+                            runCatching(call).exceptionOrNull()?.let { if (it !is SessionExpiredException) throw it }
+                        }
+                        runCatching(call).exceptionOrNull()?.let { if (it !is SessionExpiredException) throw it }
+                    }, pool)
+                }
+                start.countDown()
+                backend.closeSession(session)
+                calls.forEach { it.get(30, TimeUnit.SECONDS) }
+                backend.keepAlive(session, lease, emptySet()).assert().isEqualTo(KeepAliveResult.Expired)
             }
         } finally {
             pool.shutdownNow()
