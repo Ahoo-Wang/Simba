@@ -118,12 +118,14 @@ sealed interface SessionState {
 sealed interface ElectionState {
     /**
      * Contending: [attempt] is the acquire in flight, [retryTimer] the next attempt; both null means idle. [probe]
-     * completes when the first answered attempt does not elect this node.
+     * completes when the first answered attempt does not elect this node. [released] when a release hint arrived
+     * while [attempt] was in flight: its reply may predate the release, so a lost attempt contends again at once.
      */
     data class Candidate(
         val attempt: Long?,
         val retryTimer: Long?,
         val probe: CompletableFuture<Void>? = null,
+        val released: Boolean = false,
     ) : ElectionState
 
     /**
@@ -167,6 +169,7 @@ sealed interface AfterHandover {
 /**
  * Membership of one group: [joined] is the session the group was joined with, [request] the join, members or leave
  * request in flight, [refreshTimer] the next refresh (or retry), and [session] / [members] the view published last.
+ * [stale] when a membership hint arrived while [request] was in flight: the members are read again at once after it.
  * While [leaving], no view is published and the group is forgotten once a leave succeeded (sent after an in-flight
  * join answers, retried when it fails).
  */
@@ -178,4 +181,5 @@ data class GroupState(
     val refreshTimer: Long? = null,
     val session: SessionId? = null,
     val members: List<SessionId>? = null,
+    val stale: Boolean = false,
 )

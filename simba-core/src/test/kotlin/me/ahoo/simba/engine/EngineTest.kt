@@ -395,6 +395,23 @@ class EngineTest {
     }
 
     @Test
+    fun `a released hint during an attempt that loses makes the candidate try again at once`() {
+        open()
+        on(Event.Start(name))
+        val heldBy = BackendResult.Acquired(mapOf(name to AcquireResult.HeldBy(SessionId("other"), 3)))
+        val first = call<BackendRequest.Acquire>()
+        // The reply was read before the release, but the hint overtakes it.
+        on(Event.Hint(me.ahoo.simba.spi.BackendHint.Released(name))).assert().isEmpty()
+        on(Event.Reply(first.requestId, heldBy))
+        val again = call<BackendRequest.Acquire>()
+        effects.filterIsInstance<Effect.Arm>().assert().isEmpty()
+
+        on(Event.Reply(again.requestId, heldBy))
+        effects.filterIsInstance<Effect.Call>().assert().isEmpty()
+        effects.filterIsInstance<Effect.Arm>().size.assert().isEqualTo(1)
+    }
+
+    @Test
     fun `replies of unknown or other-session requests are ignored`() {
         open()
         on(Event.Reply(Long.MAX_VALUE, BackendResult.Done)).assert().isEmpty()
