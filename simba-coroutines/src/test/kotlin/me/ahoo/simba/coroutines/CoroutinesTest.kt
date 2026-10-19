@@ -21,12 +21,17 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
+import me.ahoo.simba.DistributedLock
+import me.ahoo.simba.LockTerm
 import me.ahoo.simba.LockTimeoutException
 import me.ahoo.simba.RevokeReason
 import me.ahoo.simba.Simba
 import me.ahoo.simba.SimbaConfig
+import me.ahoo.simba.Term
 import me.ahoo.simba.engine.InternalSimbaApi
 import me.ahoo.simba.event.SimbaEvent
 import me.ahoo.simba.spi.AcquireResult
@@ -39,6 +44,9 @@ import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.time.Duration
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
+import java.util.concurrent.CompletionStage
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -203,6 +211,63 @@ class CoroutinesTest {
 
         await { elected.await() }.name.assert().isEqualTo(name)
         term.close()
+    }
+
+    @Test
+    fun `awaitRevoked rethrows the cause of a failed revocation`() {
+        val term = FakeTerm(CompletableFuture.failedFuture(CompletionException(IllegalStateException("boom"))))
+
+        runCatching { await { term.awaitRevoked() } }.exceptionOrNull()
+            .assert().isInstanceOf(IllegalStateException::class.java)
+    }
+
+    @Test
+    fun `a term that arrives after the coroutine was cancelled is released`() {
+        val acquiring = CompletableFuture<LockTerm?>()
+        val released = CompletableFuture<Unit>()
+        val lock = object : DistributedLock {
+            override val name = LeaseName("fake")
+
+            override fun acquire(timeout: Duration): LockTerm = error("not used")
+
+            override fun tryAcquire(): LockTerm? = error("not used")
+
+            override fun tryAcquireAsync(): CompletionStage<LockTerm?> = acquiring
+        }
+        val term = object : LockTerm, Term by FakeTerm(CompletableFuture()) {
+            override fun releaseAsync(): CompletionStage<Void> {
+                released.complete(Unit)
+                return CompletableFuture.completedFuture(null)
+            }
+
+            override fun close() {
+                releaseAsync()
+            }
+        }
+
+        runBlocking {
+            val waiting = launch { lock.awaitTryAcquire() }
+            yield()
+            // The resumption is queued on this event loop; cancelling before it runs drops the term.
+            acquiring.complete(term)
+            waiting.cancel()
+        }
+        released.isDone.assert().isTrue()
+    }
+
+    @Test
+    fun `SimbaEventFlow rejects a buffer capacity below one`() {
+        runCatching { SimbaEventFlow(0) }.exceptionOrNull().assert().isInstanceOf(IllegalArgumentException::class.java)
+    }
+
+    private class FakeTerm(override val revoked: CompletionStage<RevokeReason>) : Term {
+        override val name = LeaseName("fake")
+        override val token = 1L
+        override val isValid = true
+
+        override fun remaining(): Duration = Duration.ofSeconds(1)
+
+        override fun ensureValid(minRemaining: Duration) = Unit
     }
 
     companion object {

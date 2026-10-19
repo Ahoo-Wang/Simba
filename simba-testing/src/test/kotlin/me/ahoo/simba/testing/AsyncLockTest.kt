@@ -273,6 +273,23 @@ class AsyncLockTest {
         released.next().assert().isTrue()
     }
 
+    @Test
+    fun `the default tryAcquireAsync ignores a null result after cancellation`() {
+        val proceed = CountDownLatch(1)
+        val returned = CompletableFuture<Unit>()
+        val lock = BlockingLock {
+            proceed.awaitUninterruptibly()
+            returned.complete(Unit)
+            null
+        }
+        val trying = lock.tryAcquireAsync().toCompletableFuture()
+
+        trying.cancel(false)
+        proceed.countDown()
+        returned.get(WAIT, TimeUnit.SECONDS)
+        trying.isCancelled.assert().isTrue()
+    }
+
     private fun CountDownLatch.awaitUninterruptibly() {
         while (true) {
             try {

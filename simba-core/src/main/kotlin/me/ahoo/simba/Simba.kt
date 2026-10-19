@@ -312,10 +312,6 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
         /** Starts a run once no other run of this client holds the name; waits for a local holder unless probing. */
         private fun contend() {
             while (!result.isDone) {
-                if (closing.get()) {
-                    finish { result.completeExceptionally(IllegalStateException("Simba is closed.")) }
-                    return
-                }
                 val run = Run()
                 val listener = LockListener(name, run)
                 val lost = if (probe) CompletableFuture<Void>() else null
@@ -373,14 +369,9 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
             }
         }
 
+        /** Only a waiting acquire times out; a probe ends with its one attempt. */
         private fun timedOut() {
-            finish {
-                if (probe) {
-                    result.complete(null)
-                } else {
-                    result.completeExceptionally(LockTimeoutException(name, timeout))
-                }
-            }
+            finish { result.completeExceptionally(LockTimeoutException(name, timeout)) }
         }
 
         /** Completes [result] off the event loop, so that its dependents never run on it. */
