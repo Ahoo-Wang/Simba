@@ -64,15 +64,20 @@ class EngineLoopTest {
 
     @Test
     fun `a task the executor cancels instead of rejecting counts as not queued`() {
+        // Models the JDK cancelling a task queued while the pool terminates: the returned future is cancelled and the
+        // task never runs. Parked an hour out, the task cannot run before the cancel, whatever the scheduling.
+        val ran = CompletableFuture<Void>()
         val terminating = object : ScheduledThreadPoolExecutor(1) {
             override fun schedule(command: Runnable, delay: Long, unit: TimeUnit): ScheduledFuture<*> =
-                super.schedule(command, delay, unit).also { it.cancel(false) }
+                super.schedule(command, 1, TimeUnit.HOURS).also { it.cancel(false) }
 
             override fun <V> schedule(callable: Callable<V>, delay: Long, unit: TimeUnit): ScheduledFuture<V> =
                 super.schedule(callable, delay, unit)
         }
-        terminating.enqueue({}, 0).assert().isNull()
+        terminating.enqueue({ ran.complete(null) }, 0).assert().isNull()
         terminating.shutdown()
+        terminating.awaitTermination(WAIT, TimeUnit.SECONDS).assert().isTrue()
+        ran.isDone.assert().isFalse()
         ScheduledThreadPoolExecutor(1).apply { shutdown() }.enqueue({}, 0).assert().isNull()
         ScheduledThreadPoolExecutor(1).run {
             enqueue({}, 0).assert().isNotNull()
