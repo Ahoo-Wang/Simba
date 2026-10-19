@@ -50,7 +50,7 @@ starter depends on the backends as optional features. `simba-bom` and `simba-dep
 | User API | `Simba`, `Election`, `DistributedLock`, `PartitionGroup`, `Term` | Handles; no state of their own beyond what the engine publishes |
 | Engine | `engine.step(state, event, now)` | Pure state machine: no threads, clock or I/O |
 | Shell | `EngineShell` | Runs `step` on one loop thread, executes its effects: backend calls, timers, callbacks, group views |
-| SPI | `LeaseBackend` | One round trip per call: sessions, leases, groups, optional hints |
+| SPI | `LeaseBackend` | A bounded number of calls per method: sessions, leases, groups, optional hints |
 
 ### The Pure Engine
 

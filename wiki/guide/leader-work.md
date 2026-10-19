@@ -51,7 +51,7 @@ simba.election("report").schedule(
 | `Schedule.fixedDelay(delay, initialDelay = 0)` | From the end of one run to the start of the next |
 | `Schedule.fixedRate(period, initialDelay = 0)` | Between scheduled starts; a run that overruns skips the missed starts instead of bursting |
 
-`initialDelay` counts from the start of each term. A failed run is logged and published, and the loop goes on; the
+`initialDelay` counts from the start of each term. A failed run (an `Error` included) is logged and published, and the loop goes on; a `VirtualMachineError` ends the loop and steps the election down for one lease duration; the
 loop ends with its term. There is no thread pool per schedule.
 
 ## Partition Groups
@@ -139,6 +139,6 @@ String attributes of both annotations accept `${...}` placeholders, and duration
   its term ended; only a resource that checks the [fencing token](/guide/correctness#fencing-tokens) rejects it.
 - **Stop on interruption.** Blocking I/O that ignores interruption delays the handover up to the term's remaining
   time.
-- **Check before long steps:** `term.ensureValid(expectedStepDuration)` throws `LeaseExpiredException` instead of
+- **Check before long steps:** `term.ensureValid(expectedStepDuration)` throws `TermExpiredException` instead of
   starting a step that would outlive the term.
 - **Make work idempotent** where you can: after a failover the next leader may redo the last step.

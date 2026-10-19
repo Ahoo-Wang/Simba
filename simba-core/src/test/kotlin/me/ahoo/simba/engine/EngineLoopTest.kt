@@ -54,7 +54,7 @@ class EngineLoopTest {
 
     private fun shell() = EngineShell(
         backend = Idle,
-        config = EngineConfig.of(SimbaConfig()),
+        config = EngineConfig.of(SimbaConfig.builder().build()),
         ticker = Ticker.SYSTEM,
         ioExecutor = Runnable::run,
         callbackExecutor = Runnable::run,

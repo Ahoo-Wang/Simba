@@ -40,7 +40,10 @@ internal object RedisLeaseKeys {
     /** Hash recording the session; expires with it (PX) and serves diagnostics only. */
     fun session(id: SessionId): String = "simba:session:{$id}"
 
-    /** Set of the lease keys the session tried to acquire, freed when it closes. */
+    /**
+     * Sorted set of the lease keys the session tried to acquire, scored by the attempt's Redis time: keep-alive
+     * extends and reports those the session holds, closing the session frees them.
+     */
     fun sessionLeases(id: SessionId): String = "simba:session:{$id}:leases"
 
     /** Set of the group keys the session joined, extended by keep-alive. */

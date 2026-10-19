@@ -127,6 +127,24 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
     @InternalSimbaApi
     fun awaitIdle(): Long = shell.idle().join()
 
+    /**
+     * Waits until every event published so far reached the listeners; for tests that read what a listener recorded
+     * (events are delivered off the engine loop). Not from a callback or listener, nor on the loop.
+     */
+    @InternalSimbaApi
+    fun awaitEvents() {
+        EngineShell.checkNotOnLoop("awaitEvents()")
+        shell.eventsDelivered().join()
+    }
+
+    /** [duration] in nanoseconds, saturated at `Long.MAX_VALUE` instead of overflowing. */
+    private fun saturatedNanos(duration: Duration): Long =
+        try {
+            duration.toNanos()
+        } catch (_: ArithmeticException) {
+            Long.MAX_VALUE
+        }
+
     /** What the engine keeps, as `name=count` pairs; every count is zero once nothing is started. */
     @InternalSimbaApi
     fun footprint(): Map<String, Int> {
@@ -152,6 +170,11 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
     fun closeAsync(): CompletionStage<Void> {
         if (closing.compareAndSet(false, true)) {
             shell.close().whenComplete { _, error ->
+                // Every election ended with the session: forget the names and release anyone waiting on them.
+                synchronized(lifecycle) {
+                    running.values.forEach { it.stopped.complete(null) }
+                    running.clear()
+                }
                 ownedExecutors.forEach(ExecutorService::shutdown)
                 if (error == null) closed.complete(null) else closed.completeExceptionally(error)
             }
@@ -170,9 +193,11 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
 
     /** Waits for [stage] unless the caller is a callback or leader work of this client. */
     private fun join(stage: CompletionStage<Void>) {
-        if (!EngineShell.isDispatching() && !WorkListener.isWorking()) {
-            stage.toCompletableFuture().join()
+        if (EngineShell.isDispatching() || WorkListener.isWorking()) {
+            return
         }
+        EngineShell.checkNotOnLoop("A blocking close()")
+        stage.toCompletableFuture().join()
     }
 
     /**
@@ -208,16 +233,23 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
         return (stopped ?: run)?.stopped ?: CompletableFuture.completedFuture(null)
     }
 
-    private fun startWork(name: LeaseName, kind: ElectionKind, executor: Executor?, body: TermBody): LeaderTask {
+    private fun startWork(
+        name: LeaseName,
+        kind: ElectionKind,
+        executor: Executor?,
+        body: (ElectionKind) -> TermBody,
+    ): LeaderTask {
         val run = Run()
-        val listener = WorkListener(shell, executor ?: workExecutor, ticker, body)
+        val listener = WorkListener(shell, executor ?: workExecutor, ticker, config.leaseDuration.toNanos(), body(kind))
         check(startRun(name, run, listener, kind, work = true)) { "Election [$name] is already started." }
         return ElectionTask(ShellElection(name, kind), run)
     }
 
-    private fun leaderBody(work: LeaderWork) = TermBody { term, _ -> runReported(ticker, term, work) }
+    private fun leaderBody(work: LeaderWork): (ElectionKind) -> TermBody =
+        { kind -> TermBody { term, _ -> runReported(ticker, term, work, kind) } }
 
-    private fun scheduleBody(schedule: Schedule, work: LeaderWork) = ScheduleBody(shell, ticker, schedule, work)
+    private fun scheduleBody(schedule: Schedule, work: LeaderWork): (ElectionKind) -> TermBody =
+        { kind -> ScheduleBody(shell, ticker, schedule, work, kind) }
 
     private inner class ShellElection(
         override val name: LeaseName,
@@ -232,7 +264,7 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
         override fun stepDown(cooldown: Duration): CompletionStage<Void> {
             require(!cooldown.isNegative) { "cooldown must not be negative." }
             checkOpen()
-            return shell.stepDown(name, cooldown.toNanos()).minimalCompletionStage()
+            return shell.stepDown(name, saturatedNanos(cooldown)).minimalCompletionStage()
         }
 
         override fun runWhileLeader(executor: Executor?, work: LeaderWork): LeaderTask =
@@ -254,8 +286,10 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
     // region locks
 
     private inner class ShellLock(override val name: LeaseName) : DistributedLock {
+        @Throws(InterruptedException::class)
         override fun acquire(timeout: Duration): LockTerm = await(acquireAsync(timeout))
 
+        @Throws(InterruptedException::class)
         override fun tryAcquire(): LockTerm? = await(tryAcquireAsync())
 
         override fun acquireAsync(timeout: Duration): CompletableFuture<LockTerm> {
@@ -268,8 +302,9 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
             LockAttempt(name, config.leaseDuration, probe = true).result
 
         /** Waits for [future]; interrupting the caller cancels it, which abandons the attempt. */
-        private fun <T> await(future: CompletableFuture<T>): T =
-            try {
+        private fun <T> await(future: CompletableFuture<T>): T {
+            EngineShell.checkNotOnLoop("Acquiring a lock")
+            return try {
                 future.get()
             } catch (error: InterruptedException) {
                 future.cancel(false)
@@ -277,6 +312,7 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
             } catch (error: ExecutionException) {
                 throw error.cause ?: error
             }
+        }
     }
 
     /**
@@ -284,9 +320,9 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
      * [timeout] passes on the client's clock (one answered attempt with [probe]). A term revoked right after it began
      * does not end the wait: the lock contends again within the timeout.
      *
-     * [result] completes on the callback executor, never on the event loop. Completing it other than with the term
-     * this attempt won (cancelling it) abandons the attempt: the current run stops and a term already won is
-     * released. The deadline timer is cancelled once [result] completes.
+     * [result] completes on the callback executor (on the event loop only with a direct one, as callbacks do).
+     * Completing it other than with the term this attempt won (cancelling it) abandons the attempt: the current run
+     * stops and a term already won is released. The deadline timer is cancelled once [result] completes.
      */
     private inner class LockAttempt(
         private val name: LeaseName,
@@ -295,7 +331,9 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
     ) {
         val result = CompletableFuture<LockTerm?>()
         private val deadline = CompletableFuture<Void>()
-        private val timer = shell.schedule(ticker.nanoTime() + timeout.toNanos()) { deadline.complete(null) }
+
+        // Monotonic instants are compared by difference, so a saturated deadline that wraps still lies ahead.
+        private val timer = shell.schedule(ticker.nanoTime() + saturatedNanos(timeout)) { deadline.complete(null) }
         private val lock = Any()
         private var current: Run? = null
         private var won: LockTerm? = null
@@ -374,7 +412,7 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
             finish { result.completeExceptionally(LockTimeoutException(name, timeout)) }
         }
 
-        /** Completes [result] off the event loop, so that its dependents never run on it. */
+        /** Completes [result] on the callback executor, so that its dependents run where callbacks run. */
         private fun finish(complete: () -> Unit) {
             try {
                 callbackExecutor.execute(complete)
@@ -503,7 +541,7 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
 
     class Builder internal constructor() {
         internal var backend: LeaseBackend? = null
-        internal var config: SimbaConfig = SimbaConfig()
+        internal var config: SimbaConfig = SimbaConfig.builder().build()
         internal var ticker: Ticker = Ticker.SYSTEM
         internal var scheduler: Scheduler? = null
         internal var ioExecutor: Executor? = null
@@ -545,5 +583,18 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
 
         @JvmStatic
         fun builder(): Builder = Builder()
+    }
+}
+
+/**
+ * Waits until one of [futures] completes. Only the client's close future can complete exceptionally; that ends the
+ * wait as a closed client ([IllegalStateException]), never as a leaked [ExecutionException].
+ */
+@Throws(InterruptedException::class)
+internal fun awaitAny(vararg futures: CompletableFuture<*>?) {
+    try {
+        CompletableFuture.anyOf(*futures.filterNotNull().toTypedArray()).get()
+    } catch (error: ExecutionException) {
+        throw IllegalStateException("Simba is closed.", error.cause ?: error)
     }
 }

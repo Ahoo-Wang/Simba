@@ -18,8 +18,6 @@ import me.ahoo.simba.tck.LeaseBackendSpec
 
 /** [RedisLeaseBackend] on a single Redis 7 node passes the backend TCK: one script call per operation. */
 class RedisLeaseBackendSpecTest : LeaseBackendSpec() {
-    override val leasesExpireIndependently: Boolean = true
-
     override fun createBackend(): LeaseBackend = RedisLeaseBackend(RedisLeaseFixture.scripting)
 }
 
@@ -28,8 +26,6 @@ class RedisLeaseBackendSpecTest : LeaseBackendSpec() {
  * one slot.
  */
 class SlotRoutedRedisLeaseBackendSpecTest : LeaseBackendSpec() {
-    override val leasesExpireIndependently: Boolean = true
-
     override fun createBackend(): LeaseBackend =
         RedisLeaseBackend(SlotCheckingScripting(RedisLeaseFixture.scripting), routeBySlot = true)
 }

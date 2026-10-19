@@ -39,6 +39,28 @@ class ReplicaWaitTest {
     }
 
     @Test
+    fun scriptingValuesCompareByTheirFields() {
+        val script = LeaseScript("s", "return {}")
+        val wait = ReplicaWait(1, Duration.ofSeconds(1))
+        val call = ScriptCall(script, listOf("k"), listOf("a"))
+        val replies = ScriptReplies(listOf(listOf(1L)), 2)
+
+        wait.assert().isEqualTo(ReplicaWait(1, Duration.ofSeconds(1)))
+        wait.hashCode().assert().isEqualTo(ReplicaWait(1, Duration.ofSeconds(1)).hashCode())
+        wait.assert().isNotEqualTo(ReplicaWait(2, Duration.ofSeconds(1)))
+        wait.toString().assert().isEqualTo("ReplicaWait(replicas=1, timeout=PT1S)")
+        call.assert().isEqualTo(ScriptCall(script, listOf("k"), listOf("a")))
+        call.hashCode().assert().isEqualTo(ScriptCall(script, listOf("k"), listOf("a")).hashCode())
+        call.assert().isNotEqualTo(ScriptCall(script, listOf("k"), listOf("b")))
+        call.toString().assert().isEqualTo("ScriptCall(script=s, keys=[k], args=[a])")
+        replies.assert().isEqualTo(ScriptReplies(listOf(listOf(1L)), 2))
+        replies.hashCode().assert().isEqualTo(ScriptReplies(listOf(listOf(1L)), 2).hashCode())
+        replies.assert().isNotEqualTo(ScriptReplies(listOf(listOf(1L))))
+        ScriptReplies(emptyList()).replicas.assert().isNull()
+        replies.toString().assert().isEqualTo("ScriptReplies(replies=[[1]], replicas=2)")
+    }
+
+    @Test
     fun springRedisScriptingRejectsAFactoryOtherThanLettuce() {
         val error = assertThrows<IllegalArgumentException> { SpringRedisScripting(OtherConnectionFactory) }
 

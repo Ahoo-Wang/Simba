@@ -45,12 +45,9 @@ class VirtualSimba : AutoCloseable {
             return backend.acquire(session, names)
         }
     }
-    val config = SimbaConfig(
-        leaseDuration = Duration.ofSeconds(3),
-        renewInterval = Duration.ofSeconds(1),
-        margin = Duration.ofMillis(20),
-        retryJitter = Duration.ZERO,
-    )
+    val config = SimbaConfig.builder().leaseDuration(
+        Duration.ofSeconds(3)
+    ).renewInterval(Duration.ofSeconds(1)).margin(Duration.ofMillis(20)).retryJitter(Duration.ZERO).build()
     val events = LinkedBlockingQueue<SimbaEvent>()
     private val clients = ArrayList<Simba>()
 

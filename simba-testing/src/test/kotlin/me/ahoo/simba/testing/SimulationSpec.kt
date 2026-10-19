@@ -33,6 +33,16 @@ class SimulationSpec {
     }
 
     @Test
+    fun `invariants hold when leases expire on their own`() {
+        val range = only?.let { it..it } ?: 0 until seeds
+        var elections = 0L
+        for (seed in range) {
+            elections += Simulation(seed, SELF_EXPIRING).run().elections
+        }
+        elections.assert().isGreaterThan(0)
+    }
+
+    @Test
     fun `a seed replays exactly`() {
         Simulation(SAMPLE_SEED).run().assert().isEqualTo(Simulation(SAMPLE_SEED).run())
     }
@@ -54,7 +64,8 @@ class SimulationSpec {
 
     @Test
     fun `the checker catches clocks drifting beyond the configured bound`() {
-        val broken = SimulationParams().let { it.copy(clockRateSpread = 0.3, config = it.config.copy(drift = 0.0)) }
+        val broken =
+            SimulationParams(config = SimulationParams().config.toBuilder().drift(0.0).build(), clockRateSpread = 0.3)
         assertThrows<SimulationFailure> {
             (0L until 200L).forEach { Simulation(it, broken).run() }
         }
@@ -63,5 +74,6 @@ class SimulationSpec {
     companion object {
         const val DEFAULT_SEEDS = 10_000L
         const val SAMPLE_SEED = 42L
+        val SELF_EXPIRING = SimulationParams(selfExpiringLeases = true)
     }
 }

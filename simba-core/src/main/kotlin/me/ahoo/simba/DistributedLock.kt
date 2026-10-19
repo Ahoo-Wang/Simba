@@ -35,14 +35,18 @@ interface DistributedLock {
 
     /**
      * Waits up to [timeout] (on the client's clock) for a term; throws [LockTimeoutException] when none was won in
-     * time. Interrupting the caller abandons the attempt and rethrows the [InterruptedException].
+     * time. Interrupting the caller abandons the attempt and rethrows the [InterruptedException]. A timeout too large
+     * for nanoseconds waits as long as `Long.MAX_VALUE` nanoseconds. Throws [IllegalStateException] when the client is
+     * closed, or when called on the client's event loop (it would block the loop).
      */
+    @Throws(InterruptedException::class)
     fun acquire(timeout: Duration): LockTerm
 
     /**
      * One attempt: the term when this client wins the first answered attempt; `null` when another session or this
      * client holds the lease, or when no attempt is answered within one lease duration (backend unreachable).
      */
+    @Throws(InterruptedException::class)
     fun tryAcquire(): LockTerm?
 
     /**

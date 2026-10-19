@@ -72,12 +72,12 @@ class CoroutinesTest {
         Simba.builder()
             .backend(recording)
             .config(
-                SimbaConfig(
-                    leaseDuration = Duration.ofSeconds(3),
-                    renewInterval = Duration.ofSeconds(1),
-                    margin = Duration.ofMillis(20),
-                    retryJitter = Duration.ZERO,
-                ),
+                SimbaConfig.builder()
+                    .leaseDuration(Duration.ofSeconds(3))
+                    .renewInterval(Duration.ofSeconds(1))
+                    .margin(Duration.ofMillis(20))
+                    .retryJitter(Duration.ZERO)
+                    .build(),
             )
             .scheduler(scheduler)
             .ioExecutor(Runnable::run)

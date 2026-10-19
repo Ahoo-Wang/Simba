@@ -31,10 +31,12 @@ Names follow the lease name rules: 1–128 characters of `[A-Za-z0-9._:-]`; anyt
 
 ### `SimbaConfig`
 
-`data class SimbaConfig(leaseDuration = 15s, renewInterval = leaseDuration / 3, drift = 0.01, margin = 50ms,
-retryJitter = renewInterval / 2, minBackoff = 100ms)`. Construction validates `renewInterval × 2 ≤ leaseDuration` and
-`leaseDuration × (1 − drift) − margin > renewInterval`. From Java, use `SimbaConfig.builder()` (unset values keep
-their defaults, derived ones follow the values set) or the overloaded constructors. See
+`SimbaConfig.builder()` with `leaseDuration` (15s), `renewInterval` (`leaseDuration / 3`), `drift` (0.01), `margin`
+(50ms), `retryJitter` (`renewInterval / 2`), `minBackoff` (100ms); unset values keep their defaults, derived ones
+follow the values set. `build()` validates `renewInterval × 2 ≤ leaseDuration` and
+`leaseDuration × (1 − drift) − margin > renewInterval`; `toBuilder()` derives a variant. There is no public
+constructor: `SimbaConfig`, the events and the snapshots are plain classes with value equality (no `copy` or
+destructuring), so later versions can add properties compatibly. See
 [Timing](/guide/correctness#timing).
 
 ## Elections — `me.ahoo.simba`
@@ -65,8 +67,10 @@ interface LeadershipListener {
 
 ### `LeaderWork` and `LeaderTask`
 
-`fun interface LeaderWork { fun run(term: Term) }` may throw; failures become `SimbaEvent.WorkCompleted` and never
-affect the election. `LeaderTask` (`AutoCloseable`) exposes `election`, `stop(): CompletionStage<Void>` (completes once
+`fun interface LeaderWork { fun run(term: Term) }` may throw anything; failures (an `Error` included) become
+`SimbaEvent.WorkCompleted` and never affect the election, except a `VirtualMachineError` (out of memory, stack
+overflow): it ends the term's work, the election steps down for one lease duration, and the error is rethrown to the
+work thread. `LeaderTask` (`AutoCloseable`) exposes `election`, `stop(): CompletionStage<Void>` (completes once
 the work exited or timed out and the lease is released) and `close()`. See [Leader Work](/guide/leader-work).
 
 ### `Schedule`
@@ -85,7 +89,7 @@ overruns skips the missed starts.
 | `token: Long` | Fencing token: `> 0`, constant within the term, strictly increasing across terms of the name |
 | `isValid: Boolean` | Not revoked and the session's local deadline has not passed |
 | `remaining(): Duration` | Time left before the local deadline; `ZERO` once the term ended |
-| `ensureValid(minRemaining)`, `ensureValid()` | Throws `LeaseExpiredException` unless valid for more than `minRemaining` (`ZERO` without an argument) |
+| `ensureValid(minRemaining)`, `ensureValid()` | Throws `TermExpiredException` unless valid for more than `minRemaining` (`ZERO` without an argument) |
 | `revoked: CompletionStage<RevokeReason>` | Completes exactly once, when the term is revoked |
 
 ### `RevokeReason`
@@ -97,7 +101,7 @@ overruns skips the missed starts.
 
 | Type | Members |
 |---|---|
-| `DistributedLock` | `name`; `acquire(timeout): LockTerm` (throws `LockTimeoutException`); `tryAcquire(): LockTerm?`; since 5.1 `acquireAsync(timeout): CompletionStage<LockTerm>` and `tryAcquireAsync(): CompletionStage<LockTerm?>` (cancelling abandons the attempt and releases a won term) |
+| `DistributedLock` | `name`; `acquire(timeout): LockTerm` (throws `LockTimeoutException`; declares `InterruptedException`); `tryAcquire(): LockTerm?`; since 5.1 `acquireAsync(timeout): CompletionStage<LockTerm>` and `tryAcquireAsync(): CompletionStage<LockTerm?>` (cancelling abandons the attempt and releases a won term) |
 | `LockTerm : Term, AutoCloseable` | `releaseAsync(): CompletionStage<Void>`; `close()` (idempotent) |
 | `LockTimeoutException` | `name`, `timeout` |
 
@@ -107,7 +111,7 @@ See [Locks](/guide/locks).
 
 | Type | Members |
 |---|---|
-| `PartitionGroup` | `name`, `partitions`; `schedule(schedule, work): GroupTask`; `runWhileLeader(work): GroupTask` |
+| `PartitionGroup` | `name` (a `String`: it names a backend membership group, not a lease, yet follows the lease-name rules), `partitions`; `schedule(schedule, work): GroupTask`; `runWhileLeader(work): GroupTask` |
 | `PartitionWork` | `fun run(term: Term, partition: Int)` |
 | `GroupTask : AutoCloseable` | `group`; `partitions(): Set<Int>` (this node's partitions in its latest view); `stop()`; `close()` |
 | `PartitionAssignment` | `ownerOf(partition, members)`, `partitionsOf(member, partitions, members)`, `weight(partition, member)`: rendezvous hashing (FNV-1a 64 mixed with SplitMix64), identical across versions |
@@ -116,8 +120,8 @@ See [Locks](/guide/locks).
 
 | Type | Members |
 |---|---|
-| `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`; exceptions are logged and ignored |
-| `SimbaEvent` | `SessionOpened`, `SessionRenewed`, `SessionSuspended`, `SessionExpired`, `SessionClosed`, `Elected`, `Revoked`, `AcquireFailed`, `WorkCompleted` |
+| `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`; called in order off the engine loop; exceptions are logged and ignored |
+| `SimbaEvent` | `SessionOpened`, `SessionRenewed`, `SessionSuspended`, `SessionExpired` (`reason`: `DEADLINE_PASSED` or `SESSION_EXPIRED`), `SessionLeaseShortened`, `SessionClosed`, `Elected`, `Revoked`, `AcquireFailed`, `WorkCompleted` (the last four carry `kind`) |
 | `ElectionKind` | `ELECTION`, `LOCK`, `GROUP`: which API started an election (on `Elected`, `Revoked` and `ElectionSnapshot`) |
 | `WorkOutcome` | `COMPLETED`, `FAILED`, `CANCELLED` |
 | `SimbaSnapshot` | `session: SessionSnapshot`, `elections: List<ElectionSnapshot>`, `leaseDuration`, `healthy` |
@@ -144,7 +148,7 @@ See [Locks](/guide/locks#coroutines).
 
 ```kotlin
 interface LeaseBackend : AutoCloseable {
-    val capabilities: Capabilities                    // releaseHints, membershipHints, maxBatch
+    val capabilities: Capabilities                    // releaseHints, membershipHints
     fun openSession(lease: Duration, metadata: Map<String, String> = emptyMap()): SessionGrant
     fun keepAlive(session: SessionId, lease: Duration, held: Set<LeaseName>): KeepAliveResult   // Live(remaining, owned) | Expired
     fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult>      // Granted(token) | HeldBy(session, token)
@@ -159,11 +163,16 @@ interface LeaseBackend : AutoCloseable {
 
 Rules every implementation follows (checked by [`LeaseBackendSpec`](/guide/testing#backend-tck)):
 
-- every method is one backend round trip (or one per slot), with no scheduling, no notification and no local state;
+- every method makes a bounded number of backend calls, without waiting, scheduling, notifying or keeping local lease
+  state;
 - every remaining duration is computed with the backend's clock and returned as a duration, never a timestamp;
 - a token is greater than zero, strictly increases with every new term of its name and never resets;
 - a session expires once it was not kept alive for its lease, even if the transport keeps a connection alive;
 - an expired session is never revived: `keepAlive` answers `Expired`, `acquire` throws `SessionExpiredException`;
+- `keepAlive` reports every lease the session owns, whatever `held` says, and an owned lease lasts at least as long
+  as its session, also on a backend whose leases expire on their own;
+- inputs are validated alike, with `IllegalArgumentException`: leases of at least 1 ms, group names under the
+  `LeaseName` rules, at most `LeaseBackend.MAX_BATCH` (64) names per `acquire`;
 - `release` frees only leases the session still owns with exactly the given token, so a stale release is a no-op;
 - hints only accelerate; losing one never affects correctness.
 

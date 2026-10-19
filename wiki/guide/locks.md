@@ -21,6 +21,8 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
     invoiceStore.write(invoice, term.getToken());
 } catch (LockTimeoutException e) {
     // held elsewhere
+} catch (InterruptedException e) {
+    Thread.currentThread().interrupt();
 }
 ```
 
@@ -28,15 +30,15 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 
 | Method | Behavior |
 |---|---|
-| `acquire(timeout)` | Waits up to `timeout` (on the client's clock) for a term; throws `LockTimeoutException` when none was won in time. A term that ends right after it was won does not end the wait: the lock contends again until the timeout. Interrupting the caller abandons the attempt and rethrows `InterruptedException`. |
+| `acquire(timeout)` | Waits up to `timeout` (on the client's clock) for a term; throws `LockTimeoutException` when none was won in time. A term that ends right after it was won does not end the wait: the lock contends again until the timeout. A timeout too large for nanoseconds waits `Long.MAX_VALUE` ns. Interrupting the caller abandons the attempt and rethrows `InterruptedException` (declared for Java). Calling it on the engine loop (only reachable with a direct callback executor) throws `IllegalStateException`. |
 | `tryAcquire()` | One attempt: the term when this client wins the first answered attempt; `null` when another session or this client holds the lease, or when no attempt is answered within one lease duration (backend unreachable). |
 | `acquireAsync(timeout)` | `acquire` without blocking (since 5.1): a `CompletionStage<LockTerm>` that completes with the term, or exceptionally with `LockTimeoutException` (timeout) or `IllegalStateException` (client closed). |
 | `tryAcquireAsync()` | `tryAcquire` without blocking (since 5.1): a `CompletionStage<LockTerm?>` that completes with the term or `null`. |
 
 ### Without Blocking
 
-`acquireAsync` and `tryAcquireAsync` wait without a thread and complete on the client's callback executor, never on
-its event loop. **Cancelling** the returned future (`toCompletableFuture().cancel(...)`) abandons the attempt and
+`acquireAsync` and `tryAcquireAsync` wait without a thread and complete on the client's callback executor (on its
+event loop only with a direct callback executor, as callbacks do). **Cancelling** the returned future (`toCompletableFuture().cancel(...)`) abandons the attempt and
 releases a term it already won, so a cancelled acquisition never leaves the lock held. Reactor users can wrap the
 stage with `Mono.fromCompletionStage`.
 
@@ -95,7 +97,7 @@ reported the session expired, or another session took the lease over. The lock i
 re-acquired behind your back:
 
 - `term.isValid` turns `false` and `term.revoked` completes with the reason;
-- your next `ensureValid()` throws `LeaseExpiredException`;
+- your next `ensureValid()` throws `TermExpiredException`;
 - closing the `LockTerm` afterwards is a harmless no-op.
 
 Because a lock can end while your code still runs, pass `term.token` to the protected resource and let it reject

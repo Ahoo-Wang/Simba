@@ -58,9 +58,7 @@ class JdbcLeaseBackend @JvmOverloads constructor(
 ) : LeaseBackend {
     companion object {
         private val log = KotlinLogging.logger {}
-        private const val MAX_BATCH = 64
         private const val MAX_ATTEMPTS = 3
-        private const val MAX_GROUP_LENGTH = 128
         private const val MAX_METADATA_LENGTH = 1024
         private const val FREE = ""
         private const val PURGE_BATCH = 1000
@@ -119,7 +117,7 @@ class JdbcLeaseBackend @JvmOverloads constructor(
     private val sqlLockExpired =
         "select session_id from simba_session where expires_at <= $now order by expires_at limit $PURGE_BATCH for update"
 
-    override val capabilities: Capabilities = Capabilities(maxBatch = MAX_BATCH)
+    override val capabilities: Capabilities = Capabilities()
 
     override fun openSession(lease: Duration, metadata: Map<String, String>): SessionGrant {
         val millis = lease.requirePositiveMillis()
@@ -164,7 +162,7 @@ class JdbcLeaseBackend @JvmOverloads constructor(
     }
 
     override fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult> {
-        require(names.size <= MAX_BATCH) { "At most $MAX_BATCH names per acquire, was ${names.size}." }
+        LeaseBackend.requireBatch(names)
         return autoCommit { connection ->
             if (!connection.isLive(session)) {
                 throw SessionExpiredException(session)
@@ -234,6 +232,7 @@ class JdbcLeaseBackend @JvmOverloads constructor(
     }
 
     override fun leave(session: SessionId, group: String) {
+        requireGroup(group)
         autoCommit { connection ->
             connection.prepare(sqlLeave).use {
                 it.setString(1, group)
@@ -243,8 +242,9 @@ class JdbcLeaseBackend @JvmOverloads constructor(
         }
     }
 
-    override fun members(group: String): List<SessionId> =
-        autoCommit { connection ->
+    override fun members(group: String): List<SessionId> {
+        requireGroup(group)
+        return autoCommit { connection ->
             connection.prepare(sqlMembers).use {
                 it.setString(1, group)
                 it.executeQuery().use { rows ->
@@ -256,6 +256,7 @@ class JdbcLeaseBackend @JvmOverloads constructor(
                 }
             }
         }
+    }
 
     /**
      * Removes every session expired by now, freeing its leases (tokens kept) and memberships. Not needed for
@@ -411,16 +412,10 @@ class JdbcLeaseBackend @JvmOverloads constructor(
             }
         }
 
-    private fun Duration.requirePositiveMillis(): Long {
-        val millis = toMillis()
-        require(millis > 0) { "lease must be at least 1 ms: $this" }
-        return millis
-    }
+    private fun Duration.requirePositiveMillis(): Long = LeaseBackend.requireLease(this).toMillis()
 
     private fun requireGroup(group: String) {
-        require(group.length in 1..MAX_GROUP_LENGTH) {
-            "Group name length must be in [1, $MAX_GROUP_LENGTH], was ${group.length}."
-        }
+        LeaseBackend.requireGroup(group)
     }
 
     private fun String.urlEncoded(): String = URLEncoder.encode(this, Charsets.UTF_8)

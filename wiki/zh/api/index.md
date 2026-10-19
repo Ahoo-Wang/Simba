@@ -30,10 +30,10 @@ description: Simba 5 的公共类型及其契约——Simba、Election、Term、
 
 ### `SimbaConfig` {#simbaconfig}
 
-`data class SimbaConfig(leaseDuration = 15s, renewInterval = leaseDuration / 3, drift = 0.01, margin = 50ms,
-retryJitter = renewInterval / 2, minBackoff = 100ms)`。构造时校验 `renewInterval × 2 ≤ leaseDuration` 以及
-`leaseDuration × (1 − drift) − margin > renewInterval`。在 Java 中使用 `SimbaConfig.builder()`（未设置的值保持默认，
-派生值随已设置的值计算）或重载的构造器。参阅 [时间参数](/zh/guide/correctness#timing)。
+`SimbaConfig.builder()`，可设置 `leaseDuration`（15s）、`renewInterval`（`leaseDuration / 3`）、`drift`（0.01）、`margin`（50ms）、
+`retryJitter`（`renewInterval / 2`）、`minBackoff`（100ms）；未设置的值保持默认，派生值随已设置的值计算。`build()` 校验
+`renewInterval × 2 ≤ leaseDuration` 以及 `leaseDuration × (1 − drift) − margin > renewInterval`；`toBuilder()` 派生变体。没有公开构造器：
+`SimbaConfig`、事件和快照都是按值比较的普通类（没有 `copy` 和解构），以后的版本可以兼容地增加属性。参阅 [时间参数](/zh/guide/correctness#timing)。
 
 ## 选举 — `me.ahoo.simba` {#elections-me-ahoo-simba}
 
@@ -62,7 +62,8 @@ interface LeadershipListener {
 
 ### `LeaderWork` 与 `LeaderTask` {#leaderwork-and-leadertask}
 
-`fun interface LeaderWork { fun run(term: Term) }` 可以抛出异常；失败会成为 `SimbaEvent.WorkCompleted`，从不影响选举。
+`fun interface LeaderWork { fun run(term: Term) }` 可以抛出任何异常；失败（包括 `Error`）会成为 `SimbaEvent.WorkCompleted`，从不影响选举，
+唯一的例外是 `VirtualMachineError`（内存耗尽、栈溢出）：它结束该任期的工作，选举让出一个租期，错误会重新抛给工作线程。
 `LeaderTask`（`AutoCloseable`）提供 `election`、`stop(): CompletionStage<Void>`（在工作退出或超时且租约已释放后完成）以及 `close()`。
 参阅 [Leader 任务](/zh/guide/leader-work)。
 
@@ -81,7 +82,7 @@ interface LeadershipListener {
 | `token: Long` | Fencing token：`> 0`，任期内不变，同一名称的各任期之间严格递增 |
 | `isValid: Boolean` | 未被撤销，且会话的本地截止时刻尚未过去 |
 | `remaining(): Duration` | 距本地截止时刻的剩余时间；任期结束后为 `ZERO` |
-| `ensureValid(minRemaining)`、`ensureValid()` | 除非有效期超过 `minRemaining`（无参数时为 `ZERO`），否则抛出 `LeaseExpiredException` |
+| `ensureValid(minRemaining)`、`ensureValid()` | 除非有效期超过 `minRemaining`（无参数时为 `ZERO`），否则抛出 `TermExpiredException` |
 | `revoked: CompletionStage<RevokeReason>` | 在任期被撤销时完成，且恰好完成一次 |
 
 ### `RevokeReason` {#revokereason}
@@ -93,7 +94,7 @@ interface LeadershipListener {
 
 | 类型 | 成员 |
 |---|---|
-| `DistributedLock` | `name`；`acquire(timeout): LockTerm`（抛出 `LockTimeoutException`）；`tryAcquire(): LockTerm?`；5.1 起 `acquireAsync(timeout): CompletionStage<LockTerm>` 与 `tryAcquireAsync(): CompletionStage<LockTerm?>`（取消会放弃本次尝试并释放已赢得的任期） |
+| `DistributedLock` | `name`；`acquire(timeout): LockTerm`（抛出 `LockTimeoutException`；声明 `InterruptedException`）；`tryAcquire(): LockTerm?`；5.1 起 `acquireAsync(timeout): CompletionStage<LockTerm>` 与 `tryAcquireAsync(): CompletionStage<LockTerm?>`（取消会放弃本次尝试并释放已赢得的任期） |
 | `LockTerm : Term, AutoCloseable` | `releaseAsync(): CompletionStage<Void>`；`close()`（幂等） |
 | `LockTimeoutException` | `name`、`timeout` |
 
@@ -103,7 +104,7 @@ interface LeadershipListener {
 
 | 类型 | 成员 |
 |---|---|
-| `PartitionGroup` | `name`、`partitions`；`schedule(schedule, work): GroupTask`；`runWhileLeader(work): GroupTask` |
+| `PartitionGroup` | `name`（`String`：它命名的是后端的成员组而不是租约，但遵循租约名称规则）、`partitions`；`schedule(schedule, work): GroupTask`；`runWhileLeader(work): GroupTask` |
 | `PartitionWork` | `fun run(term: Term, partition: Int)` |
 | `GroupTask : AutoCloseable` | `group`；`partitions(): Set<Int>`（本节点在其最新视图中的分区）；`stop()`；`close()` |
 | `PartitionAssignment` | `ownerOf(partition, members)`、`partitionsOf(member, partitions, members)`、`weight(partition, member)`：rendezvous 哈希（FNV-1a 64 与 SplitMix64 混合），跨版本保持一致 |
@@ -112,8 +113,8 @@ interface LeadershipListener {
 
 | 类型 | 成员 |
 |---|---|
-| `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`；异常会被记录并忽略 |
-| `SimbaEvent` | `SessionOpened`、`SessionRenewed`、`SessionSuspended`、`SessionExpired`、`SessionClosed`、`Elected`、`Revoked`、`AcquireFailed`、`WorkCompleted` |
+| `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`；在引擎循环之外按顺序调用；异常会被记录并忽略 |
+| `SimbaEvent` | `SessionOpened`、`SessionRenewed`、`SessionSuspended`、`SessionExpired`（`reason` 为 `DEADLINE_PASSED` 或 `SESSION_EXPIRED`）、`SessionLeaseShortened`、`SessionClosed`、`Elected`、`Revoked`、`AcquireFailed`、`WorkCompleted`（后四个带 `kind`） |
 | `ElectionKind` | `ELECTION`、`LOCK`、`GROUP`：选举由哪个 API 启动（见 `Elected`、`Revoked` 和 `ElectionSnapshot`） |
 | `WorkOutcome` | `COMPLETED`、`FAILED`、`CANCELLED` |
 | `SimbaSnapshot` | `session: SessionSnapshot`、`elections: List<ElectionSnapshot>`、`leaseDuration`、`healthy` |
@@ -140,7 +141,7 @@ interface LeadershipListener {
 
 ```kotlin
 interface LeaseBackend : AutoCloseable {
-    val capabilities: Capabilities                    // releaseHints, membershipHints, maxBatch
+    val capabilities: Capabilities                    // releaseHints, membershipHints
     fun openSession(lease: Duration, metadata: Map<String, String> = emptyMap()): SessionGrant
     fun keepAlive(session: SessionId, lease: Duration, held: Set<LeaseName>): KeepAliveResult   // Live(remaining, owned) | Expired
     fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult>      // Granted(token) | HeldBy(session, token)
@@ -155,11 +156,14 @@ interface LeaseBackend : AutoCloseable {
 
 每个实现都遵守的规则（由 [`LeaseBackendSpec`](/zh/guide/testing#backend-tck) 检查）：
 
-- 每个方法都是一次后端往返（或每个 slot 一次），不做调度、不发通知、不保存本地状态；
+- 每个方法只发出有限次数的后端调用，不等待、不做调度、不发通知、不保存本地租约状态；
 - 每个剩余时长都用后端的时钟计算，并以时长而非时间戳返回；
 - token 大于零，随该名称的每个新任期严格递增，且永不重置；
 - 会话在其租约期内未被续约即过期，即使传输层仍保持连接；
 - 过期的会话永不复活：`keepAlive` 返回 `Expired`，`acquire` 抛出 `SessionExpiredException`；
+- 无论 `held` 是什么，`keepAlive` 都报告该会话持有的全部租约；即使在租约自行过期的后端上，持有的租约也至少与其会话存活得一样久；
+- 各后端以相同方式校验输入并抛出 `IllegalArgumentException`：租约至少 1 ms，组名遵循 `LeaseName` 规则，每次 `acquire` 至多
+  `LeaseBackend.MAX_BATCH`（64）个名称；
 - `release` 只释放会话仍持有且 token 完全一致的租约，因此陈旧的释放是空操作；
 - 提示（hint）只起加速作用；丢失提示从不影响正确性。
 

@@ -25,6 +25,11 @@ import java.util.concurrent.CompletionStage
  * (work first, then the lease) the partitions it no longer owns.
  */
 interface PartitionGroup {
+    /**
+     * The group name: a `String`, unlike `Election.name`, because it names a backend membership group
+     * (`LeaseBackend.join` / `members` take a `String`), not a lease. It follows the [me.ahoo.simba.spi.LeaseName]
+     * rules all the same, since every partition's lease is named `"{name}.{partition}"`.
+     */
     val name: String
     val partitions: Int
 

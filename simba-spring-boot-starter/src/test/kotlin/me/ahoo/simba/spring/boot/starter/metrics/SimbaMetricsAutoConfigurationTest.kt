@@ -16,6 +16,7 @@ package me.ahoo.simba.spring.boot.starter.metrics
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import me.ahoo.simba.Simba
+import me.ahoo.simba.engine.InternalSimbaApi
 import me.ahoo.simba.spi.LeaseBackend
 import me.ahoo.simba.spring.boot.starter.Leadership
 import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
@@ -28,6 +29,7 @@ import org.springframework.boot.autoconfigure.AutoConfigurations
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
 import java.time.Duration
 
+@OptIn(InternalSimbaApi::class)
 class SimbaMetricsAutoConfigurationTest {
     private val contextRunner = ApplicationContextRunner()
         .withConfiguration(
@@ -43,8 +45,8 @@ class SimbaMetricsAutoConfigurationTest {
             val leadership = Leadership()
             it.getBean(Simba::class.java).election("metered").start(leadership)
             leadership.nextTerm()
-            // A snapshot is read on the engine loop, after the task that published the election.
-            it.getBean(Simba::class.java).snapshot()
+            // Events reach the listeners off the engine loop: wait until the election's event was delivered.
+            it.getBean(Simba::class.java).awaitEvents()
             it.getBean(MeterRegistry::class.java).get(MicrometerSimbaEventListener.LEADERSHIP)
                 .tag("name", "metered").gauge().value().assert().isEqualTo(1.0)
         }
@@ -56,11 +58,11 @@ class SimbaMetricsAutoConfigurationTest {
             val simba = it.getBean(Simba::class.java)
             val registry = it.getBean(MeterRegistry::class.java)
             simba.lock("invoice-42").acquire(Duration.ofSeconds(Leadership.WAIT_SECONDS)).use {
-                simba.snapshot()
+                simba.awaitEvents()
                 registry.get(MicrometerSimbaEventListener.LOCKS_HELD).gauge().value().assert().isEqualTo(1.0)
                 registry.find(MicrometerSimbaEventListener.LEADERSHIP).gauges().assert().isEmpty()
             }
-            simba.snapshot()
+            simba.awaitEvents()
             registry.get(MicrometerSimbaEventListener.LOCKS_HELD).gauge().value().assert().isEqualTo(0.0)
 
             it.getBean(SimbaLifecycle::class.java).stop()

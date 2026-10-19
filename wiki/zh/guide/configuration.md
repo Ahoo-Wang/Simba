@@ -86,7 +86,7 @@ seed），请用 `Simba.builder()` 自行定义 `Simba` bean。
 ```kotlin
 val simba = Simba.builder()
     .backend(JdbcLeaseBackend.mysql(dataSource, queryTimeout = Duration.ofSeconds(5)))
-    .config(SimbaConfig(leaseDuration = Duration.ofSeconds(15), renewInterval = Duration.ofSeconds(5)))
+    .config(SimbaConfig.builder().leaseDuration(Duration.ofSeconds(15)).renewInterval(Duration.ofSeconds(5)).build())
     .listener(myEventListener)
     .build()
 ```
@@ -94,7 +94,7 @@ val simba = Simba.builder()
 | Builder 方法 | 默认值 | 说明 |
 |---|---|---|
 | `backend(LeaseBackend)` | 必填 | 后端；客户端不会关闭它 |
-| `config(SimbaConfig)` | `SimbaConfig()` | 会话时序，见[时序](/zh/guide/correctness#timing) |
+| `config(SimbaConfig)` | `SimbaConfig.builder().build()` | 会话时序，见[时序](/zh/guide/correctness#timing) |
 | `listener(SimbaEventListener)` | 无 | 接收每个 [`SimbaEvent`](/zh/guide/observability#events)；可多次调用 |
 | `ioExecutor(Executor)` | 每次调用一个虚拟线程 | 执行后端调用 |
 | `callbackExecutor(Executor)` | 虚拟线程 | 执行 leader 身份回调，每个选举内串行 |

@@ -123,6 +123,8 @@ class LifecycleFixesTest {
         term.isValid.assert().isTrue()
         (term.token > first.token).assert().isTrue()
         pump(callbacks, term.releaseAsync().toCompletableFuture())
+        // Close waits for every queued callback and event delivery, which run only when pumped.
+        pump(callbacks, client.closeAsync().toCompletableFuture())
     }
 
     /** Runs queued callbacks and moves time in small steps until [until] completes. */

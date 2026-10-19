@@ -88,6 +88,8 @@ public class ExampleApp implements CommandLineRunner {
             LockSupport.parkNanos(this, Duration.ofMillis(2100).toNanos());
         } catch (LockTimeoutException e) {
             log.info("[{}] is held elsewhere: {}", name, e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 }

@@ -29,7 +29,7 @@ Do not mock `Simba`, `Election` or `Term` when the in-memory backend can drive t
 
 ```kotlin
 val backend = InMemoryLeaseBackend()
-val config = SimbaConfig(leaseDuration = Duration.ofSeconds(3), renewInterval = Duration.ofSeconds(1))
+val config = SimbaConfig.builder().leaseDuration(Duration.ofSeconds(3)).renewInterval(Duration.ofSeconds(1)).build()
 Simba.builder().backend(backend).config(config).build().use { simba ->
     val elected = LinkedBlockingQueue<Term>()
     simba.election("job").start(object : LeadershipListener {
@@ -83,7 +83,7 @@ Checks increasing and equal tokens accepted, lower rejected, racing writers, and
 class MyLeaseBackendTest : LeaseBackendSpec() {
     override fun createBackend(): LeaseBackend = MyLeaseBackend(store)
     // override val clock: ClockControl? — when the backend's clock is injectable
-    // override val shortLease, lease, timeout, leasesExpireIndependently
+    // override val shortLease, lease, timeout
 }
 ```
 
