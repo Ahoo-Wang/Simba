@@ -151,16 +151,16 @@ class JdbcLeaseBackend @JvmOverloads constructor(
             repeat(MAX_ATTEMPTS) {
                 pending.forEach { connection.tryAcquire(session, it) }
                 val leases = connection.leases(pending)
-                pending = pending.filterTo(LinkedHashSet()) { name ->
-                    val lease = leases[name] ?: return@filterTo true
+                pending = pending.filter { name ->
+                    val lease = leases[name] ?: return@filter true
                     when {
                         lease.session == session.value -> results[name] = AcquireResult.Granted(lease.token)
                         lease.holderLive -> results[name] = AcquireResult.HeldBy(SessionId(lease.session), lease.token)
                         // The holder expired after the take-over attempt, or this session did: try again.
-                        else -> return@filterTo true
+                        else -> return@filter true
                     }
                     false
-                }
+                }.toSet()
                 if (pending.isEmpty()) {
                     return@autoCommit names.associateWith { results.getValue(it) }
                 }
