@@ -85,6 +85,41 @@ class ReviewTwoClientTest {
     }
 
     @Test
+    fun `a schedule run hitting a VirtualMachineError ends the loop and steps down`() {
+        val client = simba.client()
+        val tokens = LinkedBlockingQueue<Long>()
+        client.election("fatal-schedule").schedule(Schedule.fixedDelay(Duration.ofSeconds(1))) { term ->
+            tokens += term.token
+            throw OutOfMemoryError("simulated")
+        }
+        simba.advance(Duration.ZERO)
+        tokens.next().assert().isEqualTo(1L)
+        simba.nextEvent<SimbaEvent.WorkCompleted>().outcome.assert().isEqualTo(WorkOutcome.FAILED)
+        simba.nextEvent<SimbaEvent.Revoked>().reason.assert().isEqualTo(RevokeReason.STEPPED_DOWN)
+        simba.advance(Duration.ofSeconds(1))
+        tokens.isEmpty().assert().isTrue()
+    }
+
+    @Test
+    fun `a fatal error after the term ended does not step a later term down`() {
+        val client = simba.client()
+        val started = LinkedBlockingQueue<Term>()
+        val task = client.election("late-fatal").runWhileLeader { term ->
+            started += term
+            try {
+                Thread.sleep(Long.MAX_VALUE)
+            } catch (_: InterruptedException) {
+                throw StackOverflowError("after the stop")
+            }
+        }
+        started.next()
+        task.stop().toCompletableFuture().get(WAIT, TimeUnit.SECONDS)
+        simba.nextEvent<SimbaEvent.WorkCompleted>().outcome.assert().isEqualTo(WorkOutcome.FAILED)
+        simba.settle()
+        simba.events.none { it is SimbaEvent.Revoked && it.reason == RevokeReason.STEPPED_DOWN }.assert().isTrue()
+    }
+
+    @Test
     fun `a rejecting callback executor still lets stop and close complete`() {
         val reject = AtomicBoolean(false)
         val client = simba.client {

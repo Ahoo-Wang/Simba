@@ -852,7 +852,7 @@ private class Transition(state: EngineState, private val now: Long) {
 
     /** Publishes `SessionLeaseShortened` once per session when [every] is below the configured renew interval. */
     private fun noteShortLease(remaining: Duration, every: Long) {
-        val current = session as? SessionState.Active ?: return
+        val current = session as SessionState.Active
         if (every < config.renewInterval && !current.leaseShortened) {
             session = current.copy(leaseShortened = true)
             effects += Effect.Publish(SimbaEvent.SessionLeaseShortened(current.id, remaining, Duration.ofNanos(every)))

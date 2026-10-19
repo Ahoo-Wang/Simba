@@ -124,6 +124,16 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
     @InternalSimbaApi
     fun awaitIdle(): Long = shell.idle().join()
 
+    /**
+     * Waits until every event published so far reached the listeners; for tests that read what a listener recorded
+     * (events are delivered off the engine loop). Not from a callback or listener, nor on the loop.
+     */
+    @InternalSimbaApi
+    fun awaitEvents() {
+        EngineShell.checkNotOnLoop("awaitEvents()")
+        shell.eventsDelivered().join()
+    }
+
     /** [duration] in nanoseconds, saturated at `Long.MAX_VALUE` instead of overflowing. */
     private fun saturatedNanos(duration: Duration): Long =
         try {
@@ -157,6 +167,11 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
     fun closeAsync(): CompletionStage<Void> {
         if (closing.compareAndSet(false, true)) {
             shell.close().whenComplete { _, error ->
+                // Every election ended with the session: forget the names and release anyone waiting on them.
+                synchronized(lifecycle) {
+                    running.values.forEach { it.stopped.complete(null) }
+                    running.clear()
+                }
                 ownedExecutors.forEach(ExecutorService::shutdown)
                 if (error == null) closed.complete(null) else closed.completeExceptionally(error)
             }

@@ -102,6 +102,39 @@ class ListenerAndLoopTest {
     }
 
     @Test
+    fun `a backend granting a quarter of the lease is renewed more often and reported`() {
+        val shortened = LinkedBlockingQueue<SimbaEvent.SessionLeaseShortened>()
+        val quarter = object : LeaseBackend by GrantingBackend() {
+            override fun openSession(lease: Duration, metadata: Map<String, String>) =
+                SessionGrant(SessionId("short"), lease.dividedBy(4))
+        }
+        Simba.builder().backend(quarter).listener { event ->
+            if (event is SimbaEvent.SessionLeaseShortened) shortened += event
+        }.build().use {
+            val event = checkNotNull(shortened.poll(WAIT, TimeUnit.SECONDS))
+            event.remaining.assert().isEqualTo(Duration.ofMillis(3_750))
+            (event.renewEvery < it.config.renewInterval).assert().isTrue()
+        }
+    }
+
+    @Test
+    @OptIn(me.ahoo.simba.engine.InternalSimbaApi::class)
+    fun `footprints read in place on the loop and are empty once closed`() {
+        val read = LinkedBlockingQueue<Map<String, Int>>()
+        lateinit var client: Simba
+        client = Simba.builder()
+            .backend(GrantingBackend())
+            .ioExecutor(Runnable::run)
+            .callbackExecutor(Runnable::run)
+            .listener { event -> if (event is SimbaEvent.Elected) read += client.footprint() }
+            .build()
+        client.election("counted").start(Ignore)
+        checkNotNull(read.poll(WAIT, TimeUnit.SECONDS))["elections"].assert().isEqualTo(1)
+        client.close()
+        client.footprint().values.sum().assert().isEqualTo(0)
+    }
+
+    @Test
     fun `a failed close future ends a wait as a closed client, not an execution exception`() {
         val failure = IllegalArgumentException("close failed")
         val error = assertThrows<IllegalStateException> {

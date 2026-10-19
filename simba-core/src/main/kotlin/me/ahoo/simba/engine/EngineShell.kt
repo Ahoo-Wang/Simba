@@ -212,6 +212,22 @@ internal class EngineShell(
         return idle
     }
 
+    /**
+     * Completes once every event the loop published before this call was delivered to the listeners: the barrier
+     * goes through the loop (after the effects already queued there), then through the event dispatcher.
+     */
+    fun eventsDelivered(): CompletableFuture<Void> {
+        check(!isDispatching()) { "Waiting for event delivery from a callback or listener would wait for itself." }
+        val delivered = CompletableFuture<Void>()
+        val posted = onLoop {
+            events.executeOr({ delivered.complete(null) }) { delivered.complete(null) }
+        }
+        if (!posted) {
+            delivered.complete(null)
+        }
+        return delivered
+    }
+
     /** Runs [action] on the loop without counting it as handled. */
     private fun submit(action: () -> Unit): Boolean = loop.enqueue(action, 0) != null
 
@@ -482,11 +498,9 @@ internal class EngineShell(
                 post(Event.Reply(effect.requestId, result))
             }
         }
+        // A timer that runs at once (closed loop) replies before it is assigned; cancelling it then is moot.
         timeout = timers.schedule(ticker.nanoTime() + config.renewInterval) {
             reply(BackendResult.Failed(TimeoutException("${effect.request} timed out.")))
-        }
-        if (replied.get()) {
-            timeout.cancel()
         }
         try {
             ioExecutor.execute { reply(backend.execute(effect.request)) }

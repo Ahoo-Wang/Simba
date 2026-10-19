@@ -51,6 +51,21 @@ class ReviewTwoEngineTest : EngineHarness() {
     }
 
     @Test
+    fun `a backend granting a little less than the lease keeps the interval while two renewals still fit`() {
+        on(Event.Boot)
+        val almost = Duration.ofMillis(2_999)
+        on(
+            Event.Reply(
+                call<BackendRequest.OpenSession>().requestId,
+                BackendResult.Opened(SessionGrant(session, almost))
+            )
+        )
+        effects.assert().contains(Effect.Arm(active.renewTimer!!, config.renewInterval))
+        effects.filterIsInstance<Effect.Publish>().map { it.event }
+            .filterIsInstance<SimbaEvent.SessionLeaseShortened>().assert().isEmpty()
+    }
+
+    @Test
     fun `a backend granting the full lease keeps the configured renew interval`() {
         open()
         effects.assert().contains(Effect.Arm(active.renewTimer!!, config.renewInterval))
