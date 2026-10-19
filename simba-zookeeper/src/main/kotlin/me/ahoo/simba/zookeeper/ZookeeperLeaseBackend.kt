@@ -1,0 +1,535 @@
+/*
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package me.ahoo.simba.zookeeper
+
+import io.github.oshai.kotlinlogging.KotlinLogging
+import me.ahoo.simba.SimbaException
+import me.ahoo.simba.spi.AcquireResult
+import me.ahoo.simba.spi.BackendHint
+import me.ahoo.simba.spi.BackendHintListener
+import me.ahoo.simba.spi.Capabilities
+import me.ahoo.simba.spi.KeepAliveResult
+import me.ahoo.simba.spi.LeaseBackend
+import me.ahoo.simba.spi.LeaseName
+import me.ahoo.simba.spi.SessionExpiredException
+import me.ahoo.simba.spi.SessionGrant
+import me.ahoo.simba.spi.SessionId
+import org.apache.curator.framework.CuratorFramework
+import org.apache.curator.framework.CuratorFrameworkFactory
+import org.apache.curator.retry.ExponentialBackoffRetry
+import org.apache.zookeeper.AsyncCallback
+import org.apache.zookeeper.CreateMode
+import org.apache.zookeeper.KeeperException
+import org.apache.zookeeper.WatchedEvent
+import org.apache.zookeeper.Watcher
+import org.apache.zookeeper.ZooDefs
+import org.apache.zookeeper.ZooKeeper
+import org.apache.zookeeper.data.Stat
+import java.time.Duration
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+
+/**
+ * [LeaseBackend] on Zookeeper ephemeral nodes (ADR 0010 §7.3).
+ *
+ * A session is one Zookeeper session: [openSession] connects a dedicated [ZooKeeper] client and the [SessionId] is
+ * its session id (16 lowercase hex digits). A client is never reconnected to another session, so an expired session
+ * stays expired and the next [openSession] gets a new id.
+ *
+ * - A lease is the ephemeral node `{root}/leases/{name}` holding the session id; its token is the node's czxid, which
+ *   is strictly increasing across terms (Zookeeper zxids are global) but **not** consecutive. The owner is read from
+ *   the node's `ephemeralOwner`, so a lease belongs to its session exactly while Zookeeper keeps the session.
+ * - A member is the ephemeral node `{root}/groups/{group}/{sessionId}` under a container node.
+ * - Hints: every acquire leaves an exists watch on the lease node, whose deletion is announced as
+ *   [BackendHint.Released]; [members] leaves a children watch, and [join] / [leave] announce their own change.
+ *
+ * The Zookeeper client heartbeats on its own, so a session would otherwise outlive a caller that stopped keeping it
+ * alive. A local watchdog therefore closes a session (deleting its nodes) once no keep-alive started within the last
+ * `lease`. Remaining durations are `min(lease, negotiated session timeout)`. While the client is disconnected
+ * (Curator's `SUSPENDED`), [keepAlive] and [acquire] fail, so the caller's own deadline runs out; when Zookeeper
+ * reports the session expired (`LOST`), the session answers [KeepAliveResult.Expired].
+ *
+ * @param connectString Zookeeper connect string, shared by every session client and the client [members] reads with.
+ * @param root parent path of the lease and group nodes.
+ * @param connectionTimeout how long [openSession] waits for a new session.
+ */
+class ZookeeperLeaseBackend @JvmOverloads constructor(
+    private val connectString: String,
+    root: String = DEFAULT_ROOT,
+    private val connectionTimeout: Duration = Duration.ofSeconds(DEFAULT_CONNECTION_TIMEOUT_SECONDS),
+) : LeaseBackend {
+    companion object {
+        private val log = KotlinLogging.logger {}
+        const val DEFAULT_ROOT = "/simba"
+        private const val DEFAULT_CONNECTION_TIMEOUT_SECONDS = 15L
+        private const val MAX_BATCH = 64
+        private const val MAX_ATTEMPTS = 8
+        private const val RETRY_BASE_MILLIS = 100
+        private const val RETRY_COUNT = 3
+        private val EMPTY = ByteArray(0)
+
+        internal fun sessionIdOf(zookeeperSessionId: Long): SessionId = SessionId("%016x".format(zookeeperSessionId))
+    }
+
+    private val root = root.trimEnd('/')
+    private val leasesPath = "${this.root}/leases"
+    private val groupsPath = "${this.root}/groups"
+    private val sessions = ConcurrentHashMap<SessionId, Session>()
+    private val listeners = CopyOnWriteArrayList<BackendHintListener>()
+    private val watchdog = ScheduledThreadPoolExecutor(1) { runnable ->
+        Thread(runnable, "simba-zookeeper-watchdog").apply { isDaemon = true }
+    }.apply { removeOnCancelPolicy = true }
+    private val reader: CuratorFramework = CuratorFrameworkFactory.builder()
+        .connectString(connectString)
+        .connectionTimeoutMs(connectionTimeout.toMillis().toInt())
+        .retryPolicy(ExponentialBackoffRetry(RETRY_BASE_MILLIS, RETRY_COUNT))
+        .build()
+        .apply { start() }
+
+    private val leaseWatcher = Watcher { event ->
+        if (event.type == Watcher.Event.EventType.NodeDeleted) {
+            publish(BackendHint.Released(LeaseName(event.path.substringAfterLast('/'))))
+        }
+    }
+    private val groupWatcher = Watcher { event ->
+        if (event.type == Watcher.Event.EventType.NodeChildrenChanged ||
+            event.type == Watcher.Event.EventType.NodeDeleted
+        ) {
+            publish(BackendHint.MembersChanged(event.path.substringAfterLast('/')))
+        }
+    }
+
+    init {
+        require(this.root.startsWith('/')) { "Root [$root] must be an absolute path." }
+    }
+
+    override val capabilities: Capabilities = Capabilities(
+        releaseHints = true,
+        membershipHints = true,
+        maxBatch = MAX_BATCH,
+    )
+
+    /** Connects a new Zookeeper session; [metadata] is not stored (Zookeeper sessions carry none). */
+    override fun openSession(lease: Duration, metadata: Map<String, String>): SessionGrant {
+        require(lease.isPositive) { "Lease [$lease] must be positive." }
+        val startedAt = System.nanoTime()
+        val watcher = SessionWatcher()
+        val zooKeeper = ZooKeeper(connectString, lease.toMillis().coerceIn(1, Int.MAX_VALUE.toLong()).toInt(), watcher)
+        val connected = try {
+            watcher.connected.await(connectionTimeout.toMillis(), TimeUnit.MILLISECONDS)
+        } catch (error: InterruptedException) {
+            zooKeeper.close()
+            throw error
+        }
+        if (!connected || !zooKeeper.state.isConnected) {
+            zooKeeper.close()
+            throw SimbaException("No Zookeeper session within $connectionTimeout.")
+        }
+        val session = Session(sessionIdOf(zooKeeper.sessionId), zooKeeper)
+        sessions[session.id] = session
+        watcher.attach(session)
+        session.extend(startedAt, lease)
+        log.debug { "Opened Zookeeper session [${session.id}], timeout ${zooKeeper.sessionTimeout} ms." }
+        return SessionGrant(session.id, session.remaining(lease))
+    }
+
+    override fun keepAlive(session: SessionId, lease: Duration, held: Set<LeaseName>): KeepAliveResult {
+        val live = sessions[session] ?: return KeepAliveResult.Expired
+        val startedAt = System.nanoTime()
+        return live.expiringOn {
+            live.ensureConnected()
+            val acquired = HashMap(live.acquired)
+            val names = held + acquired.keys
+            // At least one round trip, so the reply proves Zookeeper still knows the session.
+            val stats = if (names.isEmpty()) {
+                live.zooKeeper.exists("/", false)
+                emptyMap()
+            } else {
+                names.associateWith { live.zooKeeper.existsAsync(leasePath(it), null) }.mapValues { it.value.await() }
+            }
+            if (!live.extend(startedAt, lease)) {
+                return KeepAliveResult.Expired
+            }
+            val owned = stats.mapNotNull { (name, reply) ->
+                reply.stat?.takeIf { live.owns(it) }?.let { name to it.czxid }
+            }.toMap()
+            acquired.forEach { (name, token) ->
+                if (owned[name] != token) {
+                    live.acquired.remove(name, token)
+                }
+            }
+            KeepAliveResult.Live(live.remaining(lease), owned)
+        } ?: KeepAliveResult.Expired
+    }
+
+    override fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult> {
+        require(names.size <= MAX_BATCH) { "At most $MAX_BATCH names per acquire, was ${names.size}." }
+        val live = sessions[session] ?: throw SessionExpiredException(session)
+        return live.expiringOn {
+            live.ensureConnected()
+            val results = HashMap<LeaseName, AcquireResult>()
+            var pending: Set<LeaseName> = names
+            repeat(MAX_ATTEMPTS) {
+                if (pending.isEmpty()) {
+                    return@expiringOn results
+                }
+                pending = live.tryAcquire(pending, results)
+            }
+            if (pending.isNotEmpty()) {
+                throw SimbaException("Leases $pending kept changing hands while acquiring.")
+            }
+            results
+        } ?: throw SessionExpiredException(session)
+    }
+
+    /** Deletes each lease node [session] owns with czxid equal to the token, at the version just read. */
+    override fun release(session: SessionId, leases: Map<LeaseName, Long>) {
+        val live = sessions[session] ?: return
+        live.expiringOn {
+            live.ensureConnected()
+            val stats = leases.keys.associateWith { live.zooKeeper.existsAsync(leasePath(it), null) }
+            val deletes = stats.mapNotNull { (name, pending) ->
+                val stat = pending.await().stat ?: return@mapNotNull null
+                if (!live.owns(stat) || stat.czxid != leases.getValue(name)) {
+                    return@mapNotNull null
+                }
+                name to live.zooKeeper.deleteAsync(leasePath(name), stat.version)
+            }
+            deletes.forEach { (name, pending) ->
+                val rc = pending.await()
+                if (rc != KeeperException.Code.OK && rc != KeeperException.Code.NONODE &&
+                    rc != KeeperException.Code.BADVERSION
+                ) {
+                    throw KeeperException.create(rc, leasePath(name))
+                }
+                live.acquired.remove(name, leases.getValue(name))
+            }
+        }
+    }
+
+    /** Closes the Zookeeper session, which deletes all its nodes at once. */
+    override fun closeSession(session: SessionId) {
+        sessions[session]?.expire()
+    }
+
+    override fun join(session: SessionId, group: String) {
+        val path = memberPath(group, session)
+        val live = sessions[session] ?: throw SessionExpiredException(session)
+        live.expiringOn {
+            live.ensureConnected()
+            repeat(MAX_ATTEMPTS) {
+                try {
+                    live.zooKeeper.create(path, EMPTY, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL)
+                    publish(BackendHint.MembersChanged(group))
+                    return@expiringOn
+                } catch (_: KeeperException.NodeExistsException) {
+                    return@expiringOn
+                } catch (_: KeeperException.NoNodeException) {
+                    // The group container is missing or was just reaped.
+                    live.zooKeeper.ensure(groupsPath, CreateMode.PERSISTENT)
+                    live.zooKeeper.ensure(groupPath(group), CreateMode.CONTAINER)
+                }
+            }
+            throw SimbaException("Group [$group] kept disappearing while joining.")
+        } ?: throw SessionExpiredException(session)
+    }
+
+    override fun leave(session: SessionId, group: String) {
+        val path = memberPath(group, session)
+        val live = sessions[session] ?: return
+        live.expiringOn {
+            live.ensureConnected()
+            try {
+                live.zooKeeper.delete(path, -1)
+                publish(BackendHint.MembersChanged(group))
+            } catch (_: KeeperException.NoNodeException) {
+                // Not a member.
+            }
+        }
+    }
+
+    override fun members(group: String): List<SessionId> {
+        val path = groupPath(group)
+        val children = try {
+            reader.children.usingWatcher(groupWatcher).forPath(path)
+        } catch (_: KeeperException.NoNodeException) {
+            emptyList()
+        }
+        return children.map(::SessionId).sortedBy { it.value }
+    }
+
+    override fun subscribe(listener: BackendHintListener): AutoCloseable {
+        listeners += listener
+        return AutoCloseable { listeners -= listener }
+    }
+
+    /** Closes every open session and the reader client. */
+    override fun close() {
+        try {
+            sessions.values.forEach(Session::expire)
+        } finally {
+            watchdog.shutdownNow()
+            reader.close()
+        }
+    }
+
+    /** The Zookeeper client behind [session], for tests that break it. */
+    internal fun zooKeeperOf(session: SessionId): ZooKeeper? = sessions[session]?.zooKeeper
+
+    private fun leasePath(name: LeaseName): String = "$leasesPath/${name.value}"
+
+    private fun groupPath(group: String): String {
+        require(group.isNotEmpty() && '/' !in group && group != "." && group != "..") {
+            "Group [$group] must be a non-empty Zookeeper node name."
+        }
+        return "$groupsPath/$group"
+    }
+
+    private fun memberPath(group: String, session: SessionId): String = "${groupPath(group)}/${session.value}"
+
+    private fun publish(hint: BackendHint) {
+        listeners.forEach { listener ->
+            try {
+                listener.onHint(hint)
+            } catch (error: Throwable) {
+                log.warn(error) { "BackendHintListener failed on $hint." }
+            }
+        }
+    }
+
+    /** Routes the client's connection events to its [Session], which exists only once the client connected. */
+    private inner class SessionWatcher : Watcher {
+        val connected = CountDownLatch(1)
+
+        @Volatile
+        private var session: Session? = null
+
+        @Volatile
+        private var expired = false
+
+        fun attach(session: Session) {
+            this.session = session
+            if (expired) {
+                watchdog.execute(session::expire)
+            }
+        }
+
+        override fun process(event: WatchedEvent) {
+            when (event.state) {
+                Watcher.Event.KeeperState.SyncConnected -> connected.countDown()
+                Watcher.Event.KeeperState.Expired -> {
+                    expired = true
+                    // Never close a client from its own event thread.
+                    session?.let { watchdog.execute(it::expire) }
+                }
+
+                else -> Unit
+            }
+        }
+    }
+
+    private inner class Session(val id: SessionId, val zooKeeper: ZooKeeper) {
+        private val ownerId = zooKeeper.sessionId
+
+        /** Leases acquired through this session with their tokens: candidates keep-alive verifies and reports. */
+        val acquired = ConcurrentHashMap<LeaseName, Long>()
+        private var deadline = 0L
+        private var check: ScheduledFuture<*>? = null
+
+        @Volatile
+        private var expired = false
+
+        fun owns(stat: Stat): Boolean = stat.ephemeralOwner == ownerId
+
+        fun remaining(lease: Duration): Duration = minOf(lease, Duration.ofMillis(zooKeeper.sessionTimeout.toLong()))
+
+        fun ensureConnected() {
+            val state = zooKeeper.state
+            if (!state.isAlive) {
+                throw KeeperException.SessionExpiredException()
+            }
+            if (state != ZooKeeper.States.CONNECTED) {
+                throw SimbaException("Zookeeper session [$id] is suspended (client $state).")
+            }
+        }
+
+        /** Moves the watchdog deadline to [startedAt] + [lease]; `false` when the session already expired. */
+        @Synchronized
+        fun extend(startedAt: Long, lease: Duration): Boolean {
+            if (expired) {
+                return false
+            }
+            val next = startedAt + lease.toNanos()
+            if (check == null || next - deadline > 0) {
+                deadline = next
+                check?.cancel(false)
+                check = schedule()
+            }
+            return true
+        }
+
+        private fun schedule(): ScheduledFuture<*> =
+            watchdog.schedule(::checkDeadline, deadline - System.nanoTime(), TimeUnit.NANOSECONDS)
+
+        private fun checkDeadline() {
+            synchronized(this) {
+                if (expired) {
+                    return
+                }
+                if (System.nanoTime() - deadline < 0) {
+                    check = schedule()
+                    return
+                }
+            }
+            log.info { "Zookeeper session [$id] was not kept alive in time; closing it." }
+            expire()
+        }
+
+        /** Ends the session for good: forgets it and closes its client, which deletes its nodes. */
+        fun expire() {
+            synchronized(this) {
+                if (expired) {
+                    return
+                }
+                expired = true
+                check?.cancel(false)
+            }
+            sessions.remove(id, this)
+            try {
+                zooKeeper.close()
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                log.warn(error) { "Interrupted while closing Zookeeper session [$id]." }
+            }
+        }
+
+        /**
+         * Runs [action]; answers `null` (after expiring this session) when Zookeeper reports the session expired, and
+         * reports a lost connection as a suspended session.
+         */
+        inline fun <T> expiringOn(action: () -> T): T? {
+            if (expired) {
+                return null
+            }
+            return try {
+                action()
+            } catch (_: KeeperException.SessionExpiredException) {
+                expire()
+                null
+            } catch (error: KeeperException.ConnectionLossException) {
+                throw SimbaException("Zookeeper session [$id] is suspended (connection lost).", error)
+            }
+        }
+
+        /**
+         * One pipelined round trip per pending name: create the ephemeral node, then read it back with an exists
+         * watch. Answers the names to retry (the node vanished in between, or its parent is missing).
+         */
+        fun tryAcquire(names: Set<LeaseName>, results: MutableMap<LeaseName, AcquireResult>): Set<LeaseName> {
+            val data = id.value.toByteArray()
+            val replies = names.associateWith { name ->
+                val path = leasePath(name)
+                zooKeeper.createAsync(path, data) to zooKeeper.existsAsync(path, leaseWatcher)
+            }
+            val retry = HashSet<LeaseName>()
+            var missingParent = false
+            replies.forEach { (name, pending) ->
+                val created = pending.first.await()
+                val stat = pending.second.await().stat
+                when {
+                    created == KeeperException.Code.NONODE -> {
+                        missingParent = true
+                        retry += name
+                    }
+
+                    created != KeeperException.Code.OK && created != KeeperException.Code.NODEEXISTS ->
+                        throw KeeperException.create(created, leasePath(name))
+
+                    stat == null -> retry += name
+                    owns(stat) -> {
+                        acquired[name] = stat.czxid
+                        results[name] = AcquireResult.Granted(stat.czxid)
+                    }
+
+                    else -> results[name] = AcquireResult.HeldBy(sessionIdOf(stat.ephemeralOwner), stat.czxid)
+                }
+            }
+            if (missingParent) {
+                zooKeeper.ensure(leasesPath, CreateMode.PERSISTENT)
+            }
+            return retry
+        }
+    }
+}
+
+private class StatReply(val code: KeeperException.Code, val stat: Stat?)
+
+private fun ZooKeeper.existsAsync(path: String, watcher: Watcher?): CompletableFuture<StatReply> {
+    val reply = CompletableFuture<StatReply>()
+    val callback = AsyncCallback.StatCallback { rc, _, _, stat ->
+        reply.complete(StatReply(KeeperException.Code.get(rc), stat))
+    }
+    exists(path, watcher, callback, null)
+    return reply.thenApply {
+        if (it.code != KeeperException.Code.OK && it.code != KeeperException.Code.NONODE) {
+            throw KeeperException.create(it.code, path)
+        }
+        it
+    }
+}
+
+private fun ZooKeeper.createAsync(path: String, data: ByteArray): CompletableFuture<KeeperException.Code> {
+    val reply = CompletableFuture<KeeperException.Code>()
+    val callback = AsyncCallback.StringCallback { rc, _, _, _ -> reply.complete(KeeperException.Code.get(rc)) }
+    create(path, data, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL, callback, null)
+    return reply
+}
+
+private fun ZooKeeper.deleteAsync(path: String, version: Int): CompletableFuture<KeeperException.Code> {
+    val reply = CompletableFuture<KeeperException.Code>()
+    val callback = AsyncCallback.VoidCallback { rc, _, _ -> reply.complete(KeeperException.Code.get(rc)) }
+    delete(path, version, callback, null)
+    return reply
+}
+
+/** Waits for an async reply, rethrowing the [KeeperException] it failed with. */
+private fun <T> CompletableFuture<T>.await(): T = try {
+    get()
+} catch (error: ExecutionException) {
+    throw error.cause ?: error
+}
+
+/** Creates [path] with [mode], and its missing ancestors as persistent nodes. */
+private fun ZooKeeper.ensure(path: String, mode: CreateMode) {
+    val segments = path.split('/').filter { it.isNotEmpty() }
+    segments.indices.forEach { index ->
+        val prefix = segments.take(index + 1).joinToString("/", prefix = "/")
+        try {
+            create(
+                prefix,
+                ByteArray(0),
+                ZooDefs.Ids.OPEN_ACL_UNSAFE,
+                if (index == segments.lastIndex) mode else CreateMode.PERSISTENT
+            )
+        } catch (_: KeeperException.NodeExistsException) {
+            // Created concurrently or earlier.
+        }
+    }
+}
