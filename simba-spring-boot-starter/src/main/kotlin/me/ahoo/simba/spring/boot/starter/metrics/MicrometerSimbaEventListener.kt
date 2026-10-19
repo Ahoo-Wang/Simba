@@ -73,6 +73,7 @@ class MicrometerSimbaEventListener(private val registry: MeterRegistry) : SimbaE
 
             is SimbaEvent.SessionSuspended -> state.set(SessionStatus.SUSPENDED)
             is SimbaEvent.SessionExpired -> state.set(SessionStatus.OPENING)
+            is SimbaEvent.SessionClosed -> state.set(SessionStatus.CLOSED)
             is SimbaEvent.Elected -> leader(event.name).set(1)
             is SimbaEvent.Revoked -> {
                 leader(event.name).set(0)

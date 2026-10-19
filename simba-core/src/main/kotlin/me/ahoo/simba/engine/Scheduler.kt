@@ -21,6 +21,21 @@ import me.ahoo.simba.spi.Ticker
  */
 @InternalSimbaApi
 interface Scheduler : Ticker {
-    /** Runs [task] once [nanoTime] reaches [at]; at once (but not inline) when [at] already passed. Never cancelled. */
-    fun schedule(at: Long, task: Runnable)
+    /**
+     * Runs [task] once [nanoTime] reaches [at]; at once (but not inline) when [at] already passed. The result cancels
+     * the timer if it has not run yet.
+     */
+    fun schedule(at: Long, task: Runnable): Cancellable
+}
+
+/** Cancels a timer of a [Scheduler]; idempotent, and a no-op once the timer ran. */
+@InternalSimbaApi
+fun interface Cancellable {
+    fun cancel()
+
+    companion object {
+        /** Cancels nothing. */
+        @JvmField
+        val NONE: Cancellable = Cancellable {}
+    }
 }
