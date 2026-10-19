@@ -103,9 +103,15 @@ that arrives late cannot free a later term.
 | `retryJitter` | `renewInterval / 2` | Candidates retry after `renewInterval / 2` plus a random delay in `[0, retryJitter)` |
 | `minBackoff` | 100 ms | Lower bound of the backoff after a failed keep-alive |
 
-Construction fails unless `renewInterval × 2 ≤ leaseDuration` (at least two keep-alive attempts fit before the
-deadline) and `leaseDuration × (1 − drift) − margin > renewInterval` (otherwise every term would flap). In Spring Boot
-these are the [`simba.session.*`](/guide/configuration#properties) properties.
+Build it with `SimbaConfig.builder()` (`toBuilder()` derives a variant); `build()` fails unless
+`renewInterval × 2 ≤ leaseDuration` (at least two keep-alive attempts fit before the deadline) and
+`leaseDuration × (1 − drift) − margin > renewInterval` (otherwise every term would flap). In Spring Boot these are the
+[`simba.session.*`](/guide/configuration#properties) properties.
+
+A backend may grant less than `leaseDuration` — a Zookeeper server caps the session timeout at its
+`maxSessionTimeout`. When two keep-alives at `renewInterval` no longer fit in the local validity it grants, the client
+renews every third of that validity instead and publishes `SessionLeaseShortened` (and a warning) once per session,
+rather than letting every term end with `DEADLINE_PASSED`.
 
 How to choose:
 

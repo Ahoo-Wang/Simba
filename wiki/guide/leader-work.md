@@ -51,7 +51,7 @@ simba.election("report").schedule(
 | `Schedule.fixedDelay(delay, initialDelay = 0)` | From the end of one run to the start of the next |
 | `Schedule.fixedRate(period, initialDelay = 0)` | Between scheduled starts; a run that overruns skips the missed starts instead of bursting |
 
-`initialDelay` counts from the start of each term. A failed run is logged and published, and the loop goes on; the
+`initialDelay` counts from the start of each term. A failed run (an `Error` included) is logged and published, and the loop goes on; a `VirtualMachineError` ends the loop and steps the election down for one lease duration; the
 loop ends with its term. There is no thread pool per schedule.
 
 ## Partition Groups

@@ -249,7 +249,7 @@ val backend = JdbcLeaseBackend.postgres(dataSource)          // or JdbcLeaseBack
 
 Simba.builder()
     .backend(backend)
-    .config(SimbaConfig(leaseDuration = Duration.ofSeconds(15)))
+    .config(SimbaConfig.builder().leaseDuration(Duration.ofSeconds(15)).build())
     .listener { event -> log.debug { "simba: $event" } }
     .build()
     .use { simba ->
@@ -375,9 +375,15 @@ that arrives late cannot free a later term.
 | `retryJitter` | `renewInterval / 2` | Candidates retry after `renewInterval / 2` plus a random delay in `[0, retryJitter)` |
 | `minBackoff` | 100 ms | Lower bound of the backoff after a failed keep-alive |
 
-Construction fails unless `renewInterval × 2 ≤ leaseDuration` (at least two keep-alive attempts fit before the
-deadline) and `leaseDuration × (1 − drift) − margin > renewInterval` (otherwise every term would flap). In Spring Boot
-these are the [`simba.session.*`](/guide/configuration#properties) properties.
+Build it with `SimbaConfig.builder()` (`toBuilder()` derives a variant); `build()` fails unless
+`renewInterval × 2 ≤ leaseDuration` (at least two keep-alive attempts fit before the deadline) and
+`leaseDuration × (1 − drift) − margin > renewInterval` (otherwise every term would flap). In Spring Boot these are the
+[`simba.session.*`](/guide/configuration#properties) properties.
+
+A backend may grant less than `leaseDuration` — a Zookeeper server caps the session timeout at its
+`maxSessionTimeout`. When two keep-alives at `renewInterval` no longer fit in the local validity it grants, the client
+renews every third of that validity instead and publishes `SessionLeaseShortened` (and a warning) once per session,
+rather than letting every term end with `DEADLINE_PASSED`.
 
 How to choose:
 
@@ -818,7 +824,7 @@ Build the client with `Simba.builder()`:
 ```kotlin
 val simba = Simba.builder()
     .backend(JdbcLeaseBackend.mysql(dataSource, queryTimeout = Duration.ofSeconds(5)))
-    .config(SimbaConfig(leaseDuration = Duration.ofSeconds(15), renewInterval = Duration.ofSeconds(5)))
+    .config(SimbaConfig.builder().leaseDuration(Duration.ofSeconds(15)).renewInterval(Duration.ofSeconds(5)).build())
     .listener(myEventListener)
     .build()
 ```
@@ -826,7 +832,7 @@ val simba = Simba.builder()
 | Builder method | Default | Description |
 |---|---|---|
 | `backend(LeaseBackend)` | required | The backend; the client does not close it |
-| `config(SimbaConfig)` | `SimbaConfig()` | Session timing, see [Timing](/guide/correctness#timing) |
+| `config(SimbaConfig)` | `SimbaConfig.builder().build()` | Session timing, see [Timing](/guide/correctness#timing) |
 | `listener(SimbaEventListener)` | none | Receives every [`SimbaEvent`](/guide/observability#events); may be called several times |
 | `ioExecutor(Executor)` | a virtual thread per call | Runs backend calls |
 | `callbackExecutor(Executor)` | virtual threads | Runs leadership callbacks, serially per election |
@@ -889,7 +895,7 @@ simba.election("report").schedule(
 | `Schedule.fixedDelay(delay, initialDelay = 0)` | From the end of one run to the start of the next |
 | `Schedule.fixedRate(period, initialDelay = 0)` | Between scheduled starts; a run that overruns skips the missed starts instead of bursting |
 
-`initialDelay` counts from the start of each term. A failed run is logged and published, and the loop goes on; the
+`initialDelay` counts from the start of each term. A failed run (an `Error` included) is logged and published, and the loop goes on; a `VirtualMachineError` ends the loop and steps the election down for one lease duration; the
 loop ends with its term. There is no thread pool per schedule.
 
 ## Partition Groups
@@ -1008,7 +1014,7 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 
 | Method | Behavior |
 |---|---|
-| `acquire(timeout)` | Waits up to `timeout` (on the client's clock) for a term; throws `LockTimeoutException` when none was won in time. A term that ends right after it was won does not end the wait: the lock contends again until the timeout. Interrupting the caller abandons the attempt and rethrows `InterruptedException`. |
+| `acquire(timeout)` | Waits up to `timeout` (on the client's clock) for a term; throws `LockTimeoutException` when none was won in time. A term that ends right after it was won does not end the wait: the lock contends again until the timeout. A timeout too large for nanoseconds waits `Long.MAX_VALUE` ns. Interrupting the caller abandons the attempt and rethrows `InterruptedException` (declared for Java). Calling it on the engine loop (only reachable with a direct callback executor) throws `IllegalStateException`. |
 | `tryAcquire()` | One attempt: the term when this client wins the first answered attempt; `null` when another session or this client holds the lease, or when no attempt is answered within one lease duration (backend unreachable). |
 
 Within one client a name has **at most one holder**: a second `acquire` of the same name waits until the first is
@@ -1078,19 +1084,23 @@ lease). `token` and `remaining` are `0` without a term.
 ## Events
 
 Register a `SimbaEventListener` with `Simba.builder().listener(...)`, or as a bean with the starter. Events are
-published from the engine's loop: keep listeners fast and thread-safe; exceptions are logged and ignored.
+delivered in order on one serial dispatcher over the callback executor, never on the engine's loop, so a listener may
+call `snapshot()`, `stop()` and other client APIs; blocking `close()` methods do not wait when called from a listener.
+`close()` completes after the last event was delivered. Keep listeners fast; exceptions are logged and ignored. Events
+are plain classes with value equality (no `copy` or destructuring), so later versions can add properties.
 
 | `SimbaEvent` | When |
 |---|---|
 | `SessionOpened(session)` | A new session was opened |
 | `SessionRenewed(session, latency)` | A keep-alive succeeded |
 | `SessionSuspended(session, cause)` | A keep-alive failed before the local deadline |
-| `SessionExpired(session, reason)` | The session ended: deadline passed or the backend reported it expired |
+| `SessionExpired(session, reason)` | The session ended: `reason` is `DEADLINE_PASSED` (no keep-alive succeeded before the local deadline) or `SESSION_EXPIRED` (the backend reported it expired) |
+| `SessionLeaseShortened(session, remaining, renewEvery)` | The backend grants less than the configured lease (e.g. a capped Zookeeper session timeout), so the client renews every `renewEvery` (a third of the local validity) instead; once per session, also logged as a warning |
 | `SessionClosed(session)` | The client closed (`session` is `null` when none was open); published once |
 | `Elected(name, token, kind)` | This node got a term; `kind` (`ELECTION`, `LOCK`, `GROUP`) tells which API started the election, so metrics can label by kind instead of by unbounded lock names |
 | `Revoked(name, token, reason, kind)` | A term ended |
-| `AcquireFailed(name, cause)` | An acquire call failed (not "held by someone else", which is normal) |
-| `WorkCompleted(name, token, outcome, duration, cause)` | One run of leader work ended: `COMPLETED`, `FAILED` or `CANCELLED` |
+| `AcquireFailed(name, cause, kind)` | An acquire call failed (not "held by someone else", which is normal) |
+| `WorkCompleted(name, token, outcome, duration, cause, kind)` | One run of leader work ended: `COMPLETED`, `FAILED` or `CANCELLED` |
 
 ```kotlin
 @Component
@@ -1251,7 +1261,7 @@ takes a `Simba`:
 @Test
 fun `only one client leads`() {
     val backend = InMemoryLeaseBackend()
-    val config = SimbaConfig(leaseDuration = Duration.ofSeconds(3), renewInterval = Duration.ofSeconds(1))
+    val config = SimbaConfig.builder().leaseDuration(Duration.ofSeconds(3)).renewInterval(Duration.ofSeconds(1)).build()
     Simba.builder().backend(backend).config(config).build().use { first ->
         Simba.builder().backend(backend).config(config).build().use { second ->
             val elected = LinkedBlockingQueue<Term>()
@@ -1296,7 +1306,7 @@ class FailoverTest {
 
     private fun client(): Simba = Simba.builder()
         .backend(backend)
-        .config(SimbaConfig(leaseDuration = Duration.ofSeconds(3), renewInterval = Duration.ofSeconds(1)))
+        .config(SimbaConfig.builder().leaseDuration(Duration.ofSeconds(3)).renewInterval(Duration.ofSeconds(1)).build())
         .scheduler(scheduler)          // clock and timers of the engine
         .ioExecutor(Runnable::run)     // backend calls inline
         .callbackExecutor(Runnable::run)
@@ -1557,10 +1567,12 @@ Names follow the lease name rules: 1–128 characters of `[A-Za-z0-9._:-]`; anyt
 
 ### `SimbaConfig`
 
-`data class SimbaConfig(leaseDuration = 15s, renewInterval = leaseDuration / 3, drift = 0.01, margin = 50ms,
-retryJitter = renewInterval / 2, minBackoff = 100ms)`. Construction validates `renewInterval × 2 ≤ leaseDuration` and
-`leaseDuration × (1 − drift) − margin > renewInterval`. From Java, use `SimbaConfig.builder()` (unset values keep
-their defaults, derived ones follow the values set) or the overloaded constructors. See
+`SimbaConfig.builder()` with `leaseDuration` (15s), `renewInterval` (`leaseDuration / 3`), `drift` (0.01), `margin`
+(50ms), `retryJitter` (`renewInterval / 2`), `minBackoff` (100ms); unset values keep their defaults, derived ones
+follow the values set. `build()` validates `renewInterval × 2 ≤ leaseDuration` and
+`leaseDuration × (1 − drift) − margin > renewInterval`; `toBuilder()` derives a variant. There is no public
+constructor: `SimbaConfig`, the events and the snapshots are plain classes with value equality (no `copy` or
+destructuring), so later versions can add properties compatibly. See
 [Timing](/guide/correctness#timing).
 
 ## Elections — `me.ahoo.simba`
@@ -1591,8 +1603,10 @@ interface LeadershipListener {
 
 ### `LeaderWork` and `LeaderTask`
 
-`fun interface LeaderWork { fun run(term: Term) }` may throw; failures become `SimbaEvent.WorkCompleted` and never
-affect the election. `LeaderTask` (`AutoCloseable`) exposes `election`, `stop(): CompletionStage<Void>` (completes once
+`fun interface LeaderWork { fun run(term: Term) }` may throw anything; failures (an `Error` included) become
+`SimbaEvent.WorkCompleted` and never affect the election, except a `VirtualMachineError` (out of memory, stack
+overflow): it ends the term's work, the election steps down for one lease duration, and the error is rethrown to the
+work thread. `LeaderTask` (`AutoCloseable`) exposes `election`, `stop(): CompletionStage<Void>` (completes once
 the work exited or timed out and the lease is released) and `close()`. See [Leader Work](/guide/leader-work).
 
 ### `Schedule`
@@ -1623,7 +1637,7 @@ overruns skips the missed starts.
 
 | Type | Members |
 |---|---|
-| `DistributedLock` | `name`; `acquire(timeout): LockTerm` (throws `LockTimeoutException`); `tryAcquire(): LockTerm?` |
+| `DistributedLock` | `name`; `acquire(timeout): LockTerm` (throws `LockTimeoutException`; declares `InterruptedException`); `tryAcquire(): LockTerm?` |
 | `LockTerm : Term, AutoCloseable` | `releaseAsync(): CompletionStage<Void>`; `close()` (idempotent) |
 | `LockTimeoutException` | `name`, `timeout` |
 
@@ -1633,7 +1647,7 @@ See [Locks](/guide/locks).
 
 | Type | Members |
 |---|---|
-| `PartitionGroup` | `name`, `partitions`; `schedule(schedule, work): GroupTask`; `runWhileLeader(work): GroupTask` |
+| `PartitionGroup` | `name` (a `String`: it names a backend membership group, not a lease, yet follows the lease-name rules), `partitions`; `schedule(schedule, work): GroupTask`; `runWhileLeader(work): GroupTask` |
 | `PartitionWork` | `fun run(term: Term, partition: Int)` |
 | `GroupTask : AutoCloseable` | `group`; `partitions(): Set<Int>` (this node's partitions in its latest view); `stop()`; `close()` |
 | `PartitionAssignment` | `ownerOf(partition, members)`, `partitionsOf(member, partitions, members)`, `weight(partition, member)`: rendezvous hashing (FNV-1a 64 mixed with SplitMix64), identical across versions |
@@ -1642,8 +1656,8 @@ See [Locks](/guide/locks).
 
 | Type | Members |
 |---|---|
-| `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`; exceptions are logged and ignored |
-| `SimbaEvent` | `SessionOpened`, `SessionRenewed`, `SessionSuspended`, `SessionExpired`, `SessionClosed`, `Elected`, `Revoked`, `AcquireFailed`, `WorkCompleted` |
+| `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`; called in order off the engine loop; exceptions are logged and ignored |
+| `SimbaEvent` | `SessionOpened`, `SessionRenewed`, `SessionSuspended`, `SessionExpired` (`reason`: `DEADLINE_PASSED` or `SESSION_EXPIRED`), `SessionLeaseShortened`, `SessionClosed`, `Elected`, `Revoked`, `AcquireFailed`, `WorkCompleted` (the last four carry `kind`) |
 | `ElectionKind` | `ELECTION`, `LOCK`, `GROUP`: which API started an election (on `Elected`, `Revoked` and `ElectionSnapshot`) |
 | `WorkOutcome` | `COMPLETED`, `FAILED`, `CANCELLED` |
 | `SimbaSnapshot` | `session: SessionSnapshot`, `elections: List<ElectionSnapshot>`, `leaseDuration`, `healthy` |

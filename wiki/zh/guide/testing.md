@@ -26,7 +26,7 @@ testImplementation("me.ahoo.simba:simba-tck:${simbaVersion}")
 @Test
 fun `only one client leads`() {
     val backend = InMemoryLeaseBackend()
-    val config = SimbaConfig(leaseDuration = Duration.ofSeconds(3), renewInterval = Duration.ofSeconds(1))
+    val config = SimbaConfig.builder().leaseDuration(Duration.ofSeconds(3)).renewInterval(Duration.ofSeconds(1)).build()
     Simba.builder().backend(backend).config(config).build().use { first ->
         Simba.builder().backend(backend).config(config).build().use { second ->
             val elected = LinkedBlockingQueue<Term>()
@@ -68,7 +68,7 @@ class FailoverTest {
 
     private fun client(): Simba = Simba.builder()
         .backend(backend)
-        .config(SimbaConfig(leaseDuration = Duration.ofSeconds(3), renewInterval = Duration.ofSeconds(1)))
+        .config(SimbaConfig.builder().leaseDuration(Duration.ofSeconds(3)).renewInterval(Duration.ofSeconds(1)).build())
         .scheduler(scheduler)          // clock and timers of the engine
         .ioExecutor(Runnable::run)     // backend calls inline
         .callbackExecutor(Runnable::run)

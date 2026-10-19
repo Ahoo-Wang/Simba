@@ -47,7 +47,7 @@ simba.election("report").schedule(
 | `Schedule.fixedDelay(delay, initialDelay = 0)` | 从一次运行结束到下一次运行开始 |
 | `Schedule.fixedRate(period, initialDelay = 0)` | 相邻两次计划开始之间；超时的运行会跳过错过的开始，而不是集中补跑 |
 
-`initialDelay` 从每个任期开始时计算。失败的运行会被记录并发布，循环继续；循环随其任期结束。每个调度没有自己的线程池。
+`initialDelay` 从每个任期开始时计算。失败的运行（包括抛出 `Error`）会被记录并发布，循环继续；`VirtualMachineError` 会结束循环并让选举让出一个租期。循环随其任期结束。每个调度没有自己的线程池。
 
 ## 分区组 {#partition-groups}
 

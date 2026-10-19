@@ -30,10 +30,10 @@ description: Simba 5 的公共类型及其契约——Simba、Election、Term、
 
 ### `SimbaConfig` {#simbaconfig}
 
-`data class SimbaConfig(leaseDuration = 15s, renewInterval = leaseDuration / 3, drift = 0.01, margin = 50ms,
-retryJitter = renewInterval / 2, minBackoff = 100ms)`。构造时校验 `renewInterval × 2 ≤ leaseDuration` 以及
-`leaseDuration × (1 − drift) − margin > renewInterval`。在 Java 中使用 `SimbaConfig.builder()`（未设置的值保持默认，
-派生值随已设置的值计算）或重载的构造器。参阅 [时间参数](/zh/guide/correctness#timing)。
+`SimbaConfig.builder()`，可设置 `leaseDuration`（15s）、`renewInterval`（`leaseDuration / 3`）、`drift`（0.01）、`margin`（50ms）、
+`retryJitter`（`renewInterval / 2`）、`minBackoff`（100ms）；未设置的值保持默认，派生值随已设置的值计算。`build()` 校验
+`renewInterval × 2 ≤ leaseDuration` 以及 `leaseDuration × (1 − drift) − margin > renewInterval`；`toBuilder()` 派生变体。没有公开构造器：
+`SimbaConfig`、事件和快照都是按值比较的普通类（没有 `copy` 和解构），以后的版本可以兼容地增加属性。参阅 [时间参数](/zh/guide/correctness#timing)。
 
 ## 选举 — `me.ahoo.simba` {#elections-me-ahoo-simba}
 
@@ -62,7 +62,8 @@ interface LeadershipListener {
 
 ### `LeaderWork` 与 `LeaderTask` {#leaderwork-and-leadertask}
 
-`fun interface LeaderWork { fun run(term: Term) }` 可以抛出异常；失败会成为 `SimbaEvent.WorkCompleted`，从不影响选举。
+`fun interface LeaderWork { fun run(term: Term) }` 可以抛出任何异常；失败（包括 `Error`）会成为 `SimbaEvent.WorkCompleted`，从不影响选举，
+唯一的例外是 `VirtualMachineError`（内存耗尽、栈溢出）：它结束该任期的工作，选举让出一个租期，错误会重新抛给工作线程。
 `LeaderTask`（`AutoCloseable`）提供 `election`、`stop(): CompletionStage<Void>`（在工作退出或超时且租约已释放后完成）以及 `close()`。
 参阅 [Leader 任务](/zh/guide/leader-work)。
 
@@ -93,7 +94,7 @@ interface LeadershipListener {
 
 | 类型 | 成员 |
 |---|---|
-| `DistributedLock` | `name`；`acquire(timeout): LockTerm`（抛出 `LockTimeoutException`）；`tryAcquire(): LockTerm?` |
+| `DistributedLock` | `name`；`acquire(timeout): LockTerm`（抛出 `LockTimeoutException`；声明 `InterruptedException`）；`tryAcquire(): LockTerm?` |
 | `LockTerm : Term, AutoCloseable` | `releaseAsync(): CompletionStage<Void>`；`close()`（幂等） |
 | `LockTimeoutException` | `name`、`timeout` |
 
@@ -103,7 +104,7 @@ interface LeadershipListener {
 
 | 类型 | 成员 |
 |---|---|
-| `PartitionGroup` | `name`、`partitions`；`schedule(schedule, work): GroupTask`；`runWhileLeader(work): GroupTask` |
+| `PartitionGroup` | `name`（`String`：它命名的是后端的成员组而不是租约，但遵循租约名称规则）、`partitions`；`schedule(schedule, work): GroupTask`；`runWhileLeader(work): GroupTask` |
 | `PartitionWork` | `fun run(term: Term, partition: Int)` |
 | `GroupTask : AutoCloseable` | `group`；`partitions(): Set<Int>`（本节点在其最新视图中的分区）；`stop()`；`close()` |
 | `PartitionAssignment` | `ownerOf(partition, members)`、`partitionsOf(member, partitions, members)`、`weight(partition, member)`：rendezvous 哈希（FNV-1a 64 与 SplitMix64 混合），跨版本保持一致 |
@@ -112,8 +113,8 @@ interface LeadershipListener {
 
 | 类型 | 成员 |
 |---|---|
-| `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`；异常会被记录并忽略 |
-| `SimbaEvent` | `SessionOpened`、`SessionRenewed`、`SessionSuspended`、`SessionExpired`、`SessionClosed`、`Elected`、`Revoked`、`AcquireFailed`、`WorkCompleted` |
+| `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`；在引擎循环之外按顺序调用；异常会被记录并忽略 |
+| `SimbaEvent` | `SessionOpened`、`SessionRenewed`、`SessionSuspended`、`SessionExpired`（`reason` 为 `DEADLINE_PASSED` 或 `SESSION_EXPIRED`）、`SessionLeaseShortened`、`SessionClosed`、`Elected`、`Revoked`、`AcquireFailed`、`WorkCompleted`（后四个带 `kind`） |
 | `ElectionKind` | `ELECTION`、`LOCK`、`GROUP`：选举由哪个 API 启动（见 `Elected`、`Revoked` 和 `ElectionSnapshot`） |
 | `WorkOutcome` | `COMPLETED`、`FAILED`、`CANCELLED` |
 | `SimbaSnapshot` | `session: SessionSnapshot`、`elections: List<ElectionSnapshot>`、`leaseDuration`、`healthy` |

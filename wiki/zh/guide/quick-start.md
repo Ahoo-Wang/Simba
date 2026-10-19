@@ -172,7 +172,7 @@ val backend = JdbcLeaseBackend.postgres(dataSource)          // or JdbcLeaseBack
 
 Simba.builder()
     .backend(backend)
-    .config(SimbaConfig(leaseDuration = Duration.ofSeconds(15)))
+    .config(SimbaConfig.builder().leaseDuration(Duration.ofSeconds(15)).build())
     .listener { event -> log.debug { "simba: $event" } }
     .build()
     .use { simba ->

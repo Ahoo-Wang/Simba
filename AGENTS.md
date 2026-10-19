@@ -59,7 +59,12 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   `LeaseName`, `SessionId`, results), `me.ahoo.simba.engine` (`@InternalSimbaApi`, opt-in, not public API).
 - The public API and SPI must stay usable from Java: no value classes in signatures (they mangle member names; check
   with `javap`), Kotlin default arguments get an overload or builder (`SimbaConfig.builder()`,
-  `Term.ensureValid()`). `JavaInteropTest` implements `LeaseBackend` in Java.
+  `Term.ensureValid()`), blocking methods declare `@Throws(InterruptedException::class)`. `JavaInteropTest`
+  implements `LeaseBackend` in Java.
+- Public value types (`SimbaConfig`, `SimbaEvent.*`, the snapshots, `SimulationParams`, `SimulationResult`,
+  `InMemoryLeaseBackend.Owner`) are plain classes with hand-written `equals` / `hashCode` / `toString`, never data
+  classes: no `copy` or `componentN`, so properties can be added compatibly. `SimbaConfig` has no public
+  constructor, only `builder()` / `toBuilder()`.
 - `simba-redis` holds the Redis backend and its Lua scripts behind the driver-neutral `RedisScripting` port; it must
   not depend on Spring. `simba-spring-redis` only adapts Spring Data Redis (`SpringRedisScripting`).
 - `simba-tck`: `LeaseBackendSpec` every backend must pass, and `FencingSpec`, the kit users run against their own
@@ -112,8 +117,9 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   engine never waits for a callback except through the futures of `stop()` / `stepDown()`. `close()` and
   `LockTerm.close()` do not wait when called from a callback or leader work (they would wait for themselves).
 - Work runs once per term on a task of the work executor (virtual threads), interrupted on revocation; failures
-  become `SimbaEvent.WorkCompleted` and never touch the election. Schedules loop on that one task and call
-  `ensureValid` before each run.
+  (any `Throwable`) become `SimbaEvent.WorkCompleted` and never touch the election, except a `VirtualMachineError`:
+  it ends the term's work, the election steps down for one lease duration and the error is rethrown to the work
+  thread. Schedules loop on that one task, call `ensureValid` before each run and survive other `Error`s.
 - Names are claimed per client under one lifecycle lock: claim-and-start and remove-and-stop are atomic, so the loop
   sees every stop before the next start of the name, and the shell never swaps the listener of a started election. A
   `LeaderTask` or `LockTerm` stops only its own run (closing it again never touches a later run of the name).
@@ -124,7 +130,14 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   the partitions `PartitionAssignment` gives it over the session ids and hands the others over. Leaving while a join
   is in flight sends the leave once the join answers (even a failed one); a failed leave retries; the membership of
   an ended session ends with it. `GroupTask.stop()` also waits for partitions still handing over.
-- `SimbaEventListener` failures are logged and ignored; events are published from the loop thread.
+- Events are delivered in order on one serial dispatcher over the callback executor, never on the loop, and
+  `close()` waits for them; listener failures are logged and ignored. On a loop thread (reachable only with a direct
+  callback executor) `snapshot()` / `footprint()` read in place and blocking calls (`acquire`, blocking `close()`,
+  `awaitIdle()`) throw `IllegalStateException` instead of deadlocking. A rejecting callback executor never strands a
+  future: completions run on the caller, callbacks are skipped with a warning, events are delivered inline.
+- Renewal adapts to the backend: when it grants less than `leaseDuration` and two keep-alives at `renewInterval` no
+  longer fit in the local validity (e.g. Zookeeper's `maxSessionTimeout`), the session renews every third of that
+  validity and `SessionLeaseShortened` is published once. Closing publishes empty group views.
 
 ### Observability
 - `Simba.snapshot()` is read on the loop: session id, status (`OPENING`, `LIVE`, `SUSPENDED`, `CLOSED`), `validFor`,

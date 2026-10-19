@@ -31,10 +31,12 @@ Names follow the lease name rules: 1–128 characters of `[A-Za-z0-9._:-]`; anyt
 
 ### `SimbaConfig`
 
-`data class SimbaConfig(leaseDuration = 15s, renewInterval = leaseDuration / 3, drift = 0.01, margin = 50ms,
-retryJitter = renewInterval / 2, minBackoff = 100ms)`. Construction validates `renewInterval × 2 ≤ leaseDuration` and
-`leaseDuration × (1 − drift) − margin > renewInterval`. From Java, use `SimbaConfig.builder()` (unset values keep
-their defaults, derived ones follow the values set) or the overloaded constructors. See
+`SimbaConfig.builder()` with `leaseDuration` (15s), `renewInterval` (`leaseDuration / 3`), `drift` (0.01), `margin`
+(50ms), `retryJitter` (`renewInterval / 2`), `minBackoff` (100ms); unset values keep their defaults, derived ones
+follow the values set. `build()` validates `renewInterval × 2 ≤ leaseDuration` and
+`leaseDuration × (1 − drift) − margin > renewInterval`; `toBuilder()` derives a variant. There is no public
+constructor: `SimbaConfig`, the events and the snapshots are plain classes with value equality (no `copy` or
+destructuring), so later versions can add properties compatibly. See
 [Timing](/guide/correctness#timing).
 
 ## Elections — `me.ahoo.simba`
@@ -65,8 +67,10 @@ interface LeadershipListener {
 
 ### `LeaderWork` and `LeaderTask`
 
-`fun interface LeaderWork { fun run(term: Term) }` may throw; failures become `SimbaEvent.WorkCompleted` and never
-affect the election. `LeaderTask` (`AutoCloseable`) exposes `election`, `stop(): CompletionStage<Void>` (completes once
+`fun interface LeaderWork { fun run(term: Term) }` may throw anything; failures (an `Error` included) become
+`SimbaEvent.WorkCompleted` and never affect the election, except a `VirtualMachineError` (out of memory, stack
+overflow): it ends the term's work, the election steps down for one lease duration, and the error is rethrown to the
+work thread. `LeaderTask` (`AutoCloseable`) exposes `election`, `stop(): CompletionStage<Void>` (completes once
 the work exited or timed out and the lease is released) and `close()`. See [Leader Work](/guide/leader-work).
 
 ### `Schedule`
@@ -97,7 +101,7 @@ overruns skips the missed starts.
 
 | Type | Members |
 |---|---|
-| `DistributedLock` | `name`; `acquire(timeout): LockTerm` (throws `LockTimeoutException`); `tryAcquire(): LockTerm?` |
+| `DistributedLock` | `name`; `acquire(timeout): LockTerm` (throws `LockTimeoutException`; declares `InterruptedException`); `tryAcquire(): LockTerm?` |
 | `LockTerm : Term, AutoCloseable` | `releaseAsync(): CompletionStage<Void>`; `close()` (idempotent) |
 | `LockTimeoutException` | `name`, `timeout` |
 
@@ -107,7 +111,7 @@ See [Locks](/guide/locks).
 
 | Type | Members |
 |---|---|
-| `PartitionGroup` | `name`, `partitions`; `schedule(schedule, work): GroupTask`; `runWhileLeader(work): GroupTask` |
+| `PartitionGroup` | `name` (a `String`: it names a backend membership group, not a lease, yet follows the lease-name rules), `partitions`; `schedule(schedule, work): GroupTask`; `runWhileLeader(work): GroupTask` |
 | `PartitionWork` | `fun run(term: Term, partition: Int)` |
 | `GroupTask : AutoCloseable` | `group`; `partitions(): Set<Int>` (this node's partitions in its latest view); `stop()`; `close()` |
 | `PartitionAssignment` | `ownerOf(partition, members)`, `partitionsOf(member, partitions, members)`, `weight(partition, member)`: rendezvous hashing (FNV-1a 64 mixed with SplitMix64), identical across versions |
@@ -116,8 +120,8 @@ See [Locks](/guide/locks).
 
 | Type | Members |
 |---|---|
-| `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`; exceptions are logged and ignored |
-| `SimbaEvent` | `SessionOpened`, `SessionRenewed`, `SessionSuspended`, `SessionExpired`, `SessionClosed`, `Elected`, `Revoked`, `AcquireFailed`, `WorkCompleted` |
+| `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`; called in order off the engine loop; exceptions are logged and ignored |
+| `SimbaEvent` | `SessionOpened`, `SessionRenewed`, `SessionSuspended`, `SessionExpired` (`reason`: `DEADLINE_PASSED` or `SESSION_EXPIRED`), `SessionLeaseShortened`, `SessionClosed`, `Elected`, `Revoked`, `AcquireFailed`, `WorkCompleted` (the last four carry `kind`) |
 | `ElectionKind` | `ELECTION`, `LOCK`, `GROUP`: which API started an election (on `Elected`, `Revoked` and `ElectionSnapshot`) |
 | `WorkOutcome` | `COMPLETED`, `FAILED`, `CANCELLED` |
 | `SimbaSnapshot` | `session: SessionSnapshot`, `elections: List<ElectionSnapshot>`, `leaseDuration`, `healthy` |
