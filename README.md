@@ -113,7 +113,19 @@ simba.lock("invoice-42").acquire(Duration.ofSeconds(5)).use { term ->
 }
 ```
 
-The returned `LockTerm` is the credential: closing it releases the lease.
+The returned `LockTerm` is the credential: closing it releases the lease. Since 5.1, `acquireAsync` waits without
+blocking a thread; cancelling its future abandons the attempt:
+
+```kotlin
+simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
+    .thenCompose { term -> invoiceStore.writeAsync(invoice, term.token).whenComplete { _, _ -> term.releaseAsync() } }
+```
+
+With `simba-coroutines` (since 5.1), the same as a suspending call:
+
+```kotlin
+simba.lock("invoice-42").withLock(Duration.ofSeconds(5)) { term -> invoiceStore.write(invoice, term.token) }
+```
 
 ### Observability
 

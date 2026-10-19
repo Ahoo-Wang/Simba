@@ -32,6 +32,48 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 |---|---|
 | `acquire(timeout)` | 最多等待 `timeout`（按客户端时钟）以获得一个任期；未能及时赢得时抛出 `LockTimeoutException`。刚赢得就结束的任期不会结束等待：锁会继续竞争直到超时。超出纳秒表示范围的超时按 `Long.MAX_VALUE` 纳秒等待。中断调用方会放弃本次尝试并重新抛出 `InterruptedException`（对 Java 已声明）。在引擎循环上调用（只有直接执行的回调执行器才会走到）会抛出 `IllegalStateException`。 |
 | `tryAcquire()` | 只尝试一次：本客户端赢得第一个得到应答的尝试时返回任期；当另一个会话或本客户端持有该租约，或在一个租约时长内没有尝试得到应答（后端不可达）时返回 `null`。 |
+| `acquireAsync(timeout)` | 不阻塞的 `acquire`（5.1 起）：返回 `CompletionStage<LockTerm>`，以任期完成；超时则以 `LockTimeoutException`、客户端关闭则以 `IllegalStateException` 异常完成。 |
+| `tryAcquireAsync()` | 不阻塞的 `tryAcquire`（5.1 起）：返回 `CompletionStage<LockTerm?>`，以任期或 `null` 完成。 |
+
+### 不阻塞地获取 {#without-blocking}
+
+`acquireAsync` 和 `tryAcquireAsync` 等待时不占用线程，在客户端的回调执行器上完成（与回调一样，只有使用直接执行的回调执行器时才会在事件循环上完成）。**取消**返回的
+future（`toCompletableFuture().cancel(...)`）会放弃本次尝试，并释放已经赢得的任期，因此被取消的获取绝不会让锁一直被持有。
+Reactor 用户可以用 `Mono.fromCompletionStage` 包装它。
+
+```kotlin
+simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
+    .thenCompose { term ->
+        invoiceStore.writeAsync(invoice, fencingToken = term.token)
+            .whenComplete { _, _ -> term.releaseAsync() }
+    }
+```
+
+```java
+simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
+    .thenCompose(term -> invoiceStore.writeAsync(invoice, term.getToken())
+        .whenComplete((result, error) -> term.releaseAsync()));
+```
+
+客户端之外的 `DistributedLock` 实现会继承默认方法：它们在虚拟线程上调用阻塞版本，取消时中断该线程。
+
+### 协程 {#coroutines}
+
+`simba-coroutines`（5.1 起，依赖 `kotlinx-coroutines-core`；`simba-core` 不依赖它）把异步调用适配为协程：
+
+```kotlin
+simba.lock("invoice-42").withLock(Duration.ofSeconds(5)) { term ->
+    invoiceStore.write(invoice, fencingToken = term.token)
+}
+```
+
+| 函数 | 行为 |
+|---|---|
+| `DistributedLock.awaitAcquire(timeout)` | 挂起直到赢得任期；超时抛出 `LockTimeoutException`。取消协程会放弃本次尝试，并释放已经赢得的任期。 |
+| `DistributedLock.awaitTryAcquire()` | 挂起版的 `tryAcquireAsync`：返回任期或 `null`。 |
+| `DistributedLock.withLock(timeout) { term -> }` | 获取锁、运行代码块，之后释放任期，失败或取消时也会释放。任期仍可能在代码块返回前结束：请把 `term.token` 传给受保护的资源。 |
+| `Term.awaitRevoked()` | 挂起直到任期被撤销，返回 `RevokeReason`；取消等待不影响任期本身。 |
+| `SimbaEventFlow` | 一个 `SimbaEventListener`，用 `Simba.builder().listener(...)` 注册；`events` 是热的 `SharedFlow<SimbaEvent>`，收集者落后超过 `bufferCapacity` 个事件时丢弃最旧的事件。 |
 
 在一个客户端内，同一名称**最多只有一个持有者**：对同一名称的第二次 `acquire` 会等到第一次被释放（或它自己的超时到期）。
 同名的锁和选举共享一个租约，因此不要把同一个名称同时用于两者。

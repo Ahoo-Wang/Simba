@@ -4,6 +4,7 @@ spring-boot = "4.1.1"
 testcontainers = "2.0.5"
 curator = "5.9.0"
 kotlin-logging = "8.0.4"
+kotlinx-coroutines = "1.11.0"
 junit = "6.1.3"
 fluent-assert = "1.2.1"
 hamcrest = "3.0"
@@ -21,6 +22,7 @@ testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version
 curator-framework = { module = "org.apache.curator:curator-framework", version.ref = "curator" }
 curator-test = { module = "org.apache.curator:curator-test", version.ref = "curator" }
 kotlin-logging = { module = "io.github.oshai:kotlin-logging-jvm", version.ref = "kotlin-logging" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 fluent-assert-bom = { module = "me.ahoo.test:fluent-assert-bom", version.ref = "fluent-assert" }
 hamcrest = { module = "org.hamcrest:hamcrest", version.ref = "hamcrest" }

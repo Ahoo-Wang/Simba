@@ -94,7 +94,7 @@ interface LeadershipListener {
 
 | 类型 | 成员 |
 |---|---|
-| `DistributedLock` | `name`；`acquire(timeout): LockTerm`（抛出 `LockTimeoutException`；声明 `InterruptedException`）；`tryAcquire(): LockTerm?` |
+| `DistributedLock` | `name`；`acquire(timeout): LockTerm`（抛出 `LockTimeoutException`；声明 `InterruptedException`）；`tryAcquire(): LockTerm?`；5.1 起 `acquireAsync(timeout): CompletionStage<LockTerm>` 与 `tryAcquireAsync(): CompletionStage<LockTerm?>`（取消会放弃本次尝试并释放已赢得的任期） |
 | `LockTerm : Term, AutoCloseable` | `releaseAsync(): CompletionStage<Void>`；`close()`（幂等） |
 | `LockTimeoutException` | `name`、`timeout` |
 
@@ -122,6 +122,20 @@ interface LeadershipListener {
 | `ElectionSnapshot` | `name`、`status`（`CANDIDATE`、`LEADER`、`COOLDOWN`、`HANDOVER`）、`token`、`remaining`、`kind` |
 
 参阅 [可观测性](/zh/guide/observability)。
+
+## 协程 — `me.ahoo.simba.coroutines` {#coroutines-me-ahoo-simba-coroutines}
+
+模块 `simba-coroutines`（5.1 起）。
+
+| 类型 | 契约 |
+|---|---|
+| `DistributedLock.awaitAcquire(timeout): LockTerm` | 挂起版 `acquireAsync`；取消会放弃本次尝试并释放已赢得的任期 |
+| `DistributedLock.awaitTryAcquire(): LockTerm?` | 挂起版 `tryAcquireAsync` |
+| `DistributedLock.withLock(timeout, block: suspend (LockTerm) -> R): R` | 获取锁、运行 `block`，之后释放任期（失败或取消时也释放） |
+| `Term.awaitRevoked(): RevokeReason` | 挂起直到任期被撤销；取消等待不影响任期 |
+| `SimbaEventFlow(bufferCapacity = 1024)` | `SimbaEventListener`，其 `events: SharedFlow<SimbaEvent>` 转发事件；收集者过慢时丢弃最旧的事件 |
+
+参阅 [锁](/zh/guide/locks#coroutines)。
 
 ## 后端 SPI — `me.ahoo.simba.spi` {#backend-spi-me-ahoo-simba-spi}
 

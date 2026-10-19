@@ -42,6 +42,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -60,6 +61,7 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
     private val ticker: Ticker = builder.scheduler ?: builder.ticker
     private val shell: EngineShell
     private val workExecutor: Executor
+    private val callbackExecutor: Executor
     private val running = ConcurrentHashMap<LeaseName, Run>()
 
     /** Orders every claim-and-start and remove-and-stop, so that a stop always reaches the loop before a restart. */
@@ -75,13 +77,14 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
 
     init {
         val backend = requireNotNull(builder.backend) { "backend is required." }
+        callbackExecutor = builder.callbackExecutor
+            ?: VirtualThreads.newExecutor("simba-callback").also(ownedExecutors::add)
         shell = EngineShell(
             backend = backend,
             config = EngineConfig.of(config),
             ticker = ticker,
             ioExecutor = builder.ioExecutor ?: VirtualThreads.newExecutor("simba-io").also(ownedExecutors::add),
-            callbackExecutor = builder.callbackExecutor
-                ?: VirtualThreads.newExecutor("simba-callback").also(ownedExecutors::add),
+            callbackExecutor = callbackExecutor,
             eventListeners = builder.listeners.toList(),
             seed = builder.seed ?: ThreadLocalRandom.current().nextLong(),
             scheduler = builder.scheduler,
@@ -290,79 +293,142 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
 
     private inner class ShellLock(override val name: LeaseName) : DistributedLock {
         @Throws(InterruptedException::class)
-        override fun acquire(timeout: Duration): LockTerm {
-            require(!timeout.isNegative) { "timeout must not be negative." }
-            return acquire(timeout, probe = false) ?: throw LockTimeoutException(name, timeout)
-        }
+        override fun acquire(timeout: Duration): LockTerm = await(acquireAsync(timeout))
 
         @Throws(InterruptedException::class)
-        override fun tryAcquire(): LockTerm? = acquire(config.leaseDuration, probe = true)
+        override fun tryAcquire(): LockTerm? = await(tryAcquireAsync())
 
-        /**
-         * Contends until a term is won or [timeout] passes (one attempt with [probe]). A term revoked right after it
-         * began does not end the wait: the lock contends again within the timeout. The deadline timer is cancelled
-         * on the way out.
-         */
-        private fun acquire(timeout: Duration, probe: Boolean): LockTerm? {
-            EngineShell.checkNotOnLoop("Acquiring a lock")
-            checkOpen()
-            val deadline = CompletableFuture<Void>()
-            // Monotonic instants are compared by difference, so a saturated deadline that wraps still lies ahead.
-            val timer = shell.schedule(ticker.nanoTime() + saturatedNanos(timeout)) { deadline.complete(null) }
-            try {
-                while (true) {
-                    val run = Run()
-                    val listener = LockListener(name, run)
-                    val lost = if (probe) CompletableFuture<Void>() else null
-                    if (!startLocally(run, listener, lost, deadline)) {
-                        return null
-                    }
-                    try {
-                        awaitAny(listener.elected, lost, deadline, closed)
-                    } catch (error: InterruptedException) {
-                        stopRun(name, run)
-                        throw error
-                    }
-                    val term = listener.elected.getNow(null)
-                    if (term != null && term.isValid) {
-                        return ShellLockTerm(term) { stopRun(name, run) }
-                    }
-                    stopRun(name, run)
-                    checkOpen()
-                    if (probe || deadline.isDone) {
-                        return null
-                    }
-                }
-            } finally {
-                timer.cancel()
-            }
+        override fun acquireAsync(timeout: Duration): CompletableFuture<LockTerm> {
+            require(!timeout.isNegative) { "timeout must not be negative." }
+            @Suppress("UNCHECKED_CAST")
+            return LockAttempt(name, timeout, probe = false).result as CompletableFuture<LockTerm>
         }
 
-        /**
-         * Starts [run] once no other run of this client holds the name, waiting for a current holder here unless
-         * probing; `false` on timeout or while probing a held name.
-         */
-        private fun startLocally(
-            run: Run,
-            listener: LockListener,
-            lost: CompletableFuture<Void>?,
-            deadline: CompletableFuture<Void>,
-        ): Boolean {
-            while (true) {
-                if (startRun(name, run, listener, ElectionKind.LOCK, probe = lost)) {
-                    return true
+        override fun tryAcquireAsync(): CompletableFuture<LockTerm?> =
+            LockAttempt(name, config.leaseDuration, probe = true).result
+
+        /** Waits for [future]; interrupting the caller cancels it, which abandons the attempt. */
+        private fun <T> await(future: CompletableFuture<T>): T {
+            EngineShell.checkNotOnLoop("Acquiring a lock")
+            return try {
+                future.get()
+            } catch (error: InterruptedException) {
+                future.cancel(false)
+                throw error
+            } catch (error: ExecutionException) {
+                throw error.cause ?: error
+            }
+        }
+    }
+
+    /**
+     * One acquisition of [name], driven by completions rather than a waiting thread: contends until a term is won or
+     * [timeout] passes on the client's clock (one answered attempt with [probe]). A term revoked right after it began
+     * does not end the wait: the lock contends again within the timeout.
+     *
+     * [result] completes on the callback executor (on the event loop only with a direct one, as callbacks do).
+     * Completing it other than with the term this attempt won (cancelling it) abandons the attempt: the current run
+     * stops and a term already won is released. The deadline timer is cancelled once [result] completes.
+     */
+    private inner class LockAttempt(
+        private val name: LeaseName,
+        private val timeout: Duration,
+        private val probe: Boolean,
+    ) {
+        val result = CompletableFuture<LockTerm?>()
+        private val deadline = CompletableFuture<Void>()
+
+        // Monotonic instants are compared by difference, so a saturated deadline that wraps still lies ahead.
+        private val timer = shell.schedule(ticker.nanoTime() + saturatedNanos(timeout)) { deadline.complete(null) }
+        private val lock = Any()
+        private var current: Run? = null
+        private var won: LockTerm? = null
+
+        init {
+            result.whenComplete { term, _ ->
+                timer.cancel()
+                val abandoned = synchronized(lock) { current.takeIf { term == null || term !== won } }
+                abandoned?.let { stopRun(name, it) }
+            }
+            contend()
+        }
+
+        /** Starts a run once no other run of this client holds the name; waits for a local holder unless probing. */
+        private fun contend() {
+            while (!result.isDone) {
+                val run = Run()
+                val listener = LockListener(name, run)
+                val lost = if (probe) CompletableFuture<Void>() else null
+                val started = try {
+                    startRun(name, run, listener, ElectionKind.LOCK, probe = lost)
+                } catch (error: IllegalStateException) {
+                    finish { result.completeExceptionally(error) }
+                    return
                 }
-                if (lost != null) {
-                    return false
+                if (started) {
+                    synchronized(lock) { current = run }
+                    if (result.isDone) {
+                        stopRun(name, run)
+                    } else {
+                        anyOf(listener.elected, lost, deadline, closed).whenComplete { _, _ -> settle(run, listener) }
+                    }
+                    return
+                }
+                if (probe) {
+                    finish { result.complete(null) }
+                    return
                 }
                 val holder = running[name] ?: continue
-                awaitAny(holder.stopped, deadline, closed)
-                checkOpen()
-                if (deadline.isDone) {
-                    return false
-                }
+                anyOf(holder.stopped, deadline, closed).whenComplete { _, _ -> afterLocalWait() }
+                return
             }
         }
+
+        private fun afterLocalWait() {
+            if (deadline.isDone && !closing.get()) {
+                timedOut()
+            } else {
+                contend()
+            }
+        }
+
+        private fun settle(run: Run, listener: LockListener) {
+            val term = listener.elected.getNow(null)
+            if (term != null && term.isValid) {
+                val held = ShellLockTerm(term) { stopRun(name, run) }
+                synchronized(lock) { won = held }
+                finish {
+                    if (!result.complete(held)) {
+                        held.releaseAsync()
+                    }
+                }
+                return
+            }
+            stopRun(name, run)
+            when {
+                closing.get() -> contend()
+                probe -> finish { result.complete(null) }
+                deadline.isDone -> timedOut()
+                else -> contend()
+            }
+        }
+
+        /** Only a waiting acquire times out; a probe ends with its one attempt. */
+        private fun timedOut() {
+            finish { result.completeExceptionally(LockTimeoutException(name, timeout)) }
+        }
+
+        /** Completes [result] on the callback executor, so that its dependents run where callbacks run. */
+        private fun finish(complete: () -> Unit) {
+            try {
+                callbackExecutor.execute(complete)
+            } catch (_: RejectedExecutionException) {
+                complete()
+            }
+        }
+
+        private fun anyOf(vararg futures: CompletableFuture<*>?): CompletableFuture<Any> =
+            CompletableFuture.anyOf(*futures.filterNotNull().toTypedArray())
     }
 
     /** Takes the first term; a term ending other than by release releases the lock for good. */

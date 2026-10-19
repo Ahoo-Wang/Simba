@@ -26,13 +26,13 @@ This file records what is not obvious from the code. Describe the code as it is;
 
 | Module check | Needs |
 |---|---|
-| `simba-core`, `simba-testing`, `simba-tck`, `simba-zookeeper`, `simba-spring-boot-starter` | Nothing (Zookeeper tests use embedded Curator `TestingServer`) |
+| `simba-core`, `simba-testing`, `simba-tck`, `simba-coroutines`, `simba-zookeeper`, `simba-spring-boot-starter` | Nothing (Zookeeper tests use embedded Curator `TestingServer`) |
 | `simba-example` | Docker for `-PexampleBackend=jdbc` (`mysql:8.4`) and `redis` (`redis:7.4-alpine`); nothing for `zookeeper` |
 | `simba-redis` (tests also cover `simba-spring-redis`) | Docker: Testcontainers `redis:7.4-alpine` (`RedisFixture`) |
 | `simba-jdbc` | Docker: Testcontainers `mysql:8.4` and `postgres:17` (`LeaseDatabaseFixture`, schema from `simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-*.sql`) |
 
 CI (`.github/workflows/integration-test.yml`; job names are required checks, keep them): `Simba Core Test` (core,
-testing, tck, starter), `Simba Spring Redis Test` (simba-redis and simba-spring-redis), `Simba Zookeeper Test`,
+testing, tck, coroutines, starter), `Simba Spring Redis Test` (simba-redis and simba-spring-redis), `Simba Zookeeper Test`,
 `Simba Jdbc Test`, `Simba Example (jdbc|redis|zookeeper)`, `Simba Test (JDK 25)`. Wiki commands are in
 `wiki/AGENTS.md`.
 
@@ -43,13 +43,15 @@ testing, tck, starter), `Simba Spring Redis Test` (simba-redis and simba-spring-
 ```
 simba-core  ←  simba-jdbc | simba-redis ← simba-spring-redis | simba-zookeeper  ←  simba-spring-boot-starter
 simba-testing (in-memory backend, virtual time, simulation)    simba-tck (LeaseBackendSpec, FencingSpec)
+simba-coroutines (suspending lock calls, withLock, SimbaEventFlow, Term.awaitRevoked; kotlinx-coroutines-core)
 simba-example (per-backend demo app), simba-bom, simba-dependencies, code-coverage-report
 ```
 
 - `simba-dependencies` (never published) pins versions at build time only (Spring Boot BOM, kotlin-logging,
-  Curator): library modules take it through a non-published `versionPlatform` configuration, and their POM / module
-  metadata carry the resolved versions (`versionMapping`), so consumers get no Spring Boot constraints. Test and build tool versions (MockK,
-  Hamcrest, Testcontainers, detekt) come from the version catalog in the root build.
+  Curator, kotlinx-coroutines): library modules take it through a non-published `versionPlatform` configuration, and
+  their POM / module metadata carry the resolved versions (`versionMapping`), so consumers get no Spring Boot
+  constraints. Test and build tool versions (MockK, Hamcrest, Testcontainers, detekt) come from the version catalog in
+  the root build.
 - Libraries are compiled for Kotlin API / language / stdlib 2.2 (`KOTLIN_BASELINE`), whatever compiler builds them;
   `versionPlatform` pins kotlin-stdlib / kotlin-reflect strictly to it, so publications ask for 2.2, not Boot's newer one.
   Published jars carry `Automatic-Module-Name` (`me.ahoo.simba.<module>`), `META-INF/LICENSE`, and the Dokka HTML in
@@ -77,6 +79,7 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   not depend on Spring. `simba-spring-redis` only adapts Spring Data Redis (`SpringRedisScripting`).
 - `simba-tck`: `LeaseBackendSpec` every backend must pass, and `FencingSpec`, the kit users run against their own
   token-checking resource (optionally with real terms of a backend).
+- `simba-coroutines` is the only module that depends on kotlinx-coroutines; `simba-core` must not.
 - `simba-testing`: `InMemoryLeaseBackend`, `VirtualClock`, `VirtualScheduler`, `Simulation` for users' unit tests.
 
 ### Layers (top to bottom)
@@ -138,7 +141,9 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   `LeaderTask` or `LockTerm` stops only its own run (closing it again never touches a later run of the name).
 - `lock(name)`: one holder per name per client; a lock term lost other than by release is released for good, not
   re-acquired, but `acquire(timeout)` keeps contending until its timeout when the term it won ended before it
-  returned. Timers that are no longer needed (lock deadlines, schedule wake-ups, call timeouts) are cancelled.
+  returned. `acquireAsync` / `tryAcquireAsync` wait without a thread and complete on the callback executor; the
+  blocking calls wait on them, and cancelling one (or interrupting a blocking caller) abandons the attempt and releases
+  a term it already won. Timers that are no longer needed (lock deadlines, schedule wake-ups, call timeouts) are cancelled.
 - Groups: the engine joins the group with every session and publishes member views (`Effect.Members`); each node runs
   the partitions `PartitionAssignment` gives it over the session ids and hands the others over. Leaving while a join
   is in flight sends the leave once the join answers (even a failed one); a failed leave retries; the membership of

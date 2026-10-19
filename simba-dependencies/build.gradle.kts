@@ -11,7 +11,7 @@
  * limitations under the License.
  */
 
-description = "Versions Simba is built and tested with (Spring Boot BOM, kotlin-logging, Curator); build-time only, not published"
+description = "Versions Simba is built and tested with (Spring Boot BOM, kotlin-logging, Curator, kotlinx-coroutines); build-time only, not published"
 
 dependencies {
     // Published with every library module: only what their runtime classpaths need. Test and build tool versions
@@ -20,5 +20,6 @@ dependencies {
     constraints {
         api(libs.kotlin.logging)
         api(libs.curator.framework)
+        api(libs.kotlinx.coroutines.core)
     }
 }
