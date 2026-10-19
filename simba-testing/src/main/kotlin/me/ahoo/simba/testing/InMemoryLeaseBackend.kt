@@ -25,6 +25,7 @@ import me.ahoo.simba.spi.SessionGrant
 import me.ahoo.simba.spi.SessionId
 import me.ahoo.simba.spi.Ticker
 import java.time.Duration
+import java.util.Objects
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -43,7 +44,20 @@ class InMemoryLeaseBackend(
     private class Lease(var session: SessionId?, var token: Long)
 
     /** Owner of a lease as the backend sees it now. */
-    data class Owner(val session: SessionId, val token: Long)
+    class Owner(
+        val session: SessionId,
+        val token: Long,
+    ) {
+        override fun equals(other: Any?): Boolean =
+            this === other ||
+                other is Owner &&
+                session == other.session &&
+                token == other.token
+
+        override fun hashCode(): Int = Objects.hash(session, token)
+
+        override fun toString(): String = "Owner(session=$session, token=$token)"
+    }
 
     private val lock = Any()
     private val sessions = HashMap<SessionId, Session>()

@@ -80,7 +80,7 @@ class SimbaShellTest {
         val events = LinkedBlockingQueue<me.ahoo.simba.event.SimbaEvent>()
         val client = Simba.builder()
             .backend(GrantingBackend())
-            .config(SimbaConfig())
+            .config(SimbaConfig.builder().build())
             .ioExecutor(executor)
             .callbackExecutor(executor)
             .ticker(me.ahoo.simba.spi.Ticker.SYSTEM)
@@ -139,7 +139,7 @@ class SimbaShellTest {
     fun `the shell never swaps the listener of a started election and completes a step-down after close`() {
         val shell = EngineShell(
             backend = GrantingBackend(),
-            config = EngineConfig.of(SimbaConfig()),
+            config = EngineConfig.of(SimbaConfig.builder().build()),
             ticker = me.ahoo.simba.spi.Ticker.SYSTEM,
             ioExecutor = Runnable::run,
             callbackExecutor = Runnable::run,

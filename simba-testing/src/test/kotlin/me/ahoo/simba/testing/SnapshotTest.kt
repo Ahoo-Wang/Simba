@@ -53,12 +53,7 @@ class SnapshotTest {
             return backend.keepAlive(session, lease, held)
         }
     }
-    private val config = SimbaConfig(
-        leaseDuration = Duration.ofSeconds(3),
-        renewInterval = Duration.ofSeconds(1),
-        margin = Duration.ofMillis(20),
-        retryJitter = Duration.ZERO,
-    )
+    private val config = SimbaConfig.builder().leaseDuration(Duration.ofSeconds(3)).renewInterval(Duration.ofSeconds(1)).margin(Duration.ofMillis(20)).retryJitter(Duration.ZERO).build()
     private val simba = Simba.builder()
         .backend(flaky)
         .config(config)

@@ -54,7 +54,7 @@ class SimulationSpec {
 
     @Test
     fun `the checker catches clocks drifting beyond the configured bound`() {
-        val broken = SimulationParams().let { it.copy(clockRateSpread = 0.3, config = it.config.copy(drift = 0.0)) }
+        val broken = SimulationParams(config = SimulationParams().config.toBuilder().drift(0.0).build(), clockRateSpread = 0.3)
         assertThrows<SimulationFailure> {
             (0L until 200L).forEach { Simulation(it, broken).run() }
         }

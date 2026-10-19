@@ -70,6 +70,7 @@ internal class EngineShell(
         executeExistingDelayedTasksAfterShutdownPolicy = false
     }
     private val timers: Scheduler = scheduler ?: LoopScheduler()
+    private val events = SequentialExecutor(callbackExecutor)
     private var state = EngineState.initial(config, seed)
     private val terms = TermRegistry(ticker)
     private val dispatchers = HashMap<LeaseName, Dispatcher>()
@@ -137,8 +138,8 @@ internal class EngineShell(
     /** The work bound to term [term] of [name] exited; [event], if any, is published in the same loop task. */
     fun workExited(name: LeaseName, term: Long, event: SimbaEvent? = null) {
         onLoop {
-            event?.let(::publishNow)
             handle(Event.WorkExited(name, term))
+            event?.let(::publishNow)
         }
     }
 
@@ -323,7 +324,7 @@ internal class EngineShell(
         val drained = CompletableFuture<List<SequentialExecutor>>()
         onLoop { drained.complete(dispatchers.values.map { it.executor }) }
         return drained.thenCompose { executors ->
-            val all = executors.map { executor ->
+            val all = (executors + events).map { executor ->
                 val drainedOne = CompletableFuture<Void>()
                 executor.execute { drainedOne.complete(null) }
                 drainedOne
@@ -398,13 +399,33 @@ internal class EngineShell(
         }
     }
 
+    /**
+     * Hands [event] to the listeners in order on [events], a serial executor off the loop, so a listener may call
+     * blocking client APIs; inline only when the callback executor rejects it.
+     */
     private fun publishNow(event: SimbaEvent) {
-        eventListeners.forEach { listener ->
+        if (eventListeners.isEmpty()) {
+            return
+        }
+        val deliver = Runnable {
+            dispatching.set(true)
             try {
-                listener.onEvent(event)
-            } catch (error: Throwable) {
-                log.warn(error) { "SimbaEventListener failed on $event." }
+                eventListeners.forEach { listener ->
+                    try {
+                        listener.onEvent(event)
+                    } catch (error: Throwable) {
+                        log.warn(error) { "SimbaEventListener failed on $event." }
+                    }
+                }
+            } finally {
+                dispatching.remove()
             }
+        }
+        try {
+            events.execute(deliver)
+        } catch (error: RejectedExecutionException) {
+            log.warn(error) { "Callback executor rejected $event; delivering it inline." }
+            deliver.run()
         }
     }
 

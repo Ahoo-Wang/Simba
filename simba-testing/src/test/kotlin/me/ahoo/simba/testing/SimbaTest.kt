@@ -14,7 +14,7 @@
 package me.ahoo.simba.testing
 
 import me.ahoo.simba.LeadershipListener
-import me.ahoo.simba.LeaseExpiredException
+import me.ahoo.simba.TermExpiredException
 import me.ahoo.simba.RevokeReason
 import me.ahoo.simba.Simba
 import me.ahoo.simba.SimbaConfig
@@ -30,7 +30,7 @@ import java.util.concurrent.TimeUnit
 /** The threaded shell against the in-memory backend on the system clock; synchronizes on queues, never sleeps. */
 class SimbaTest {
     private val backend = InMemoryLeaseBackend()
-    private val config = SimbaConfig(leaseDuration = Duration.ofSeconds(3), renewInterval = Duration.ofMillis(500))
+    private val config = SimbaConfig.builder().leaseDuration(Duration.ofSeconds(3)).renewInterval(Duration.ofMillis(500)).build()
     private val clients = ArrayList<Simba>()
 
     private fun client(): Simba =
@@ -71,7 +71,7 @@ class SimbaTest {
         first.revoked.next().assert().isEqualTo(firstTerm to RevokeReason.STOPPED)
         firstTerm.isValid.assert().isFalse()
         firstTerm.remaining().assert().isEqualTo(Duration.ZERO)
-        assertThrows<LeaseExpiredException> { firstTerm.ensureValid() }
+        assertThrows<TermExpiredException> { firstTerm.ensureValid() }
         second.elected.next().token.assert().isEqualTo(2L)
     }
 

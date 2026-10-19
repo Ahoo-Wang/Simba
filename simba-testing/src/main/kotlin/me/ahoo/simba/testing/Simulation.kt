@@ -28,13 +28,14 @@ import me.ahoo.simba.engine.step
 import me.ahoo.simba.spi.LeaseName
 import me.ahoo.simba.spi.SessionId
 import java.time.Duration
+import java.util.Objects
 import java.util.PriorityQueue
 import java.util.SplittableRandom
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeoutException
 
 /**
- * Knobs of a [Simulation]. Durations are virtual.
+ * Knobs of a [Simulation]. Durations are virtual. A plain class with value equality, so knobs can be added compatibly.
  *
  * @param maxDelay each run draws its fault-phase delay ceiling from `[1ms, maxDelay]`; above half the renew interval,
  *   replies arrive after the call timed out.
@@ -46,15 +47,8 @@ import java.util.concurrent.TimeoutException
  *   [selfExitShare] within [maxWork], and otherwise within [maxWork] after its term is revoked (often after the
  *   handover timed out).
  */
-data class SimulationParams(
-    val config: SimbaConfig = SimbaConfig(
-        leaseDuration = Duration.ofSeconds(3),
-        renewInterval = Duration.ofSeconds(1),
-        drift = 0.01,
-        margin = Duration.ofMillis(20),
-        retryJitter = Duration.ofMillis(500),
-        minBackoff = Duration.ofMillis(50),
-    ),
+class SimulationParams(
+    val config: SimbaConfig = SimbaConfig.builder().leaseDuration(Duration.ofSeconds(3)).renewInterval(Duration.ofSeconds(1)).drift(0.01).margin(Duration.ofMillis(20)).retryJitter(Duration.ofMillis(500)).minBackoff(Duration.ofMillis(50)).build(),
     val minNodes: Int = 2,
     val maxNodes: Int = 5,
     val minNames: Int = 1,
@@ -80,10 +74,18 @@ data class SimulationParams(
     val livenessBound: Duration =
         maxDelay.multipliedBy(2) + config.leaseDuration.multipliedBy(2) + config.renewInterval.multipliedBy(2) +
             quietMaxDelay.multipliedBy(4)
+
+    private fun values(): List<Any> = listOf(config, minNodes, maxNodes, minNames, maxNames, maxDelay, maxDropRate, quietMaxDelay, clockRateSpread, meanPauseInterval, maxPause, meanOperationInterval, faultPhase, quietPhase, workShare, selfExitShare, maxWork)
+
+    override fun equals(other: Any?): Boolean = this === other || other is SimulationParams && values() == other.values()
+
+    override fun hashCode(): Int = values().hashCode()
+
+    override fun toString(): String = "SimulationParams(config=$config, minNodes=$minNodes, maxNodes=$maxNodes, minNames=$minNames, maxNames=$maxNames, maxDelay=$maxDelay, maxDropRate=$maxDropRate, quietMaxDelay=$quietMaxDelay, clockRateSpread=$clockRateSpread, meanPauseInterval=$meanPauseInterval, maxPause=$maxPause, meanOperationInterval=$meanOperationInterval, faultPhase=$faultPhase, quietPhase=$quietPhase, workShare=$workShare, selfExitShare=$selfExitShare, maxWork=$maxWork)"
 }
 
 /** What a run did, for sanity checks and replay comparisons. */
-data class SimulationResult(
+class SimulationResult(
     val seed: Long,
     val nodes: Int,
     val names: Int,
@@ -95,7 +97,26 @@ data class SimulationResult(
     val highestTokens: Map<LeaseName, Long>,
     val sessions: Int,
     val events: Map<String, Int>,
-)
+) {
+    override fun equals(other: Any?): Boolean =
+        this === other ||
+            other is SimulationResult &&
+            seed == other.seed &&
+            nodes == other.nodes &&
+            names == other.names &&
+            tasks == other.tasks &&
+            elections == other.elections &&
+            handovers == other.handovers &&
+            handoverTimeouts == other.handoverTimeouts &&
+            revocations == other.revocations &&
+            highestTokens == other.highestTokens &&
+            sessions == other.sessions &&
+            events == other.events
+
+    override fun hashCode(): Int = Objects.hash(seed, nodes, names, tasks, elections, handovers, handoverTimeouts, revocations, highestTokens, sessions, events)
+
+    override fun toString(): String = "SimulationResult(seed=$seed, nodes=$nodes, names=$names, tasks=$tasks, elections=$elections, handovers=$handovers, handoverTimeouts=$handoverTimeouts, revocations=$revocations, highestTokens=$highestTokens, sessions=$sessions, events=$events)"
+}
 
 /** An invariant was violated; [seed] replays the run exactly. */
 class SimulationFailure(val seed: Long, message: String, trace: String) :

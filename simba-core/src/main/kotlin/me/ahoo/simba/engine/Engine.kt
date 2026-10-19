@@ -552,7 +552,7 @@ private class Transition(state: EngineState, private val now: Long) {
                 null -> if (isAttempt(name, requestId)) {
                     val cause = (result as? BackendResult.Failed)?.cause
                         ?: IllegalStateException("No acquire result for [$name].")
-                    effects += Effect.Publish(SimbaEvent.AcquireFailed(name, cause))
+                    effects += Effect.Publish(SimbaEvent.AcquireFailed(name, cause, kindOf(name)))
                     lost(name)
                 }
             }

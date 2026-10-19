@@ -204,16 +204,23 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
         return (stopped ?: run)?.stopped ?: CompletableFuture.completedFuture(null)
     }
 
-    private fun startWork(name: LeaseName, kind: ElectionKind, executor: Executor?, body: TermBody): LeaderTask {
+    private fun startWork(
+        name: LeaseName,
+        kind: ElectionKind,
+        executor: Executor?,
+        body: (ElectionKind) -> TermBody,
+    ): LeaderTask {
         val run = Run()
-        val listener = WorkListener(shell, executor ?: workExecutor, ticker, body)
+        val listener = WorkListener(shell, executor ?: workExecutor, ticker, config.leaseDuration.toNanos(), body(kind))
         check(startRun(name, run, listener, kind, work = true)) { "Election [$name] is already started." }
         return ElectionTask(ShellElection(name, kind), run)
     }
 
-    private fun leaderBody(work: LeaderWork) = TermBody { term, _ -> runReported(ticker, term, work) }
+    private fun leaderBody(work: LeaderWork): (ElectionKind) -> TermBody =
+        { kind -> TermBody { term, _ -> runReported(ticker, term, work, kind) } }
 
-    private fun scheduleBody(schedule: Schedule, work: LeaderWork) = ScheduleBody(shell, ticker, schedule, work)
+    private fun scheduleBody(schedule: Schedule, work: LeaderWork): (ElectionKind) -> TermBody =
+        { kind -> ScheduleBody(shell, ticker, schedule, work, kind) }
 
     private inner class ShellElection(
         override val name: LeaseName,
@@ -441,7 +448,7 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
 
     class Builder internal constructor() {
         internal var backend: LeaseBackend? = null
-        internal var config: SimbaConfig = SimbaConfig()
+        internal var config: SimbaConfig = SimbaConfig.builder().build()
         internal var ticker: Ticker = Ticker.SYSTEM
         internal var scheduler: Scheduler? = null
         internal var ioExecutor: Executor? = null

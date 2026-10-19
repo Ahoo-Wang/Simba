@@ -101,7 +101,7 @@ class MicrometerSimbaEventListener(private val registry: MeterRegistry) : SimbaE
                 .register(registry)
                 .record(event.duration)
 
-            is SimbaEvent.AcquireFailed -> Unit
+            is SimbaEvent.AcquireFailed, is SimbaEvent.SessionLeaseShortened -> Unit
         }
     }
 

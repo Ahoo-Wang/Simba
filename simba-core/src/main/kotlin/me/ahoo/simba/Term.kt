@@ -38,10 +38,10 @@ interface Term {
     /** Time left before the local deadline; [Duration.ZERO] once the term ended. */
     fun remaining(): Duration
 
-    /** Throws [LeaseExpiredException] unless the term is valid for more than [minRemaining]. */
+    /** Throws [TermExpiredException] unless the term is valid for more than [minRemaining]. */
     fun ensureValid(minRemaining: Duration)
 
-    /** Throws [LeaseExpiredException] unless the term is still valid; `ensureValid(Duration.ZERO)`. */
+    /** Throws [TermExpiredException] unless the term is still valid; `ensureValid(Duration.ZERO)`. */
     fun ensureValid() {
         ensureValid(Duration.ZERO)
     }
@@ -69,4 +69,4 @@ enum class RevokeReason {
 }
 
 /** Thrown by [Term.ensureValid] when the term ends too soon to start the next step. */
-class LeaseExpiredException(message: String) : SimbaException(message)
+class TermExpiredException(message: String) : SimbaException(message)

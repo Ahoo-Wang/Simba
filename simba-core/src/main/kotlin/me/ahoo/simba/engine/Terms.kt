@@ -13,7 +13,7 @@
 
 package me.ahoo.simba.engine
 
-import me.ahoo.simba.LeaseExpiredException
+import me.ahoo.simba.TermExpiredException
 import me.ahoo.simba.RevokeReason
 import me.ahoo.simba.Term
 import me.ahoo.simba.spi.LeaseName
@@ -70,7 +70,7 @@ class EngineTerm(
         if (remaining > minRemaining) {
             return
         }
-        throw LeaseExpiredException(
+        throw TermExpiredException(
             "Term[$name#$token] remaining:[${remaining.toMillis()}ms] does not exceed [${minRemaining.toMillis()}ms]."
         )
     }

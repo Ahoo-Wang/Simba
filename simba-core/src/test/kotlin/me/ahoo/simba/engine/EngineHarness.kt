@@ -23,13 +23,7 @@ import java.time.Duration
 /** Drives the pure core one event at a time and keeps the effects of the last step. */
 abstract class EngineHarness {
     protected val config = EngineConfig.of(
-        SimbaConfig(
-            leaseDuration = Duration.ofSeconds(3),
-            renewInterval = Duration.ofSeconds(1),
-            drift = 0.01,
-            margin = Duration.ofMillis(20),
-            retryJitter = Duration.ZERO,
-        )
+        SimbaConfig.builder().leaseDuration(Duration.ofSeconds(3)).renewInterval(Duration.ofSeconds(1)).drift(0.01).margin(Duration.ofMillis(20)).retryJitter(Duration.ZERO).build()
     )
     protected val name = LeaseName("orders")
     protected val session = SessionId("s1")

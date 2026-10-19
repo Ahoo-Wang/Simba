@@ -98,9 +98,9 @@ class JavaInteropTest {
             term.ensureValid();
             term.ensureValid(Duration.ZERO);
             election.stop().toCompletableFuture().get(5, TimeUnit.SECONDS);
-            assertThrows(LeaseExpiredException.class, term::ensureValid);
+            assertThrows(TermExpiredException.class, term::ensureValid);
         }
         assertEquals("a", new SessionId("a").getValue());
-        assertEquals(new SimbaConfig(Duration.ofSeconds(15)), new SimbaConfig());
+        assertEquals(SimbaConfig.builder().leaseDuration(Duration.ofSeconds(15)).build(), SimbaConfig.builder().build());
     }
 }
