@@ -20,6 +20,9 @@ testImplementation("me.ahoo.simba:simba-testing")
 testImplementation("me.ahoo.simba:simba-tck")
 ```
 
+The examples use FluentAssert's `.assert()` (`me.ahoo.test:fluent-assert-core`, brought in by `simba-tck`); with
+`simba-testing` alone, add it or use any assertion library.
+
 Do not mock `Simba`, `Election` or `Term` when the in-memory backend can drive the real engine.
 
 ## In-Memory Backend
@@ -95,4 +98,3 @@ Every test uses fresh names, so the store can be shared.
   throws.
 - Simba's own engine changes must keep `SimulationSpec` green; replay with
   `./gradlew simba-testing:test -Psimba.simulation.seed=N`.
-- Assertions in new tests use FluentAssert `.assert()`.

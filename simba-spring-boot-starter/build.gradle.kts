@@ -10,6 +10,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+description = "Spring Boot 4 starter for Simba: the Simba bean, backend auto-configuration, @SimbaScheduled, @SimbaPartitioned, metrics, Actuator endpoint and health"
+
 plugins {
     alias(libs.plugins.kotlin.spring)
     kotlin("kapt")

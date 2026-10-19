@@ -5,7 +5,8 @@ description: 把 Simba 加入 Spring Boot 或普通 JVM 应用，接入一个后
 
 # 快速开始
 
-Simba 5 需要 Java 21 或更高版本（任务和后端调用运行在虚拟线程上）。
+Simba 5 需要 Java 21 或更高版本（任务和后端调用运行在虚拟线程上）。starter 需要 Spring Boot 4（4.1 或更高版本）；
+各库按 Kotlin 2.2 或更高版本编译。
 
 ## 依赖 {#dependencies}
 
@@ -45,8 +46,9 @@ implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
 
 :::
 
-`simba-bom` 统一所有 Simba 模块的版本。不使用 Spring 时，依赖 `simba-core` 加一个后端模块
-（`simba-jdbc`、`simba-redis` 或 `simba-spring-redis`、`simba-zookeeper`）。
+`simba-bom` 统一所有 Simba 模块的版本。不使用 Spring 时，依赖 `simba-core` 加一个后端模块：`simba-jdbc`、
+`simba-zookeeper`，或者 Redis 用 `simba-spring-redis`（它会带上 `simba-redis`）。单独的 `simba-redis` 只定义了
+`RedisScripting` 端口：只有在你为其他 Redis 客户端自行实现适配器时，才单独使用它。
 
 ## 后端准备 {#backend-setup}
 

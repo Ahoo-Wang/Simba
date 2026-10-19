@@ -11,6 +11,8 @@
  * limitations under the License.
  */
 
+description = "Simba JDBC lease backend for MySQL 8 and PostgreSQL 14+"
+
 dependencies {
     api(project(":simba-core"))
     testImplementation(project(":simba-tck"))
