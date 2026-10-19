@@ -33,6 +33,7 @@ import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -95,15 +96,15 @@ internal class EngineShell(
     private inner class LoopScheduler : Scheduler {
         override fun nanoTime(): Long = ticker.nanoTime()
 
-        override fun schedule(at: Long, task: Runnable): Cancellable =
-            try {
-                val future = loop.schedule(task, at - ticker.nanoTime(), TimeUnit.NANOSECONDS)
-                Cancellable { future.cancel(false) }
-            } catch (error: RejectedExecutionException) {
-                log.debug(error) { "Simba engine is closed; timer runs at once." }
+        override fun schedule(at: Long, task: Runnable): Cancellable {
+            val future = enqueue(task, at - ticker.nanoTime())
+            if (future == null) {
+                log.debug { "Simba engine is closed; timer runs at once." }
                 task.run()
-                Cancellable.NONE
+                return Cancellable.NONE
             }
+            return Cancellable { future.cancel(false) }
+        }
     }
 
     /**
@@ -182,12 +183,18 @@ internal class EngineShell(
     }
 
     /** Runs [action] on the loop without counting it as handled. */
-    private fun submit(action: () -> Unit): Boolean =
+    private fun submit(action: () -> Unit): Boolean = enqueue(action, 0) != null
+
+    /**
+     * Queues [task] on the loop after [delayNanos]; `null` when the loop no longer takes tasks. A task racing the
+     * loop's termination is not rejected but silently cancelled by `ScheduledThreadPoolExecutor`, so a cancelled
+     * future counts as not queued: callers then complete what they would otherwise wait for.
+     */
+    private fun enqueue(task: Runnable, delayNanos: Long): ScheduledFuture<*>? =
         try {
-            loop.execute(action)
-            true
+            loop.schedule(task, delayNanos, TimeUnit.NANOSECONDS).takeUnless { it.isCancelled }
         } catch (_: RejectedExecutionException) {
-            false
+            null
         }
 
     /** Elections, dispatchers and groups kept by the engine; for tests of bounded state. */
@@ -342,17 +349,19 @@ internal class EngineShell(
 
     /** Runs [action] on the loop; `false` when the loop is already shut down. */
     private fun onLoop(action: () -> Unit): Boolean {
-        try {
-            loop.execute {
+        val queued = enqueue(
+            {
                 handled.incrementAndGet()
                 try {
                     action()
                 } catch (error: Throwable) {
                     log.error(error) { "Simba engine failed to handle an event." }
                 }
-            }
-        } catch (error: RejectedExecutionException) {
-            log.debug(error) { "Simba engine is closed; event dropped." }
+            },
+            0,
+        )
+        if (queued == null) {
+            log.debug { "Simba engine is closed; event dropped." }
             return false
         }
         return true

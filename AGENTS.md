@@ -188,7 +188,11 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
 
 - **Engine:** change `step()` and cover it with `EngineTest`-style table tests (events in, effects out); keep
   `SimulationSpec` (I1–I5 over 10⁴ seeds) green. Threaded-client tests run on virtual time: `VirtualScheduler`, direct
-  I/O and callback executors, `awaitIdle()` between timers (see `VirtualSimba`); never sleep.
+  I/O and callback executors, `awaitIdle()` between timers (see `VirtualSimba`); never sleep. Work runs on real
+  threads that `awaitIdle()` does not cover: wait for the work to start before stopping it (work revoked before it
+  starts never runs), start contenders one at a time when a test needs a particular winner, and keep session ids
+  deterministic (`VirtualSimba` uses `s1`, `s2`, …) wherever partition assignment matters. Repeat a new threaded
+  test a few hundred times before merging.
 - **New backend:** implement `LeaseBackend` and extend `LeaseBackendSpec`; a backend with an injectable clock
   overrides `clock`, otherwise time-based tests poll until the backend's own lease ran out. Add a starter
   auto-configuration, a `SimbaBackend` entry and an example backend.
