@@ -13,6 +13,8 @@
 
 package me.ahoo.simba
 
+import me.ahoo.simba.engine.EngineConfig
+import me.ahoo.simba.engine.EngineShell
 import me.ahoo.simba.spi.AcquireResult
 import me.ahoo.simba.spi.KeepAliveResult
 import me.ahoo.simba.spi.LeaseBackend
@@ -131,6 +133,40 @@ class SimbaShellTest {
         assertThrows<IllegalStateException> { client.election("late") }
         assertThrows<IllegalStateException> { election.start(NoopListener) }
         election.stop().toCompletableFuture().isDone.assert().isTrue()
+    }
+
+    @Test
+    fun `the shell never swaps the listener of a started election and completes a step-down after close`() {
+        val shell = EngineShell(
+            backend = GrantingBackend(),
+            config = EngineConfig.of(SimbaConfig()),
+            ticker = me.ahoo.simba.spi.Ticker.SYSTEM,
+            ioExecutor = Runnable::run,
+            callbackExecutor = Runnable::run,
+            eventListeners = emptyList(),
+            seed = 1,
+        )
+        shell.boot()
+        val first = LinkedBlockingQueue<Term>()
+        val second = LinkedBlockingQueue<Term>()
+        val name = LeaseName("guarded")
+        shell.start(name, recording(first))
+        val probe = java.util.concurrent.CompletableFuture<Void>()
+        shell.start(name, recording(second), probe = probe)
+        probe.get(WAIT, TimeUnit.SECONDS)
+        first.poll(WAIT, TimeUnit.SECONDS).assert().isNotNull()
+        second.isEmpty().assert().isTrue()
+
+        shell.close().get(WAIT, TimeUnit.SECONDS)
+        shell.stepDown(name, 0).get(WAIT, TimeUnit.SECONDS)
+    }
+
+    private fun recording(elected: LinkedBlockingQueue<Term>) = object : LeadershipListener {
+        override fun onElected(term: Term) {
+            elected += term
+        }
+
+        override fun onRevoked(term: Term, reason: RevokeReason) = Unit
     }
 
     private object NoopListener : LeadershipListener {

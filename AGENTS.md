@@ -57,6 +57,9 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   `DistributedLock`, `LockTerm`), `me.ahoo.simba.partition` (`PartitionGroup`, `GroupTask`, `PartitionAssignment`),
   `me.ahoo.simba.event` (`SimbaEvent`, `SimbaEventListener`, `SimbaSnapshot`), `me.ahoo.simba.spi` (`LeaseBackend`,
   `LeaseName`, `SessionId`, results), `me.ahoo.simba.engine` (`@InternalSimbaApi`, opt-in, not public API).
+- The public API and SPI must stay usable from Java: no value classes in signatures (they mangle member names; check
+  with `javap`), Kotlin default arguments get an overload or builder (`SimbaConfig.builder()`,
+  `Term.ensureValid()`). `JavaInteropTest` implements `LeaseBackend` in Java.
 - `simba-redis` holds the Redis backend and its Lua scripts behind the driver-neutral `RedisScripting` port; it must
   not depend on Spring. `simba-spring-redis` only adapts Spring Data Redis (`SpringRedisScripting`).
 - `simba-tck`: `LeaseBackendSpec` every backend must pass, and `FencingSpec`, the kit users run against their own
@@ -89,8 +92,9 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   only with a token above every token the session released for that name. A term is revoked before its lease is
   released; releases carry the token, so a late one is a no-op.
 - `Term.isValid` / `remaining()` are pure functions of the monotonic clock and the session's volatile deadline (no
-  watchdog thread); a revoked term never becomes valid again. They are hints to start a step, never a substitute for
-  the fencing check.
+  watchdog thread); a revoked term never becomes valid again, and a keep-alive reply arriving after the local
+  deadline expires the session (`DEADLINE_PASSED`) instead of extending it. They are hints to start a step, never a
+  substitute for the fencing check. Monotonic instants are compared by difference, never with `maxOf`.
 - Keep-alive replies list the leases the session owns: a term adopted before the request but missing from the reply
   is revoked (`TAKEN_OVER`); an owned lease nobody holds or is acquiring is released.
 - Handover (ADR 0010 contract 3): an election started with work (`runWhileLeader`, `schedule`, groups) keeps the
@@ -108,15 +112,22 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
 - Work runs once per term on a task of the work executor (virtual threads), interrupted on revocation; failures
   become `SimbaEvent.WorkCompleted` and never touch the election. Schedules loop on that one task and call
   `ensureValid` before each run.
+- Names are claimed per client under one lifecycle lock: claim-and-start and remove-and-stop are atomic, so the loop
+  sees every stop before the next start of the name, and the shell never swaps the listener of a started election. A
+  `LeaderTask` or `LockTerm` stops only its own run (closing it again never touches a later run of the name).
 - `lock(name)`: one holder per name per client; a lock term lost other than by release is released for good, not
-  re-acquired.
+  re-acquired, but `acquire(timeout)` keeps contending until its timeout when the term it won ended before it
+  returned. Timers that are no longer needed (lock deadlines, schedule wake-ups, call timeouts) are cancelled.
 - Groups: the engine joins the group with every session and publishes member views (`Effect.Members`); each node runs
-  the partitions `PartitionAssignment` gives it over the session ids and hands the others over.
+  the partitions `PartitionAssignment` gives it over the session ids and hands the others over. Leaving while a join
+  is in flight sends the leave once the join answers (even a failed one); a failed leave retries; the membership of
+  an ended session ends with it. `GroupTask.stop()` also waits for partitions still handing over.
 - `SimbaEventListener` failures are logged and ignored; events are published from the loop thread.
 
 ### Observability
 - `Simba.snapshot()` is read on the loop: session id, status (`OPENING`, `LIVE`, `SUSPENDED`, `CLOSED`), `validFor`,
-  `notLiveFor`, and per election status, token and remaining. `healthy` = not live for at most `leaseDuration`; the
+  `notLiveFor`, and per election status, token, remaining and `kind` (`ElectionKind`: `ELECTION`, `LOCK`, `GROUP`,
+  also on `Elected` / `Revoked`). Close publishes `SessionClosed` once. `healthy` = not live for at most `leaseDuration`; the
   starter's health indicator is exactly that rule.
 - Micrometer (starter): `simba.session.renew` (timer), `simba.session.state` (gauge per `state`),
   `simba.leadership` (gauge per `name`, removed when a term of the name ends `STOPPED`, so released locks and stopped
@@ -124,7 +135,7 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   `name`, `outcome`). Never tag a meter with a name that is not bounded by the application's code.
 
 ### Wire contracts
-- Lease names (`LeaseName`): 1–128 characters of `[A-Za-z0-9._:-]`. Partition `p` of group `g` is the lease
+- Lease names (`LeaseName`): 1–128 characters of `[A-Za-z0-9._:-]`, not `.` or `..`. Partition `p` of group `g` is the lease
   `{g}.{p}`; `PartitionAssignment.weight` (FNV-1a 64 of `"$partition@$member"` mixed with SplitMix64, members = session
   ids) must stay identical across versions.
 - JDBC (`JdbcLeaseBackend` + `Dialect`): tables `simba_session`, `simba_lease`, `simba_member`; every time comparison

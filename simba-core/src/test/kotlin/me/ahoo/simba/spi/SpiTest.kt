@@ -30,6 +30,12 @@ class SpiTest {
         assertThrows<IllegalArgumentException> { LeaseName("x".repeat(LeaseName.MAX_LENGTH + 1)) }
         assertThrows<IllegalArgumentException> { LeaseName("a/b") }
         assertThrows<IllegalArgumentException> { LeaseName("{a}") }
+        assertThrows<IllegalArgumentException> { LeaseName(".") }
+        assertThrows<IllegalArgumentException> { LeaseName("..") }
+        LeaseName("...").value.assert().isEqualTo("...")
+        LeaseName("a").assert().isEqualTo(LeaseName("a"))
+        LeaseName("a").hashCode().assert().isEqualTo(LeaseName("a").hashCode())
+        (LeaseName("a") as Any).assert().isNotEqualTo("a")
     }
 
     @Test
@@ -39,6 +45,10 @@ class SpiTest {
         (id == SessionId.random()).assert().isFalse()
         id.toString().assert().isEqualTo(id.value)
         assertThrows<IllegalArgumentException> { SessionId("") }
+        SessionId("a").assert().isEqualTo(SessionId("a"))
+        SessionId("a").hashCode().assert().isEqualTo(SessionId("a").hashCode())
+        (SessionId("a") < SessionId("b")).assert().isTrue()
+        (SessionId("a") as Any).assert().isNotEqualTo("a")
     }
 
     @Test

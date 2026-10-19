@@ -28,7 +28,7 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 
 | Method | Behavior |
 |---|---|
-| `acquire(timeout)` | Waits up to `timeout` (on the client's clock) for a term; throws `LockTimeoutException` when none was won in time. Interrupting the caller abandons the attempt and rethrows `InterruptedException`. |
+| `acquire(timeout)` | Waits up to `timeout` (on the client's clock) for a term; throws `LockTimeoutException` when none was won in time. A term that ends right after it was won does not end the wait: the lock contends again until the timeout. Interrupting the caller abandons the attempt and rethrows `InterruptedException`. |
 | `tryAcquire()` | One attempt: the term when this client wins the first answered attempt; `null` when another session or this client holds the lease, or when no attempt is answered within one lease duration (backend unreachable). |
 
 Within one client a name has **at most one holder**: a second `acquire` of the same name waits until the first is

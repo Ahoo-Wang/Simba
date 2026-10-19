@@ -17,13 +17,18 @@ import java.security.SecureRandom
 
 /**
  * Identity of one backend session incarnation. Never reused: an expired session is never revived, a new one gets a
- * new id.
+ * new id. An immutable value with equality by [value]; a plain class so that Java can use it.
  */
-@JvmInline
-value class SessionId(val value: String) {
+class SessionId(val value: String) : Comparable<SessionId> {
     init {
         require(value.isNotEmpty()) { "Session id must not be empty." }
     }
+
+    override fun compareTo(other: SessionId): Int = value.compareTo(other.value)
+
+    override fun equals(other: Any?): Boolean = other is SessionId && value == other.value
+
+    override fun hashCode(): Int = value.hashCode()
 
     override fun toString(): String = value
 
@@ -31,6 +36,7 @@ value class SessionId(val value: String) {
         private val random = SecureRandom()
 
         /** A random 128-bit id as 32 lowercase hex characters. */
+        @JvmStatic
         fun random(): SessionId {
             val bytes = ByteArray(16)
             random.nextBytes(bytes)

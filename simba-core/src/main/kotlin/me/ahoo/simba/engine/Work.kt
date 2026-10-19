@@ -147,40 +147,46 @@ internal class ScheduleBody(
 ) : TermBody {
     override fun run(term: EngineTerm, electedAt: Long): SimbaEvent? {
         var at = electedAt + schedule.initialDelay.toNanos()
-        var wake = wakeAt(at)
-        while (await(term, wake)) {
-            try {
-                term.ensureValid()
-            } catch (error: LeaseExpiredException) {
-                workLog.debug(error) { "Schedule of [${term.name}] term [${term.token}] ends with its term." }
-                return null
+        var wake = Wake(at)
+        try {
+            while (await(term, wake.future)) {
+                try {
+                    term.ensureValid()
+                } catch (error: LeaseExpiredException) {
+                    workLog.debug(error) { "Schedule of [${term.name}] term [${term.token}] ends with its term." }
+                    return null
+                }
+                val begin = ticker.nanoTime()
+                val error = try {
+                    work.run(term)
+                    null
+                } catch (error: Exception) {
+                    error
+                }
+                val end = ticker.nanoTime()
+                at = schedule.next(at, end)
+                wake = Wake(at)
+                shell.publish(completed(term, error, end - begin))
+                if (error is InterruptedException || Thread.currentThread().isInterrupted) {
+                    return null
+                }
             }
-            val begin = ticker.nanoTime()
-            val error = try {
-                work.run(term)
-                null
-            } catch (error: Exception) {
-                error
-            }
-            val end = ticker.nanoTime()
-            at = schedule.next(at, end)
-            wake = wakeAt(at)
-            shell.publish(completed(term, error, end - begin))
-            if (error is InterruptedException || Thread.currentThread().isInterrupted) {
-                return null
-            }
+            return null
+        } finally {
+            // The loop ended with its term: drop the next wake-up instead of leaving it on the loop.
+            wake.timer.cancel()
         }
-        return null
     }
 
-    private fun wakeAt(at: Long): CompletableFuture<Void> {
-        val wake = CompletableFuture<Void>()
-        if (at - ticker.nanoTime() <= 0) {
-            wake.complete(null)
+    /** The wake-up at [at]: complete at once when due, otherwise a timer that can be cancelled. */
+    private inner class Wake(at: Long) {
+        val future = CompletableFuture<Void>()
+        val timer: Cancellable = if (at - ticker.nanoTime() <= 0) {
+            future.complete(null)
+            Cancellable.NONE
         } else {
-            shell.schedule(at) { wake.complete(null) }
+            shell.schedule(at) { future.complete(null) }
         }
-        return wake
     }
 
     /** Waits for [wake] or the end of the term; `false` once the term was revoked or the thread interrupted. */

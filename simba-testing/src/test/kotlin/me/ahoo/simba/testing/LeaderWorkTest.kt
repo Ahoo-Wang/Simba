@@ -149,6 +149,8 @@ class LeaderWorkTest {
         val task = first.election("shared").runWhileLeader(executor) { term -> terms += term }
         second.election("shared").runWhileLeader { term -> terms += term }
         val one = terms.next()
+        // Let the second client's first attempt answer, so the release hint finds it idle.
+        simba.settle()
         task.close()
         simba.settle()
         val two = terms.next()

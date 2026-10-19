@@ -15,6 +15,7 @@ package me.ahoo.simba.engine
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.LeadershipListener
+import me.ahoo.simba.event.ElectionKind
 import me.ahoo.simba.event.ElectionSnapshot
 import me.ahoo.simba.event.ElectionStatus
 import me.ahoo.simba.event.SessionSnapshot
@@ -94,14 +95,15 @@ internal class EngineShell(
     private inner class LoopScheduler : Scheduler {
         override fun nanoTime(): Long = ticker.nanoTime()
 
-        override fun schedule(at: Long, task: Runnable) {
+        override fun schedule(at: Long, task: Runnable): Cancellable =
             try {
-                loop.schedule(task, at - ticker.nanoTime(), TimeUnit.NANOSECONDS)
+                val future = loop.schedule(task, at - ticker.nanoTime(), TimeUnit.NANOSECONDS)
+                Cancellable { future.cancel(false) }
             } catch (error: RejectedExecutionException) {
                 log.debug(error) { "Simba engine is closed; timer runs at once." }
                 task.run()
+                Cancellable.NONE
             }
-        }
     }
 
     /**
@@ -113,13 +115,20 @@ internal class EngineShell(
         listener: LeadershipListener,
         work: Boolean = false,
         probe: CompletableFuture<Void>? = null,
+        kind: ElectionKind = ElectionKind.ELECTION,
     ) {
         onLoop {
             val dispatcher = dispatcher(name)
+            if (dispatcher.active) {
+                // Never swap the listener of a running election: its callbacks would reach the wrong listener.
+                log.warn { "Election [$name] is already started; start ignored." }
+                probe?.complete(null)
+                return@onLoop
+            }
             dispatcher.listener = listener
             dispatcher.active = true
             dispatcher.starts++
-            handle(Event.Start(name, work, probe))
+            handle(Event.Start(name, work, probe, kind))
         }
     }
 
@@ -152,9 +161,7 @@ internal class EngineShell(
     }
 
     /** Runs [task] once the ticker reaches [at]; at once when the engine is closed. */
-    fun schedule(at: Long, task: Runnable) {
-        timers.schedule(at, task)
-    }
+    fun schedule(at: Long, task: Runnable): Cancellable = timers.schedule(at, task)
 
     /**
      * Completes, with the number of loop tasks handled so far, once the loop has nothing queued. Meaningful only with
@@ -233,17 +240,19 @@ internal class EngineShell(
             },
         )
         val elections = state.elections.entries.sortedBy { it.key.value }.map { (name, election) ->
+            val kind = state.kinds[name] ?: ElectionKind.ELECTION
             when (election) {
-                is ElectionState.Candidate -> ElectionSnapshot(name, ElectionStatus.CANDIDATE, 0, Duration.ZERO)
-                is ElectionState.Cooldown -> ElectionSnapshot(name, ElectionStatus.COOLDOWN, 0, Duration.ZERO)
+                is ElectionState.Candidate -> ElectionSnapshot(name, ElectionStatus.CANDIDATE, 0, Duration.ZERO, kind)
+                is ElectionState.Cooldown -> ElectionSnapshot(name, ElectionStatus.COOLDOWN, 0, Duration.ZERO, kind)
                 is ElectionState.Handover ->
-                    ElectionSnapshot(name, ElectionStatus.HANDOVER, election.token, Duration.ZERO)
+                    ElectionSnapshot(name, ElectionStatus.HANDOVER, election.token, Duration.ZERO, kind)
 
                 is ElectionState.Leader -> ElectionSnapshot(
                     name,
                     ElectionStatus.LEADER,
                     election.token,
                     terms.term(election.term)?.remaining() ?: Duration.ZERO,
+                    kind,
                 )
             }
         }
@@ -295,8 +304,13 @@ internal class EngineShell(
     internal fun dispatcherCount(): CompletableFuture<Int> =
         CompletableFuture<Int>().also { count -> onLoop { count.complete(dispatchers.size) } }
 
+    /** Steps down; completes at once when the loop is already shut down, like [stop]. */
     fun stepDown(name: LeaseName, cooldownNanos: Long): CompletableFuture<Void> =
-        CompletableFuture<Void>().also { post(Event.StepDown(name, cooldownNanos, it)) }
+        CompletableFuture<Void>().also { done ->
+            if (!onLoop { handle(Event.StepDown(name, cooldownNanos, done)) }) {
+                done.complete(null)
+            }
+        }
 
     /** Revokes every term, closes the session, waits for pending callbacks, then stops the loop. */
     fun close(): CompletableFuture<Void> {
@@ -398,13 +412,18 @@ internal class EngineShell(
 
     private fun call(effect: Effect.Call) {
         val replied = AtomicBoolean(false)
+        var timeout = Cancellable.NONE
         fun reply(result: BackendResult) {
             if (replied.compareAndSet(false, true)) {
+                timeout.cancel()
                 post(Event.Reply(effect.requestId, result))
             }
         }
-        timers.schedule(ticker.nanoTime() + config.renewInterval) {
+        timeout = timers.schedule(ticker.nanoTime() + config.renewInterval) {
             reply(BackendResult.Failed(TimeoutException("${effect.request} timed out.")))
+        }
+        if (replied.get()) {
+            timeout.cancel()
         }
         try {
             ioExecutor.execute { reply(backend.execute(effect.request)) }

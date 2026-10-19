@@ -32,7 +32,8 @@ description: Simba 5 的公共类型及其契约——Simba、Election、Term、
 
 `data class SimbaConfig(leaseDuration = 15s, renewInterval = leaseDuration / 3, drift = 0.01, margin = 50ms,
 retryJitter = renewInterval / 2, minBackoff = 100ms)`。构造时校验 `renewInterval × 2 ≤ leaseDuration` 以及
-`leaseDuration × (1 − drift) − margin > renewInterval`。参阅 [时间参数](/zh/guide/correctness#timing)。
+`leaseDuration × (1 − drift) − margin > renewInterval`。在 Java 中使用 `SimbaConfig.builder()`（未设置的值保持默认，
+派生值随已设置的值计算）或重载的构造器。参阅 [时间参数](/zh/guide/correctness#timing)。
 
 ## 选举 — `me.ahoo.simba` {#elections-me-ahoo-simba}
 
@@ -80,7 +81,7 @@ interface LeadershipListener {
 | `token: Long` | Fencing token：`> 0`，任期内不变，同一名称的各任期之间严格递增 |
 | `isValid: Boolean` | 未被撤销，且会话的本地截止时刻尚未过去 |
 | `remaining(): Duration` | 距本地截止时刻的剩余时间；任期结束后为 `ZERO` |
-| `ensureValid(minRemaining = ZERO)` | 除非有效期超过 `minRemaining`，否则抛出 `LeaseExpiredException` |
+| `ensureValid(minRemaining)`、`ensureValid()` | 除非有效期超过 `minRemaining`（无参数时为 `ZERO`），否则抛出 `LeaseExpiredException` |
 | `revoked: CompletionStage<RevokeReason>` | 在任期被撤销时完成，且恰好完成一次 |
 
 ### `RevokeReason` {#revokereason}
@@ -112,11 +113,12 @@ interface LeadershipListener {
 | 类型 | 成员 |
 |---|---|
 | `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`；异常会被记录并忽略 |
-| `SimbaEvent` | `SessionOpened`、`SessionRenewed`、`SessionSuspended`、`SessionExpired`、`Elected`、`Revoked`、`AcquireFailed`、`WorkCompleted` |
+| `SimbaEvent` | `SessionOpened`、`SessionRenewed`、`SessionSuspended`、`SessionExpired`、`SessionClosed`、`Elected`、`Revoked`、`AcquireFailed`、`WorkCompleted` |
+| `ElectionKind` | `ELECTION`、`LOCK`、`GROUP`：选举由哪个 API 启动（见 `Elected`、`Revoked` 和 `ElectionSnapshot`） |
 | `WorkOutcome` | `COMPLETED`、`FAILED`、`CANCELLED` |
 | `SimbaSnapshot` | `session: SessionSnapshot`、`elections: List<ElectionSnapshot>`、`leaseDuration`、`healthy` |
 | `SessionSnapshot` | `id`、`status`（`OPENING`、`LIVE`、`SUSPENDED`、`CLOSED`）、`validFor`、`notLiveFor` |
-| `ElectionSnapshot` | `name`、`status`（`CANDIDATE`、`LEADER`、`COOLDOWN`、`HANDOVER`）、`token`、`remaining` |
+| `ElectionSnapshot` | `name`、`status`（`CANDIDATE`、`LEADER`、`COOLDOWN`、`HANDOVER`）、`token`、`remaining`、`kind` |
 
 参阅 [可观测性](/zh/guide/observability)。
 
@@ -147,7 +149,7 @@ interface LeaseBackend : AutoCloseable {
 - `release` 只释放会话仍持有且 token 完全一致的租约，因此陈旧的释放是空操作；
 - 提示（hint）只起加速作用；丢失提示从不影响正确性。
 
-值类型：`LeaseName`（1–128 个 `[A-Za-z0-9._:-]` 字符）、`SessionId`（永不复用）、`Ticker`（单调纳秒）。实现：`JdbcLeaseBackend`、
+值类型：`LeaseName`（1–128 个 `[A-Za-z0-9._:-]` 字符，不能是 `.` 或 `..`）、`SessionId`（永不复用）——两者都是按值比较的普通不可变类，可在 Java 中使用——以及 `Ticker`（单调纳秒）。实现：`JdbcLeaseBackend`、
 `RedisLeaseBackend`、`ZookeeperLeaseBackend`、`InMemoryLeaseBackend`；参阅 [后端](/zh/guide/backends)。
 
 ## Spring Boot — `me.ahoo.simba.spring.boot.starter` {#spring-boot-me-ahoo-simba-spring-boot-starter}

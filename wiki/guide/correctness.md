@@ -55,12 +55,13 @@ deadline = sentAt + remaining × (1 − drift) − margin
 
 `sentAt` is when the keep-alive was **sent**, not when the reply arrived, so a slow reply only shortens the deadline.
 As long as the two clocks run at rates within `1 ± drift` of each other, the local deadline passes before the backend
-can expire the session and give its leases to someone else.
+can expire the session and give its leases to someone else. Once the local deadline has passed, a renewal that arrives
+late never extends it: the session ends (`DEADLINE_PASSED`) and its terms stay ended.
 
 ## Leases, Terms and Tokens
 
-A **lease** is a backend record `name → (session, token)`. Lease names are 1–128 characters of `[A-Za-z0-9._:-]`
-on every backend, so a name means the same as a Redis key, a Zookeeper path and a JDBC column.
+A **lease** is a backend record `name → (session, token)`. Lease names are 1–128 characters of `[A-Za-z0-9._:-]`,
+other than `.` and `..`, on every backend, so a name means the same as a Redis key, a Zookeeper path and a JDBC column.
 
 A **term** is one period during which this node owns a lease. Winning the same name twice gives two different
 `Term` objects. A term carries:
