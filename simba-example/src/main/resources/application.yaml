@@ -19,12 +19,6 @@ spring:
     redis:
       url: redis://localhost:6379
 
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,simba
-
 logging:
   level:
     me.ahoo.simba: debug

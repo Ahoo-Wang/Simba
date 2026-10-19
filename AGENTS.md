@@ -47,9 +47,14 @@ simba-coroutines (suspending lock calls, withLock, SimbaEventFlow, Term.awaitRev
 simba-example (per-backend demo app), simba-bom, simba-dependencies, code-coverage-report
 ```
 
-- `simba-dependencies` is published as every library's platform: only the Spring Boot BOM and runtime constraints
-  (kotlin-logging, Curator, kotlinx-coroutines). Test and build tool versions (MockK, Hamcrest, Testcontainers, detekt) come from the
-  version catalog in the root build and are not transitive.
+- `simba-dependencies` pins versions at build time only (Spring Boot BOM, kotlin-logging, Curator,
+  kotlinx-coroutines): library modules take it through a non-published `versionPlatform` configuration, and their POM
+  / module metadata carry the resolved versions (`versionMapping`), so consumers get no Spring Boot constraints. Test and build tool versions (MockK,
+  Hamcrest, Testcontainers, detekt) come from the version catalog in the root build.
+- Libraries are compiled for Kotlin API / language / stdlib 2.2 (`KOTLIN_BASELINE`), whatever compiler builds them.
+  Published jars carry `Automatic-Module-Name` (`me.ahoo.simba.<module>`), `META-INF/LICENSE`, and the Dokka HTML in
+  the javadoc jar; POM name and description come from each module's `description`. `-PuseMavenLocal` adds
+  `mavenLocal()` after Maven Central.
 - `simba-example` tests start the app with `SpringApplication` on the backend of `-PexampleBackend` (MySQL or Redis
   through Testcontainers, embedded Zookeeper).
 

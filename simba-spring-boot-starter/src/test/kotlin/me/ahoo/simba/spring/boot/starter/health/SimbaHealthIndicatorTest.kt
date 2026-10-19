@@ -14,6 +14,7 @@
 package me.ahoo.simba.spring.boot.starter.health
 
 import me.ahoo.simba.Simba
+import me.ahoo.simba.event.ElectionKind
 import me.ahoo.simba.event.ElectionSnapshot
 import me.ahoo.simba.event.ElectionStatus
 import me.ahoo.simba.event.SessionSnapshot
@@ -39,7 +40,16 @@ class SimbaHealthIndicatorTest {
     private fun snapshot(status: SessionStatus, notLiveFor: Duration) =
         SimbaSnapshot(
             SessionSnapshot(session, status, Duration.ofSeconds(10), notLiveFor),
-            listOf(ElectionSnapshot(LeaseName("orders"), ElectionStatus.LEADER, 3, Duration.ofSeconds(10))),
+            listOf(
+                ElectionSnapshot(LeaseName("orders"), ElectionStatus.LEADER, 3, Duration.ofSeconds(10)),
+                ElectionSnapshot(
+                    LeaseName("invoice-42"),
+                    ElectionStatus.LEADER,
+                    5,
+                    Duration.ofSeconds(10),
+                    ElectionKind.LOCK,
+                ),
+            ),
             leaseDuration,
         )
 
@@ -50,6 +60,7 @@ class SimbaHealthIndicatorTest {
         health.details["status"].assert().isEqualTo("LIVE")
         health.details["session"].assert().isEqualTo(session.value)
         health.details["leading"].assert().isEqualTo(listOf("orders"))
+        health.details["locksHeld"].assert().isEqualTo(1)
     }
 
     @Test

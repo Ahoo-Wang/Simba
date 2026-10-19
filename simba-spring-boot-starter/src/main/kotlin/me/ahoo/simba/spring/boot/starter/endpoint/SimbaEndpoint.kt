@@ -61,7 +61,14 @@ class SimbaEndpoint(private val simba: Simba) {
     )
 
     /** @param token the fencing token of the current term, `0` without one. */
-    data class ElectionDescriptor(val name: String, val status: String, val token: Long, val remainingMillis: Long) {
+    data class ElectionDescriptor(
+        val name: String,
+        val status: String,
+        val token: Long,
+        val remainingMillis: Long,
+        /** `ELECTION`, `LOCK` or `GROUP` (a partition): which API started it. */
+        val kind: String,
+    ) {
         companion object {
             fun of(election: ElectionSnapshot): ElectionDescriptor =
                 ElectionDescriptor(
@@ -69,6 +76,7 @@ class SimbaEndpoint(private val simba: Simba) {
                     election.status.name,
                     election.token,
                     election.remaining.toMillis(),
+                    election.kind.name,
                 )
         }
     }

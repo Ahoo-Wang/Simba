@@ -71,6 +71,15 @@ start the 5.x tokens above it (for JDBC, by inserting `simba_lease` rows with a 
 | `MutexContendServiceSpec`, `LockSpec`, `MemberRegistrySpec` (`simba-test`) | `LeaseBackendSpec` (`simba-tck`) |
 | `FencingSpec` (`simba-test`) | `FencingSpec` (`simba-tck`) |
 | — | `simba-testing`: `InMemoryLeaseBackend`, `VirtualScheduler`, `Simulation` |
+| `Simba` (the 4.x constants object `SIMBA`, `SIMBA_PREFIX`) | `Simba` is now the client class (`Simba.builder()`); the constants are gone |
+| `MutexRetriever`, `MutexRetrievalService`, `AbstractMutexRetrievalService` (observers) | No equivalent: a node sees only its own terms. Query `simba.snapshot()` for this node's elections, or read the backend's storage (see [Backends](/guide/backends)) to see who holds a lease |
+| `Locker` (interface of `SimbaLocker`) | `DistributedLock` (`simba.lock(name)`), whose `acquire` returns a `LockTerm` |
+| `LeaseConfig` (`ttl`, `transition`) | `SimbaConfig` (`leaseDuration`, `renewInterval`, `drift`, `margin`), one per client |
+| `ContenderIdGenerator` | Removed: the backend issues a `SessionId` per session |
+| `MicrometerContendObserver` | `MicrometerSimbaEventListener` |
+| `SimbaServiceTracker` (Actuator) | Removed: the endpoint reads `simba.snapshot()` |
+| `ScheduledWork` / `PartitionedWork` | `LeaderWork` (`run(term)`) / `PartitionWork` (`run(term, partition)`) |
+| `me.ahoo.simba.core.LeaseExpiredException` | `me.ahoo.simba.LeaseExpiredException`, thrown by `Term.ensureValid` |
 
 Behavior that changed:
 

@@ -11,6 +11,8 @@
  * limitations under the License.
  */
 
+description = "Simba BOM: aligned versions of every Simba module"
+
 val libraryProjects = rootProject.ext.get("libraryProjects") as java.util.LinkedHashSet<*>
 
 dependencies {

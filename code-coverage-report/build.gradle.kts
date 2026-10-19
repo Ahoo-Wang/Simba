@@ -20,6 +20,8 @@ plugins {
 val libraryProjects = rootProject.ext.get("libraryProjects") as Iterable<Project>
 
 dependencies {
+    // The library modules declare versionless dependencies; their versions come from this platform.
+    jacocoAggregation(platform(project(":simba-dependencies")))
     libraryProjects.forEach {
         jacocoAggregation(it)
     }
