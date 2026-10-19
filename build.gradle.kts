@@ -33,7 +33,6 @@ val exampleProjects = setOf(
     project(":simba-example")
 )
 
-val testProject = project(":simba-test")
 val codeCoverageReportProject = project(":code-coverage-report")
 val testJavaVersion: Provider<Int> = providers.gradleProperty("testJavaVersion").map { it.toInt() }.orElse(21)
 val publishProjects = subprojects - exampleProjects - codeCoverageReportProject

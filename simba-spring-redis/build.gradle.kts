@@ -11,12 +11,10 @@
  * limitations under the License.
  */
 
+description = "Spring Data Redis adapter of the Simba Redis lease backend"
+
 dependencies {
-    api(project(":simba-core"))
+    api(project(":simba-redis"))
     api("org.springframework.data:spring-data-redis")
     compileOnly("io.lettuce:lettuce-core")
-    testImplementation(project(":simba-test"))
-    testImplementation(project(":simba-tck"))
-    testImplementation("io.lettuce:lettuce-core")
-    testImplementation("org.testcontainers:testcontainers")
 }
