@@ -11,7 +11,9 @@ Simba 5 是一次重写（[ADR 0010](https://github.com/Ahoo-Wang/Simba/blob/mai
 
 - JDBC 表、Redis 键和 Zookeeper 路径都不同，因此 4.x 节点和 5.x 节点看不到彼此的租约，会同时成为 leader；
 - 配置属性和 Spring bean 都不同；
-- 需要 Java 21。
+- 需要 Java 21，starter 需要 Spring Boot 4.1 或更高版本；
+- Redis 后端被拆分：单独的 `simba-redis` 只定义了 `RedisScripting` 端口，无法运行。请依赖 `simba-spring-redis`
+  （基于 Lettuce 的 Spring Data Redis，它会带上 `simba-redis`），或者为其他客户端自行实现 `RedisScripting`。
 
 因此你无法逐个节点滚动升级。**先停止竞争同一名称的所有节点，再以 5.0 启动它们。** 如果短暂的双重运行会造成危害，请确保第一个
 5.0 节点启动前没有任何 4.x 节点在运行。
@@ -82,6 +84,20 @@ Fencing token 会重新开始：5.x 的 token 来自新的存储，从 `1` 开�
 - **不再推送其他节点的所有权。** 4.x 会把其他节点的获取通知给每个竞争者；5.x 只报告本节点的任期。
 - **Zookeeper 租约与其他后端一样有界限：** `remaining()` 在三种后端上含义相同，`LeaderLatch` 的 FIFO 公平性不复存在。
 - **Leader 任务运行在虚拟线程上**，每个任期一个；不再有每个调度器一个的线程池。
+
+### 已删除的内部类型 {#removed-internals}
+
+以下 4.x 公共类型属于实现细节，5.0 没有可供编码的替代品。请配置一个后端（`JdbcLeaseBackend`、`RedisLeaseBackend`、
+`ZookeeperLeaseBackend`）并改用 `Simba`：
+
+| 模块 | 4.x 类型 | 5.0 |
+|---|---|---|
+| `simba-core` | `AbstractMutexContendService`、`LeaseContendService`、`ContendPeriod`、`ContendExecutors`、`ContendOutcome` | 引擎（内部）；执行器在 `Simba.builder()` 上设置，结果以 `SimbaEvent` 发布 |
+| `simba-core` | `UUIDContenderIdGenerator`、`HostContenderIdGenerator` | 无：后端为每个会话分配一个 `SessionId` |
+| `simba-jdbc` | `JdbcMutexContendService`、`JdbcMutexOwnerRepository`、`JdbcMemberRegistry`、`NotFoundMutexOwnerException` | `JdbcLeaseBackend` |
+| `simba-spring-redis` | `SpringRedisMutexContendService`、`SpringRedisMemberRegistry`、`OwnerEvent` | 基于 `SpringRedisScripting` 的 `RedisLeaseBackend`；由释放提示取代 owner 事件 |
+| `simba-zookeeper` | `ZookeeperMutexContendService`、`ZookeeperMemberRegistry` | `ZookeeperLeaseBackend` |
+| `simba-spring-boot-starter` | `SimbaSpringRedisAutoConfiguration` | `SimbaRedisAutoConfiguration` |
 
 ## 属性对照 {#property-mapping}
 
