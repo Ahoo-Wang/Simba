@@ -76,7 +76,15 @@ create table if not exists simba_member
 
 - 释放不会通知任何人：正常停止后，候选者在下一次尝试（`renewInterval / 2` 加抖动）时接管。
 - 每条语句都有超时；starter 将其设为会话的续约间隔（`simba.jdbc.query-timeout`），超过之后引擎无论如何都会放弃该调用。
+  不使用 Spring 时，`JdbcLeaseBackend` 默认 5 秒（`DEFAULT_QUERY_TIMEOUT`，即默认的续约间隔）；修改续约间隔时，请把它作为
+  `queryTimeout` 传入。
 - 为 Simba 提供一个不会被应用耗尽的连接池：等待连接超过续约间隔的续约会被视为失败。
+- token 和会话过期时间的持久性取决于数据库提交的持久性。切换到异步复制的 MySQL 从库，或提升一个尚未收到最新 WAL 的
+  PostgreSQL 备库，都可能丢失最近的 token 自增和续约，与 [Redis 主从切换](#token-regression-after-a-failover)相同：token
+  可能回退。要在故障切换中保持 fencing 严格，请使用同步复制（MySQL 半同步复制或 Group Replication，PostgreSQL 的
+  `synchronous_commit` 加同步备库）。
+- 租约用数据库服务器的墙钟测量。该时钟发生跳变（NTP step、虚拟机迁移）会让所有租约同时缩短或延长，这不同于
+  `simba.session.drift` 所覆盖的速率漂移；见[故障模式](/zh/guide/correctness#failure-modes)。
 
 ## Redis 7 {#redis-7}
 
@@ -115,7 +123,8 @@ Redis 复制是异步的。当主节点在副本收到最新的 `token` 递增�
 - 设置 `simba.redis.wait-replicas`（构造参数 `waitReplicas`）：只有当这么多副本通过 `WAIT` 确认后，新任期才算数，否则获取失败。
   这会缩小窗口，但不能消除它，并且在 Cluster 上不可用。
 - 启用持久化（AOF），使单节点重启不会重置 token。
-- 当 fencing 必须严格时，使用 JDBC 或 Zookeeper。
+- 当 fencing 必须在故障切换中成立时，使用同步复制的 JDBC 或 Zookeeper（法定人数提交）。
+- 租约用 Redis `TIME` 测量：Redis 主机的时钟跳变会让所有租约同时缩短或延长。
 
 ## Zookeeper {#zookeeper}
 
@@ -150,6 +159,8 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 
 - 请求的会话超时为 `leaseDuration`；集群会将其限制在 `[minSessionTimeout, maxSessionTimeout]` 之内（默认为 2 到 20 个 tick）。
   崩溃后的故障转移需要协商后的超时时长。
+- 写入经法定人数提交，因此 leader 切换不会丢失 token；只有集群数据丢失或从更早的快照恢复时，token 才可能回退。
+  会话超时按服务器的流逝时间计算，因此集群主机的墙钟跳变不会缩短它们。
 - `simba.zookeeper.connection-timeout` 限制打开会话所需的最长时间。
 
 ## 在 Spring Boot 中选择后端 {#selecting-a-backend-in-spring-boot}

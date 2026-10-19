@@ -28,7 +28,7 @@ written twice. Coming from 4.x? See [Migrating to 5.0](https://simba.ahoo.me/gui
 
 ## Installation
 
-Java 21+. Add the Spring Boot starter and **one** backend:
+Java 21+; the starter needs Spring Boot 4 (4.1+). Add the Spring Boot starter and **one** backend:
 
 ```kotlin
 implementation("me.ahoo.simba:simba-spring-boot-starter:${simbaVersion}")

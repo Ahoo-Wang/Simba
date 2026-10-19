@@ -5,9 +5,19 @@ description: Simba 的版本策略、5.x 内部如何升级，以及从 4.x 迁�
 
 # 升级
 
-Simba 遵循 [语义化版本](https://semver.org/lang/zh-CN/)。公共 API（`me.ahoo.simba`、`me.ahoo.simba.partition`、
-`me.ahoo.simba.event`、`me.ahoo.simba.spi`）、`simba.*` 属性、JDBC schema、Redis 键和 Zookeeper 路径的破坏性变更只会出现在主版本中。
-标注了 `@InternalSimbaApi` 的类型（引擎、`Simba.Builder.scheduler`、`Simba.awaitIdle`）不提供这一保证。
+Simba 遵循 [语义化版本](https://semver.org/lang/zh-CN/)。以下内容的破坏性变更只会出现在主版本中：
+
+| 范围 | 包括 |
+|---|---|
+| 核心 API | `me.ahoo.simba`、`me.ahoo.simba.partition`、`me.ahoo.simba.event`、`me.ahoo.simba.spi` 的公共类型 |
+| 后端 | `simba-jdbc`、`simba-redis`、`simba-spring-redis`、`simba-zookeeper` 的公共类（`JdbcLeaseBackend`、`Dialect`、`RedisLeaseBackend`、`RedisScripting`、`SpringRedisScripting`、`ZookeeperLeaseBackend` 等） |
+| Spring Boot starter | 公共类型和注解（`@SimbaScheduled`、`@SimbaPartitioned`、各 `*Properties` 类、`SimbaLifecycle`、`MicrometerSimbaEventListener`、`SimbaEndpoint`、`SimbaHealthIndicator`）、`simba.*` 属性、bean 名称和条件 |
+| 测试套件 | `simba-testing`（`InMemoryLeaseBackend`、`VirtualClock`、`VirtualScheduler`、`Simulation`）和 `simba-tck`（`LeaseBackendSpec`、`FencingSpec`） |
+| 可观测性 | 指标名和标签键、Actuator 端点和健康指示器的 JSON 字段 |
+| 存储 | JDBC schema、Redis 键和消息、Zookeeper 路径 |
+
+次版本可能新增字段、标签、枚举常量和事件：读取 JSON、对 Simba 的枚举和事件做 `when` 判断时请容忍新增。标注了
+`@InternalSimbaApi` 的类型（引擎、`Simba.Builder.scheduler`、`Simba.awaitIdle`）以及所有 `internal` 声明不提供这一保证。
 
 ## 从 4.x 升级 {#from-4-x}
 

@@ -7,7 +7,7 @@ description: Guide for using Simba 5, the JVM leader-election and distributed-lo
 
 Simba gives JVM applications leader election and distributed locks over a backend they already run: MySQL 8 or
 PostgreSQL 14+ (`simba-jdbc`), Redis 7 (`simba-redis` + `simba-spring-redis`) or Zookeeper (`simba-zookeeper`).
-Java 21+. Full docs: https://simba.ahoo.me/.
+Java 21+; the starter needs Spring Boot 4 (4.1+); Kotlin users need Kotlin 2.2+. Full docs: https://simba.ahoo.me/.
 
 ## Model in Five Lines
 
@@ -50,7 +50,7 @@ classpath) once, e.g. via `spring.sql.init.schema-locations`. With several backe
 
 ## Spring Boot
 
-The starter creates one `Simba` bean. Properties:
+The starter (Spring Boot 4.1+) creates one `Simba` bean. Properties:
 
 ```yaml
 simba:
@@ -87,7 +87,7 @@ for longer than the lease). Micrometer: `simba.session.renew`, `simba.session.st
 
 ```kotlin
 val simba = Simba.builder()
-    .backend(JdbcLeaseBackend.mysql(dataSource))          // JdbcLeaseBackend.postgres(...)
+    .backend(JdbcLeaseBackend.mysql(dataSource))          // JdbcLeaseBackend.postgres(...); statement timeout 5 s
     // .backend(RedisLeaseBackend(SpringRedisScripting(connectionFactory)))
     // .backend(ZookeeperLeaseBackend("zk:2181"))
     .config(SimbaConfig(leaseDuration = Duration.ofSeconds(15)))

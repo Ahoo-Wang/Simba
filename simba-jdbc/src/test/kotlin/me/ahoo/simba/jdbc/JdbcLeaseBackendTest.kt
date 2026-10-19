@@ -22,6 +22,11 @@ import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.MethodSource
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Method
+import java.lang.reflect.Proxy
+import java.sql.Connection
+import java.sql.PreparedStatement
 import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
@@ -243,6 +248,58 @@ class JdbcLeaseBackendTest {
                 .isEqualTo(mapOf(name to AcquireResult.HeldBy(session, 1)))
             manualBackend.closeSession(session)
             manual.connection.use { it.autoCommit.assert().isFalse() }
+        }
+    }
+
+    /** [source] with every statement's `setQueryTimeout` argument recorded into [timeouts]. */
+    private fun recordingTimeouts(source: DataSource, timeouts: MutableList<Int>): DataSource {
+        fun <T : Any> proxy(type: Class<T>, target: T, wrap: (Method, Any?) -> Any?): T =
+            type.cast(
+                Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, args ->
+                    if (method.name == "setQueryTimeout") {
+                        timeouts += args[0] as Int
+                    }
+                    try {
+                        wrap(method, method.invoke(target, *(args ?: emptyArray())))
+                    } catch (error: InvocationTargetException) {
+                        throw error.targetException
+                    }
+                }
+            )
+        return proxy(DataSource::class.java, source) { method, result ->
+            if (method.name == "getConnection") {
+                proxy(Connection::class.java, result as Connection) { inner, statement ->
+                    if (inner.name == "prepareStatement") {
+                        proxy(PreparedStatement::class.java, statement as PreparedStatement) { _, value -> value }
+                    } else {
+                        statement
+                    }
+                }
+            } else {
+                result
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("backends")
+    fun `statements time out after the default renew interval unless told otherwise`(backend: JdbcLeaseBackend) {
+        val defaults = ArrayList<Int>()
+        val configured = ArrayList<Int>()
+        val unbounded = ArrayList<Int>()
+
+        JdbcLeaseBackend(recordingTimeouts(backend.dataSource, defaults), backend.dialect).openSession(LEASE)
+        JdbcLeaseBackend(recordingTimeouts(backend.dataSource, configured), backend.dialect, Duration.ofMillis(2500))
+            .openSession(LEASE)
+        JdbcLeaseBackend(recordingTimeouts(backend.dataSource, unbounded), backend.dialect, Duration.ZERO)
+            .openSession(LEASE)
+
+        JdbcLeaseBackend.DEFAULT_QUERY_TIMEOUT.assert().isEqualTo(Duration.ofSeconds(5))
+        defaults.assert().isNotEmpty().containsOnly(5)
+        configured.assert().isNotEmpty().containsOnly(3)
+        unbounded.assert().isNotEmpty().containsOnly(0)
+        assertThrows<IllegalArgumentException> {
+            JdbcLeaseBackend(backend.dataSource, backend.dialect, Duration.ofSeconds(-1))
         }
     }
 

@@ -44,13 +44,16 @@ import javax.sql.DataSource
  * [purgeExpired] removes the rest (sessions of crashed nodes) at most once per [purgeInterval], run after an
  * [openSession] or [keepAlive] of any session.
  *
- * @param queryTimeout per-statement timeout; zero waits indefinitely.
+ * @param queryTimeout per-statement timeout, rounded up to whole seconds (JDBC's unit). Defaults to
+ *   [DEFAULT_QUERY_TIMEOUT], the default session renew interval: the engine gives up on a call after one renew
+ *   interval anyway, and a bounded timeout keeps a stuck statement from holding a connection. Pass the renew interval
+ *   when it differs; zero waits indefinitely.
  * @param purgeInterval least time between two automatic [purgeExpired] runs; zero disables them.
  */
 class JdbcLeaseBackend @JvmOverloads constructor(
     private val dataSource: DataSource,
     val dialect: Dialect,
-    queryTimeout: Duration = Duration.ZERO,
+    queryTimeout: Duration = DEFAULT_QUERY_TIMEOUT,
     val purgeInterval: Duration = DEFAULT_PURGE_INTERVAL,
 ) : LeaseBackend {
     companion object {
@@ -60,6 +63,10 @@ class JdbcLeaseBackend @JvmOverloads constructor(
         private const val FREE = ""
         private const val PURGE_BATCH = 1000
 
+        /** Default per-statement timeout: the default session renew interval (`SimbaConfig`: a third of 15 s). */
+        @JvmField
+        val DEFAULT_QUERY_TIMEOUT: Duration = Duration.ofSeconds(5)
+
         /** Default [purgeInterval]. */
         @JvmField
         val DEFAULT_PURGE_INTERVAL: Duration = Duration.ofMinutes(1)
@@ -67,13 +74,13 @@ class JdbcLeaseBackend @JvmOverloads constructor(
         /** A backend on MySQL 8. */
         @JvmStatic
         @JvmOverloads
-        fun mysql(dataSource: DataSource, queryTimeout: Duration = Duration.ZERO): JdbcLeaseBackend =
+        fun mysql(dataSource: DataSource, queryTimeout: Duration = DEFAULT_QUERY_TIMEOUT): JdbcLeaseBackend =
             JdbcLeaseBackend(dataSource, Dialect.MYSQL, queryTimeout)
 
         /** A backend on PostgreSQL 14+. */
         @JvmStatic
         @JvmOverloads
-        fun postgres(dataSource: DataSource, queryTimeout: Duration = Duration.ZERO): JdbcLeaseBackend =
+        fun postgres(dataSource: DataSource, queryTimeout: Duration = DEFAULT_QUERY_TIMEOUT): JdbcLeaseBackend =
             JdbcLeaseBackend(dataSource, Dialect.POSTGRESQL, queryTimeout)
     }
 

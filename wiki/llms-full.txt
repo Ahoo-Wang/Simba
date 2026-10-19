@@ -80,7 +80,8 @@ candidate attempt. Pick the one you already run; read
 <doc title="Quick Start" path="guide/quick-start.md">
 # Quick Start
 
-Simba 5 needs Java 21 or later (work and backend calls run on virtual threads).
+Simba 5 needs Java 21 or later (work and backend calls run on virtual threads). The starter needs Spring Boot 4
+(4.1 or later); the libraries are compiled for Kotlin 2.2 or later.
 
 ## Dependencies
 
@@ -120,8 +121,10 @@ implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
 
 :::
 
-`simba-bom` aligns the versions of every Simba module. Without Spring, depend on `simba-core` plus a backend module
-(`simba-jdbc`, `simba-redis` or `simba-spring-redis`, `simba-zookeeper`).
+`simba-bom` aligns the versions of every Simba module. Without Spring, depend on `simba-core` plus a backend module:
+`simba-jdbc`, `simba-zookeeper`, or for Redis `simba-spring-redis` (which brings `simba-redis`). `simba-redis` alone
+only defines the `RedisScripting` port: use it without `simba-spring-redis` only with your own adapter for another
+Redis client.
 
 ## Backend Setup
 
@@ -544,6 +547,8 @@ it to move leadership off a node before a deploy or to drain it. `stop()` ends t
 | Keep-alive shows the lease owned by someone else | Term revoked (`TAKEN_OVER`). |
 | Clock rate differs by more than `drift` | The safety argument no longer holds; raise `drift`. |
 | Redis failover loses recent writes | A token can go back; see [Backends](/guide/backends#token-regression-after-a-failover). |
+| Failover to an asynchronous database replica (MySQL replica, PostgreSQL standby promotion) | Like a Redis failover: recent token increments and keep-alives can be lost, so a token can go back. Use synchronous replication when fencing must hold; see [Backends](/guide/backends#operating-notes). |
+| Backend host's clock steps (NTP step, VM migration) | JDBC and Redis measure leases with that clock, so every lease shortens (forward step) or lengthens (backward step) at once. A forward step can expire a holder's lease on the backend while its local deadline has not passed: another node can win a term while the old holder still reads `isValid`. This is not rate drift and `drift` does not cover it; only the fencing token protects. Run the backend hosts with slewing time sync. |
 </doc>
 
 <doc title="Backends" path="guide/backends.md">
@@ -628,9 +633,18 @@ Lease and group names are case-sensitive (binary collations on MySQL, `"C"` on P
 - A release does not notify anyone: after a clean stop, candidates take over at their next attempt
   (`renewInterval / 2` plus jitter).
 - Each statement has a timeout; the starter sets it to the session renew interval (`simba.jdbc.query-timeout`), after
-  which the engine gives up on the call anyway.
+  which the engine gives up on the call anyway. Without Spring, `JdbcLeaseBackend` defaults to 5 s
+  (`DEFAULT_QUERY_TIMEOUT`, the default renew interval); pass your renew interval as `queryTimeout` when you change it.
 - Give Simba a connection pool that is not starved by the application: a keep-alive that waits for a connection
   longer than the renew interval counts as failed.
+- Tokens and session expiries are only as durable as the database's commits. A failover to an asynchronous MySQL
+  replica, or the promotion of a PostgreSQL standby that had not received the latest WAL, can lose recent token
+  increments and keep-alives, exactly like a [Redis failover](#token-regression-after-a-failover): a token can go back.
+  Keep fencing strict across failovers with synchronous replication (MySQL semi-synchronous replication or Group
+  Replication, PostgreSQL `synchronous_commit` with synchronous standbys).
+- Leases are measured with the database server's wall clock. A step of that clock (an NTP step, a VM migration)
+  shortens or lengthens every lease at once, which is not the rate drift that `simba.session.drift` covers; see
+  [Failure Modes](/guide/correctness#failure-modes).
 
 ## Redis 7
 
@@ -678,7 +692,8 @@ accept a write from a node whose term is newer in time but lower in token, or re
   replicas acknowledged it with `WAIT`, otherwise the acquisition fails. This narrows the window; it does not close it,
   and it is not available on a Cluster.
 - Enable persistence (AOF) so a restart of a single node does not reset tokens.
-- When fencing must be strict, use JDBC or Zookeeper.
+- When fencing must hold across failovers, use JDBC on synchronous replication or Zookeeper (quorum commits).
+- Leases are measured with Redis `TIME`: a step of the Redis hosts' clocks shortens or lengthens every lease at once.
 
 ## Zookeeper
 
@@ -719,6 +734,9 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 - The session timeout requested is `leaseDuration`; the ensemble clamps it to `[minSessionTimeout,
   maxSessionTimeout]` (by default 2 to 20 ticks). Failover after a crash takes the negotiated timeout.
 - `simba.zookeeper.connection-timeout` bounds how long opening a session may take.
+- Writes commit through a quorum, so a leader change keeps every token; tokens can only go back if the ensemble's data
+  is lost or restored from an older snapshot. Session timeouts are tracked with the servers' elapsed time, so a wall
+  clock step on an ensemble host does not shorten them.
 
 ## Selecting a Backend in Spring Boot
 
@@ -1068,7 +1086,7 @@ the Micrometer metrics on the events.
 | `session.status` | `OPENING`, `LIVE`, `SUSPENDED` or `CLOSED` |
 | `session.validFor` | Time left before the session's local deadline |
 | `session.notLiveFor` | How long the session has not been `LIVE` (since start, or since it was last live); zero while live |
-| `elections[]` | Every started election (locks, schedules and partitions included): `name`, `status`, `token`, `remaining` |
+| `elections[]` | Every started election (locks, schedules and partitions included): `name`, `status`, `token`, `remaining`, `kind` (`ELECTION`, `LOCK` or `GROUP`: which API started it) |
 | `leaseDuration` | The configured session lease |
 | `healthy` | `notLiveFor ≤ leaseDuration` |
 
@@ -1188,8 +1206,8 @@ management:
     "notLiveForMillis": 0
   },
   "elections": [
-    { "name": "report", "status": "LEADER", "token": 42, "remainingMillis": 13870 },
-    { "name": "billing.3", "status": "CANDIDATE", "token": 0, "remainingMillis": 0 }
+    { "name": "report", "status": "LEADER", "token": 42, "remainingMillis": 13870, "kind": "ELECTION" },
+    { "name": "billing.3", "status": "CANDIDATE", "token": 0, "remainingMillis": 0, "kind": "GROUP" }
   ]
 }
 ```
@@ -1200,7 +1218,8 @@ only this node's view; it does not query who leads elsewhere.
 ## Health Indicator
 
 The `simba` health indicator is `DOWN` once the session has not been live for longer than `leaseDuration`: this node
-can then neither keep nor win a term on any backend. Not leading is healthy.
+can then neither keep nor win a term on any backend. Not leading is healthy. `leading` lists the elections and
+partitions this node leads; locks are only counted (`locksHeld`), because their names come from data.
 
 ```json
 {
@@ -1211,7 +1230,8 @@ can then neither keep nor win a term on any backend. Not leading is healthy.
     "validFor": "13870ms",
     "notLiveFor": "0ms",
     "leaseDuration": "15000ms",
-    "leading": ["report"]
+    "leading": ["report"],
+    "locksHeld": 1
   }
 }
 ```
@@ -1241,6 +1261,9 @@ Two test modules help you test code built on Simba and code Simba depends on:
 testImplementation("me.ahoo.simba:simba-testing:${simbaVersion}")
 testImplementation("me.ahoo.simba:simba-tck:${simbaVersion}")
 ```
+
+The examples assert with [FluentAssert](https://github.com/Ahoo-Wang/FluentAssert) (`.assert()`), which `simba-tck`
+brings in; with `simba-testing` alone, add `me.ahoo.test:fluent-assert-core` or use your own assertion library.
 
 ## In-Memory Backend
 
@@ -1384,10 +1407,21 @@ backends run this spec in Simba's own build; see [Contributing](/contributing/#a
 <doc title="Upgrading" path="guide/upgrading.md">
 # Upgrading
 
-Simba follows [Semantic Versioning](https://semver.org/). Breaking changes of the public API (`me.ahoo.simba`,
-`me.ahoo.simba.partition`, `me.ahoo.simba.event`, `me.ahoo.simba.spi`), the `simba.*` properties, the JDBC schema,
-the Redis keys and the Zookeeper paths only happen in a major version. Types marked `@InternalSimbaApi` (the engine,
-`Simba.Builder.scheduler`, `Simba.awaitIdle`) carry no such guarantee.
+Simba follows [Semantic Versioning](https://semver.org/). Breaking changes of the following only happen in a major
+version:
+
+| Area | Covered |
+|---|---|
+| Core API | Public types of `me.ahoo.simba`, `me.ahoo.simba.partition`, `me.ahoo.simba.event`, `me.ahoo.simba.spi` |
+| Backends | Public classes of `simba-jdbc`, `simba-redis`, `simba-spring-redis`, `simba-zookeeper` (`JdbcLeaseBackend`, `Dialect`, `RedisLeaseBackend`, `RedisScripting`, `SpringRedisScripting`, `ZookeeperLeaseBackend`, ...) |
+| Spring Boot starter | Public types and annotations (`@SimbaScheduled`, `@SimbaPartitioned`, the `*Properties` classes, `SimbaLifecycle`, `MicrometerSimbaEventListener`, `SimbaEndpoint`, `SimbaHealthIndicator`), the `simba.*` properties, bean names and conditions |
+| Test kits | `simba-testing` (`InMemoryLeaseBackend`, `VirtualClock`, `VirtualScheduler`, `Simulation`) and `simba-tck` (`LeaseBackendSpec`, `FencingSpec`) |
+| Observability | Metric names and tag keys, the Actuator endpoint's and the health indicator's JSON fields |
+| Storage | The JDBC schema, the Redis keys and messages, the Zookeeper paths |
+
+New fields, tags, enum constants and events may be added in a minor version: read JSON and handle `when` over Simba
+enums and events tolerantly. Types marked `@InternalSimbaApi` (the engine, `Simba.Builder.scheduler`,
+`Simba.awaitIdle`) and anything `internal` carry no guarantee.
 
 ## From 4.x
 
@@ -1470,6 +1504,15 @@ start the 5.x tokens above it (for JDBC, by inserting `simba_lease` rows with a 
 | `MutexContendServiceSpec`, `LockSpec`, `MemberRegistrySpec` (`simba-test`) | `LeaseBackendSpec` (`simba-tck`) |
 | `FencingSpec` (`simba-test`) | `FencingSpec` (`simba-tck`) |
 | — | `simba-testing`: `InMemoryLeaseBackend`, `VirtualScheduler`, `Simulation` |
+| `Simba` (the 4.x constants object `SIMBA`, `SIMBA_PREFIX`) | `Simba` is now the client class (`Simba.builder()`); the constants are gone |
+| `MutexRetriever`, `MutexRetrievalService`, `AbstractMutexRetrievalService` (observers) | No equivalent: a node sees only its own terms. Query `simba.snapshot()` for this node's elections, or read the backend's storage (see [Backends](/guide/backends)) to see who holds a lease |
+| `Locker` (interface of `SimbaLocker`) | `DistributedLock` (`simba.lock(name)`), whose `acquire` returns a `LockTerm` |
+| `LeaseConfig` (`ttl`, `transition`) | `SimbaConfig` (`leaseDuration`, `renewInterval`, `drift`, `margin`), one per client |
+| `ContenderIdGenerator` | Removed: the backend issues a `SessionId` per session |
+| `MicrometerContendObserver` | `MicrometerSimbaEventListener` |
+| `SimbaServiceTracker` (Actuator) | Removed: the endpoint reads `simba.snapshot()` |
+| `ScheduledWork` / `PartitionedWork` | `LeaderWork` (`run(term)`) / `PartitionWork` (`run(term, partition)`) |
+| `me.ahoo.simba.core.LeaseExpiredException` | `me.ahoo.simba.LeaseExpiredException`, thrown by `Term.ensureValid` |
 
 Behavior that changed:
 

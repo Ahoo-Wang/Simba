@@ -11,6 +11,8 @@
  * limitations under the License.
  */
 
+description = "Versions Simba is built and tested with (Spring Boot BOM, kotlin-logging, Curator); not a dependency of the Simba modules"
+
 dependencies {
     // Published with every library module: only what their runtime classpaths need. Test and build tool versions
     // stay in the root build (not transitive).

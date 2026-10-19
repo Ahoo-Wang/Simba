@@ -17,6 +17,9 @@ testImplementation("me.ahoo.simba:simba-testing:${simbaVersion}")
 testImplementation("me.ahoo.simba:simba-tck:${simbaVersion}")
 ```
 
+示例使用 [FluentAssert](https://github.com/Ahoo-Wang/FluentAssert)（`.assert()`）断言，`simba-tck` 会带上它；只依赖
+`simba-testing` 时，请另加 `me.ahoo.test:fluent-assert-core`，或使用你自己的断言库。
+
 ## 内存后端 {#in-memory-backend}
 
 `InMemoryLeaseBackend` 在内存中实现完整的 `LeaseBackend` 契约（会话、token 永不重置的租约、组、释放以及成员变化提示）。

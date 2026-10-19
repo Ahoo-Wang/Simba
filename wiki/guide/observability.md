@@ -19,7 +19,7 @@ the Micrometer metrics on the events.
 | `session.status` | `OPENING`, `LIVE`, `SUSPENDED` or `CLOSED` |
 | `session.validFor` | Time left before the session's local deadline |
 | `session.notLiveFor` | How long the session has not been `LIVE` (since start, or since it was last live); zero while live |
-| `elections[]` | Every started election (locks, schedules and partitions included): `name`, `status`, `token`, `remaining` |
+| `elections[]` | Every started election (locks, schedules and partitions included): `name`, `status`, `token`, `remaining`, `kind` (`ELECTION`, `LOCK` or `GROUP`: which API started it) |
 | `leaseDuration` | The configured session lease |
 | `healthy` | `notLiveFor ≤ leaseDuration` |
 
@@ -139,8 +139,8 @@ management:
     "notLiveForMillis": 0
   },
   "elections": [
-    { "name": "report", "status": "LEADER", "token": 42, "remainingMillis": 13870 },
-    { "name": "billing.3", "status": "CANDIDATE", "token": 0, "remainingMillis": 0 }
+    { "name": "report", "status": "LEADER", "token": 42, "remainingMillis": 13870, "kind": "ELECTION" },
+    { "name": "billing.3", "status": "CANDIDATE", "token": 0, "remainingMillis": 0, "kind": "GROUP" }
   ]
 }
 ```
@@ -151,7 +151,8 @@ only this node's view; it does not query who leads elsewhere.
 ## Health Indicator
 
 The `simba` health indicator is `DOWN` once the session has not been live for longer than `leaseDuration`: this node
-can then neither keep nor win a term on any backend. Not leading is healthy.
+can then neither keep nor win a term on any backend. Not leading is healthy. `leading` lists the elections and
+partitions this node leads; locks are only counted (`locksHeld`), because their names come from data.
 
 ```json
 {
@@ -162,7 +163,8 @@ can then neither keep nor win a term on any backend. Not leading is healthy.
     "validFor": "13870ms",
     "notLiveFor": "0ms",
     "leaseDuration": "15000ms",
-    "leading": ["report"]
+    "leading": ["report"],
+    "locksHeld": 1
   }
 }
 ```
