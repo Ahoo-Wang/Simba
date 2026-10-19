@@ -185,6 +185,49 @@ class AsyncLockTest {
     }
 
     @Test
+    fun `tryAcquireAsync completes with null while this client holds the name`() {
+        val client = simba.client()
+        val held = client.lock(name.value).acquire(Duration.ofSeconds(1))
+
+        client.lock(name.value).tryAcquireAsync().toCompletableFuture().get(WAIT, TimeUnit.SECONDS).assert().isNull()
+        held.close()
+    }
+
+    @Test
+    fun `acquireAsync waiting for a local holder times out on the client clock`() {
+        val client = simba.client()
+        val held = client.lock(name.value).acquire(Duration.ofSeconds(1))
+        val waiting = client.lock(name.value).acquireAsync(Duration.ofSeconds(2)).toCompletableFuture()
+        simba.settle()
+
+        simba.advance(Duration.ofSeconds(2))
+        waiting.failure().assert().isInstanceOf(LockTimeoutException::class.java)
+        held.close()
+        simba.settle()
+        client.isIdle().assert().isTrue()
+    }
+
+    @Test
+    fun `closing the client fails an acquireAsync waiting for a local holder`() {
+        val client = simba.client()
+        client.lock(name.value).acquire(Duration.ofSeconds(1))
+        val waiting = client.lock(name.value).acquireAsync(Duration.ofSeconds(5)).toCompletableFuture()
+        simba.settle()
+
+        client.closeAsync()
+        simba.settle()
+        waiting.failure().assert().isInstanceOf(IllegalStateException::class.java)
+    }
+
+    @Test
+    fun `the default async methods complete with what the blocking calls return or throw`() {
+        val lock = BlockingLock { null }
+
+        lock.tryAcquireAsync().toCompletableFuture().get(WAIT, TimeUnit.SECONDS).assert().isNull()
+        lock.acquireAsync(Duration.ofSeconds(1)).failure().assert().isInstanceOf(LockTimeoutException::class.java)
+    }
+
+    @Test
     fun `the default acquireAsync interrupts a cancelled blocking acquire`() {
         val started = CountDownLatch(1)
         val interrupted = CompletableFuture<Boolean>()
