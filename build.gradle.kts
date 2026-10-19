@@ -52,8 +52,7 @@ allprojects {
         autoCorrect = true
     }
     dependencies {
-        detektPlugins(dependenciesProject)
-        detektPlugins("io.gitlab.arturbosch.detekt:detekt-formatting")
+        detektPlugins(rootProject.libs.detekt.formatting)
     }
 }
 
@@ -105,13 +104,14 @@ configure(libraryProjects) {
         api(platform(dependenciesProject))
         testImplementation(platform(rootProject.libs.junit.bom))
         testImplementation(platform(rootProject.libs.fluent.assert.bom))
+        testImplementation(platform(rootProject.libs.testcontainers.bom))
         implementation("org.slf4j:slf4j-api")
         testImplementation("ch.qos.logback:logback-classic")
         testImplementation("me.ahoo.test:fluent-assert-core")
         testImplementation("org.junit.jupiter:junit-jupiter-api")
         testImplementation("org.junit.jupiter:junit-jupiter-params")
-        testImplementation("org.hamcrest:hamcrest")
-        testImplementation("io.mockk:mockk") {
+        testImplementation(rootProject.libs.hamcrest)
+        testImplementation(rootProject.libs.mockk) {
             exclude(group = "org.slf4j", module = "slf4j-api")
         }
         testRuntimeOnly("org.junit.platform:junit-platform-launcher")

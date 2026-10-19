@@ -63,11 +63,13 @@ classpath 上有 Micrometer 且存在 `MeterRegistry` bean 时，starter 注册 
 |---|---|---|---|
 | `simba.session.renew` | Timer | — | 成功续约 (keep-alive) 的延迟 |
 | `simba.session.state` | Gauge | `state`（`opening`、`live`、`suspended`、`closed`） | 当前会话状态对应的值为 `1` |
-| `simba.leadership` | Gauge | `name` | 本节点持有该名称的任期时为 `1` |
-| `simba.revocations` | Counter | `name`、`reason` | 已结束的任期，按 `RevokeReason`（小写）区分 |
+| `simba.leadership` | Gauge | `name` | 本节点持有该名称的任期时为 `1`，失去任期后为 `0` |
+| `simba.revocations` | Counter | `reason` | 所有选举和锁已结束的任期，按 `RevokeReason`（小写）区分，包括 `stopped` 和 `stepped_down` |
 | `simba.work` | Timer | `name`、`outcome` | leader 任务的运行（`completed`、`failed`、`cancelled`） |
 
-分区选举也以名称（`{group}.{partition}`）出现。不使用 Spring 时，自行把 `MicrometerSimbaEventListener(registry)` 加到 builder 上。
+分区选举也以名称（`{group}.{partition}`）出现。为了让序列数量有界，某个名称的 `simba.leadership` 序列只从它的第一个任期
+存在到某个任期以 `stopped` 结束（选举停止、客户端关闭或锁被释放）：释放后的锁不会留下序列，也不会被当成"没有 leader"；
+revocations 不带名称。不使用 Spring 时，自行把 `MicrometerSimbaEventListener(registry)` 加到 builder 上。
 
 ## 告警规则 {#alert-rules}
 
@@ -90,11 +92,11 @@ groups:
       - alert: SimbaTermsLost
         expr: increase(simba_revocations_total{reason=~"deadline_passed|session_expired|taken_over"}[10m]) > 0
         annotations:
-          summary: "{{ $labels.name }} lost a term ({{ $labels.reason }}); protect writes with fencing tokens"
+          summary: "{{ $labels.instance }} lost a term ({{ $labels.reason }}); protect writes with fencing tokens"
       - alert: SimbaLeadershipFlapping
-        expr: increase(simba_revocations_total[10m]) > 3
+        expr: increase(simba_revocations_total{reason!~"stopped|stepped_down"}[10m]) > 3
         annotations:
-          summary: "Leadership of {{ $labels.name }} moves too often"
+          summary: "Leadership on {{ $labels.instance }} moves too often"
       - alert: SimbaWorkFailing
         expr: increase(simba_work_seconds_count{outcome="failed"}[10m]) > 0
         annotations:

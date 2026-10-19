@@ -77,7 +77,8 @@ create table if not exists simba_member
 ## Redis 7 {#redis-7}
 
 模块 `simba-redis`（与驱动无关，Lua 脚本位于 `RedisScripting` 端口之后）和 `simba-spring-redis`
-（`SpringRedisScripting`，Spring Data Redis 适配器）：
+（`SpringRedisScripting`，Spring Data Redis 适配器）。`SpringRedisScripting` 需要 Spring Boot 默认的 Lettuce 客户端：
+使用 Jedis 时订阅会阻塞调用线程，也无法使用 `WAIT`，因此 starter 遇到非 Lettuce 的 `RedisConnectionFactory` 会启动失败：
 
 ```kotlin
 val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
@@ -134,7 +135,9 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 - 一个 Simba 会话就是一个 Zookeeper 会话：后端为每个会话打开一个专用的 Zookeeper 客户端（不使用共享的 Curator 客户端），并且从不把它重连到另一个会话。
   `SessionId` 是以 16 位十六进制数字表示的 Zookeeper 会话 id。
 - Token 是租约节点的 `czxid`：由于 zxid 是全局的，它在任期之间严格递增，但不连续。
-- 释放会删除该节点；候选者 watch 该节点并立即接管。组成员的变化同样会被 watch。
+- 释放会删除该节点；候选者 watch 该节点并立即接管。组成员的变化同样会被 watch，包括尚不存在的组被创建。
+- 名字从发出 create 的那一刻起就被视为"可能拥有"：即使 create 已在服务端成功而回复丢失（连接断开、超时），下一次续约在核实节点持有者后
+  仍会报告该租约，由引擎释放。同一会话的释放逐个执行。
 - Zookeeper 客户端会自行发送心跳，因此一个本地看门狗会关闭在租约时长内没有被续约的会话：停止续约的节点永远不会仅靠心跳保住自己的租约。
 - 剩余时间为 `min(leaseDuration, 协商后的会话超时)`。客户端断开连接期间，续约和获取都会失败，因此本地截止时刻会耗尽；当 Zookeeper
   报告会话过期时，会话为 `Expired`。

@@ -86,7 +86,9 @@ Lease names are case-sensitive (binary collation on MySQL, `"C"` on PostgreSQL).
 ## Redis 7
 
 Module `simba-redis` (driver-neutral, Lua scripts behind the `RedisScripting` port) and `simba-spring-redis`
-(`SpringRedisScripting`, the Spring Data Redis adapter):
+(`SpringRedisScripting`, the Spring Data Redis adapter). `SpringRedisScripting` needs Lettuce, the Spring Boot default
+client: with Jedis, subscriptions block the calling thread and `WAIT` is unavailable, so the starter fails startup on a
+non-Lettuce `RedisConnectionFactory`:
 
 ```kotlin
 val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
@@ -151,7 +153,11 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
   as 16 hex digits.
 - The token is the lease node's `czxid`: strictly increasing across terms because zxids are global, but not
   consecutive.
-- Release deletes the node; candidates watch it and take over at once. Group membership changes are watched too.
+- Release deletes the node; candidates watch it and take over at once. Group membership changes are watched too,
+  including the creation of a group that did not exist yet.
+- A name counts as possibly owned from the moment its create is sent, so a lease whose create succeeded but whose reply
+  was lost (connection loss, timeout) is still reported by the next keep-alive, after checking the node's owner, and
+  released by the engine. Releases of one session run one at a time.
 - The Zookeeper client heartbeats on its own, so a local watchdog closes a session that no keep-alive renewed within
   the lease: a node that stopped renewing never keeps its leases through heartbeats alone.
 - Remaining time is `min(leaseDuration, negotiated session timeout)`. While the client is disconnected, keep-alive and

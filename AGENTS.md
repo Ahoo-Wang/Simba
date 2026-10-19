@@ -27,6 +27,7 @@ This file records what is not obvious from the code. Describe the code as it is;
 | Module check | Needs |
 |---|---|
 | `simba-core`, `simba-testing`, `simba-tck`, `simba-zookeeper`, `simba-spring-boot-starter` | Nothing (Zookeeper tests use embedded Curator `TestingServer`) |
+| `simba-example` | Docker for `-PexampleBackend=jdbc` (`mysql:8.4`) and `redis` (`redis:7.4-alpine`); nothing for `zookeeper` |
 | `simba-redis` (tests also cover `simba-spring-redis`) | Docker: Testcontainers `redis:7.4-alpine` (`RedisFixture`) |
 | `simba-jdbc` | Docker: Testcontainers `mysql:8.4` and `postgres:17` (`LeaseDatabaseFixture`, schema from `simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-*.sql`) |
 
@@ -44,6 +45,12 @@ simba-core  ←  simba-jdbc | simba-redis ← simba-spring-redis | simba-zookeep
 simba-testing (in-memory backend, virtual time, simulation)    simba-tck (LeaseBackendSpec, FencingSpec)
 simba-example (per-backend demo app), simba-bom, simba-dependencies, code-coverage-report
 ```
+
+- `simba-dependencies` is published as every library's platform: only the Spring Boot BOM and runtime constraints
+  (kotlin-logging, Curator). Test and build tool versions (MockK, Hamcrest, Testcontainers, detekt) come from the
+  version catalog in the root build and are not transitive.
+- `simba-example` tests start the app with `SpringApplication` on the backend of `-PexampleBackend` (MySQL or Redis
+  through Testcontainers, embedded Zookeeper).
 
 - `simba-core` knows no backend and depends only on kotlin-logging. Packages: `me.ahoo.simba` (public API:
   `Simba`, `SimbaConfig`, `Election`, `LeadershipListener`, `Term`, `RevokeReason`, `LeaderTask`, `Schedule`,
@@ -112,8 +119,9 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   `notLiveFor`, and per election status, token and remaining. `healthy` = not live for at most `leaseDuration`; the
   starter's health indicator is exactly that rule.
 - Micrometer (starter): `simba.session.renew` (timer), `simba.session.state` (gauge per `state`),
-  `simba.leadership` (gauge per `name`), `simba.revocations` (counter per `name`, `reason`), `simba.work` (timer per
-  `name`, `outcome`).
+  `simba.leadership` (gauge per `name`, removed when a term of the name ends `STOPPED`, so released locks and stopped
+  elections leave no series), `simba.revocations` (counter per `reason` only, every reason), `simba.work` (timer per
+  `name`, `outcome`). Never tag a meter with a name that is not bounded by the application's code.
 
 ### Wire contracts
 - Lease names (`LeaseName`): 1–128 characters of `[A-Za-z0-9._:-]`. Partition `p` of group `g` is the lease
@@ -135,6 +143,10 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   token = czxid (strictly increasing, not consecutive). Members are ephemeral `/simba/groups/{g}/{sid}`. A local
   watchdog closes a session no keep-alive started within `lease`; remaining is `min(lease, negotiated timeout)`. A
   disconnected client fails `keepAlive` / `acquire`; a zk-expired one is `Expired`.
+  A name is a keep-alive candidate from before its create is sent (under the session's send lock, so a keep-alive read
+  sent earlier cannot drop it); keep-alive reports candidates the session owns and forgets the others. Releases of a
+  session are serialized (the czxid check and the delete are not atomic). Lease paths of a batch are validated before
+  any request; `members` on a missing group leaves an exists watch. A closed backend opens no session.
 
 ### Starter
 - Properties: `simba.enabled`, `simba.backend`, `simba.session.{lease-duration,renew-interval,drift,margin}`,
@@ -149,6 +161,13 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   `@SimbaPartitioned` work and waits for the handover; `SimbaLifecycle` (phase `DEFAULT_PHASE - 4096`) then closes the
   client, before lower-phase infrastructure such as connection factories stops.
 - JDBC `query-timeout` defaults to the session renew interval (the engine gives up on a call after it anyway).
+- The properties classes are Kotlin data classes bound through their primary constructor, which needs
+  `kotlin-reflect` at runtime: the starter declares it (without it Boot falls back to JavaBean binding and fails on
+  any non-default value). Tests must not rely on MockK bringing it in; `ExampleBackendTest` runs without MockK.
+- The Redis backend requires a Lettuce `RedisConnectionFactory` (startup check): Jedis blocks on subscribe and lacks
+  the native `WAIT`.
+- `@SimbaScheduled` names, `@SimbaPartitioned` partition leases (`{group}.{p}`) and groups share one namespace,
+  checked at startup.
 
 ## Change Playbooks
 

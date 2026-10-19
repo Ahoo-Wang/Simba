@@ -105,7 +105,7 @@ Fencing token 会重新开始：5.x 的 token 来自新的存储，从 `1` 开�
 | 4.x | 5.0 |
 |---|---|
 | `simba.mutex.owner{mutex}` | `simba.leadership{name}` |
-| `simba.mutex.ownership.changes{mutex,change}` | `simba.revocations{name,reason}`（失去） |
+| `simba.mutex.ownership.changes{mutex,change}` | `simba.revocations{reason}`（所有结束的任期，包括 `stopped` 和 `stepped_down`） |
 | `simba.mutex.contend{mutex,operation,outcome}` | `simba.session.renew`（每个节点一次续约） |
 | `simba.mutex.lease.expired{mutex}` | `simba.revocations{reason="deadline_passed"}` |
 | `simba.scheduler.work{mutex,outcome}` | `simba.work{name,outcome}` |

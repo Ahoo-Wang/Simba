@@ -24,9 +24,10 @@ import org.springframework.data.redis.connection.RedisConnectionFactory
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory
 
 class SimbaRedisAutoConfigurationTest {
-    private val contextRunner = ApplicationContextRunner()
+    private val withoutFactory = ApplicationContextRunner()
         .withConfiguration(AutoConfigurations.of(SimbaRedisAutoConfiguration::class.java))
         .withPropertyValues("simba.backend=redis")
+    private val contextRunner = withoutFactory
         .withBean(RedisConnectionFactory::class.java, { mockk<LettuceConnectionFactory>(relaxed = true) })
 
     @Test
@@ -43,6 +44,16 @@ class SimbaRedisAutoConfigurationTest {
                 "simba.redis.route-by-slot=true"
             )
             .run { assertThat(it).hasNotFailed().hasSingleBean(RedisLeaseBackend::class.java) }
+    }
+
+    @Test
+    fun `a connection factory other than lettuce fails startup`() {
+        withoutFactory
+            .withBean(RedisConnectionFactory::class.java, { mockk<RedisConnectionFactory>(relaxed = true) })
+            .run {
+                assertThat(it).hasFailed()
+                assertThat(it.startupFailure).rootCause().hasMessageContaining("needs a Lettuce RedisConnectionFactory")
+            }
     }
 
     @Test

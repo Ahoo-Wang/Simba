@@ -629,7 +629,9 @@ Lease names are case-sensitive (binary collation on MySQL, `"C"` on PostgreSQL).
 ## Redis 7
 
 Module `simba-redis` (driver-neutral, Lua scripts behind the `RedisScripting` port) and `simba-spring-redis`
-(`SpringRedisScripting`, the Spring Data Redis adapter):
+(`SpringRedisScripting`, the Spring Data Redis adapter). `SpringRedisScripting` needs Lettuce, the Spring Boot default
+client: with Jedis, subscriptions block the calling thread and `WAIT` is unavailable, so the starter fails startup on a
+non-Lettuce `RedisConnectionFactory`:
 
 ```kotlin
 val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
@@ -776,14 +778,17 @@ management:
 | `SimbaEndpoint` (`simba`) | Actuator on the classpath and the endpoint available (enabled and exposed) |
 | `SimbaHealthIndicator` (`simba`) | Actuator on the classpath and `management.health.simba.enabled` |
 
-Every bean is `@ConditionalOnMissingBean`: define your own to replace it. To customize the client beyond the
-properties (executors, a fixed seed), define the `Simba` bean yourself with `Simba.builder()`.
+Every bean except the infrastructure (`SimbaBackendSelection`, the startup check of `simba.backend`, and
+`SimbaScheduledBeanPostProcessor`) is `@ConditionalOnMissingBean`: define your own to replace it. To customize the
+client beyond the properties (executors, a fixed seed), define the `Simba` bean yourself with `Simba.builder()`.
 
 ## Annotated Methods
 
 `@SimbaScheduled` runs a bean method on the leader of an election; `@SimbaPartitioned` runs it for every partition of
 a group this node leads. Both start after the context refreshed and stop on shutdown. Their attributes and method
-signatures are on the [Leader Work](/guide/leader-work#spring-annotations) page.
+signatures are on the [Leader Work](/guide/leader-work#spring-annotations) page. The lease names they elect (the
+`name` of `@SimbaScheduled`, `{group}.{partition}` of `@SimbaPartitioned`) and the groups must be unique across both
+annotations: startup fails on a conflict.
 
 ## Shutdown Order
 
@@ -1096,11 +1101,14 @@ With Micrometer on the classpath and a `MeterRegistry` bean, the starter registe
 |---|---|---|---|
 | `simba.session.renew` | Timer | — | Latency of successful keep-alives |
 | `simba.session.state` | Gauge | `state` (`opening`, `live`, `suspended`, `closed`) | `1` for the current session status |
-| `simba.leadership` | Gauge | `name` | `1` while this node holds a term of the name |
-| `simba.revocations` | Counter | `name`, `reason` | Ended terms, by `RevokeReason` (lowercase) |
+| `simba.leadership` | Gauge | `name` | `1` while this node holds a term of the name, `0` after it lost one |
+| `simba.revocations` | Counter | `reason` | Ended terms of every election and lock, by `RevokeReason` (lowercase), including `stopped` and `stepped_down` |
 | `simba.work` | Timer | `name`, `outcome` | Leader work runs (`completed`, `failed`, `cancelled`) |
 
-Partition elections appear as names too (`{group}.{partition}`). Without Spring, add
+Partition elections appear as names too (`{group}.{partition}`). To keep the number of series bounded, a name's
+`simba.leadership` series exists only from its first term until a term ends by `stopped` (the election stopped, the
+client closed, or a lock was released): a released lock leaves no series behind and never reads as "no leader", and
+revocations carry no name. Without Spring, add
 `MicrometerSimbaEventListener(registry)` to the builder yourself.
 
 ## Alert Rules
@@ -1124,11 +1132,11 @@ groups:
       - alert: SimbaTermsLost
         expr: increase(simba_revocations_total{reason=~"deadline_passed|session_expired|taken_over"}[10m]) > 0
         annotations:
-          summary: "{{ $labels.name }} lost a term ({{ $labels.reason }}); protect writes with fencing tokens"
+          summary: "{{ $labels.instance }} lost a term ({{ $labels.reason }}); protect writes with fencing tokens"
       - alert: SimbaLeadershipFlapping
-        expr: increase(simba_revocations_total[10m]) > 3
+        expr: increase(simba_revocations_total{reason!~"stopped|stepped_down"}[10m]) > 3
         annotations:
-          summary: "Leadership of {{ $labels.name }} moves too often"
+          summary: "Leadership on {{ $labels.instance }} moves too often"
       - alert: SimbaWorkFailing
         expr: increase(simba_work_seconds_count{outcome="failed"}[10m]) > 0
         annotations:
@@ -1494,7 +1502,7 @@ ids, so the assignment of partitions to nodes changes.
 | 4.x | 5.0 |
 |---|---|
 | `simba.mutex.owner{mutex}` | `simba.leadership{name}` |
-| `simba.mutex.ownership.changes{mutex,change}` | `simba.revocations{name,reason}` (losses) |
+| `simba.mutex.ownership.changes{mutex,change}` | `simba.revocations{reason}` (every ended term, `stopped` and `stepped_down` included) |
 | `simba.mutex.contend{mutex,operation,outcome}` | `simba.session.renew` (one keep-alive per node) |
 | `simba.mutex.lease.expired{mutex}` | `simba.revocations{reason="deadline_passed"}` |
 | `simba.scheduler.work{mutex,outcome}` | `simba.work{name,outcome}` |

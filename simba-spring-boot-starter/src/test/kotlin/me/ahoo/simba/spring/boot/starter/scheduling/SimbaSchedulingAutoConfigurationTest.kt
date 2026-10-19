@@ -168,6 +168,35 @@ class SimbaSchedulingAutoConfigurationTest {
         fun second() = Unit
     }
 
+    class PartitionElection {
+        @SimbaScheduled(name = "billing.2", fixedDelay = "1s")
+        fun election() = Unit
+
+        @SimbaPartitioned(group = "billing", partitions = 3, fixedDelay = "1s")
+        fun bill(term: Term, partition: Int) = term to partition
+    }
+
+    class SameGroup {
+        @SimbaPartitioned(group = "billing", partitions = 2, fixedDelay = "1s")
+        fun first(term: Term, partition: Int) = term to partition
+
+        @SimbaPartitioned(group = "billing", partitions = 1, fixedDelay = "1s")
+        fun second(term: Term, partition: Int) = term to partition
+    }
+
+    class OutsideTheGroup {
+        @SimbaScheduled(name = "billing.3", fixedDelay = "1s")
+        fun election() = Unit
+
+        @SimbaPartitioned(group = "billing", partitions = 3, fixedDelay = "1s")
+        fun bill(term: Term, partition: Int) = term to partition
+    }
+
+    @Test
+    fun `an election outside the group's partitions does not conflict`() {
+        contextRunner.withBean(OutsideTheGroup::class.java).run { assertThat(it).hasNotFailed() }
+    }
+
     @Test
     fun `invalid methods fail startup`() {
         listOf(
@@ -179,6 +208,8 @@ class SimbaSchedulingAutoConfigurationTest {
             NotADuration::class.java to "'soon' is not a valid duration",
             ZeroPeriod::class.java to "must be positive",
             Duplicate::class.java to "already used",
+            PartitionElection::class.java to "election [billing.2] is already used",
+            SameGroup::class.java to "group [billing] is already used",
         ).forEach { (type, message) ->
             contextRunner.withBean(type).run {
                 assertThat(it).hasFailed()

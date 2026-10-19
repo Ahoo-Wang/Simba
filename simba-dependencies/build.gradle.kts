@@ -12,14 +12,11 @@
  */
 
 dependencies {
+    // Published with every library module: only what their runtime classpaths need. Test and build tool versions
+    // stay in the root build (not transitive).
     api(platform(libs.spring.boot.dependencies))
-    api(platform(libs.spring.cloud.dependencies))
-    api(platform(libs.testcontainers.bom))
     constraints {
-        api(libs.commons.io)
         api(libs.kotlin.logging)
-        api(libs.hamcrest)
-        api(libs.mockk)
-        api(libs.detekt.formatting)
+        api(libs.curator.framework)
     }
 }

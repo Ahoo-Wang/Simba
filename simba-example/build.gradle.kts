@@ -53,8 +53,14 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
+    // ExampleBackendTest starts the app on the selected backend: MySQL or Redis in Docker, or an embedded Zookeeper.
+    testImplementation(platform(libs.testcontainers.bom))
+    testImplementation("org.testcontainers:testcontainers")
+    testImplementation("org.testcontainers:testcontainers-mysql")
+    testImplementation(libs.curator.test)
 }
 
 tasks.getByName<Test>("test") {
     useJUnitPlatform()
+    systemProperty("simba.example.backend", exampleBackend)
 }
