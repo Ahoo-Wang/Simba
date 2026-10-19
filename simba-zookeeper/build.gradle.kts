@@ -12,6 +12,8 @@
  * limitations under the License.
  */
 
+description = "Simba Zookeeper lease backend on ephemeral nodes"
+
 dependencies {
     api(project(":simba-core"))
     api("org.apache.curator:curator-framework")
