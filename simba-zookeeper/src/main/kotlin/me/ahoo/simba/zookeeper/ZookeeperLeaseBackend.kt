@@ -526,7 +526,9 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
 
         /**
          * Runs [action]; answers `null` (after expiring this session) when Zookeeper reports the session expired, and
-         * reports a lost connection as a suspended session.
+         * reports a lost connection as a suspended session. A connection lost because the client is closing (the
+         * watchdog or [closeSession] expired it) is an expiry too: Zookeeper fails pending and new requests with
+         * `CONNECTIONLOSS` while closing, before the client state turns `CLOSED`.
          */
         inline fun <T> expiringOn(action: () -> T): T? {
             if (expired) {
@@ -538,6 +540,10 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
                 expire()
                 null
             } catch (error: KeeperException.ConnectionLossException) {
+                if (expired || !zooKeeper.state.isAlive) {
+                    expire()
+                    return null
+                }
                 throw SimbaException("Zookeeper session [$id] is suspended (connection lost).", error)
             }
         }
@@ -623,7 +629,11 @@ private fun <T> CompletableFuture<T>.await(): T = try {
     throw error.cause ?: error
 }
 
-/** Creates [path] with [mode], and its missing ancestors as persistent nodes, each with the ACL [aclFor] its path. */
+/**
+ * Creates [path] with [mode], and its missing ancestors as persistent nodes, each with the ACL [aclFor] its path.
+ * Zookeeper checks the parent's CREATE permission before it reports an existing node, so an existing ancestor under a
+ * parent the backend may not create in answers `NoAuth`: such a node is kept as it is.
+ */
 private fun ZooKeeper.ensure(path: String, mode: CreateMode, aclFor: (String) -> List<ACL>) {
     val segments = path.split('/').filter { it.isNotEmpty() }
     segments.indices.forEach { index ->
@@ -637,6 +647,10 @@ private fun ZooKeeper.ensure(path: String, mode: CreateMode, aclFor: (String) ->
             )
         } catch (_: KeeperException.NodeExistsException) {
             // Created concurrently or earlier.
+        } catch (error: KeeperException.NoAuthException) {
+            if (exists(prefix, false) == null) {
+                throw error
+            }
         }
     }
 }

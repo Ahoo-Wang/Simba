@@ -92,6 +92,31 @@ class ZookeeperLeaseBackendSecurityTest {
     }
 
     @Test
+    fun anUnauthenticatedClientCannotDeleteGroupMembers() {
+        val session = backend.openSession(lease).id
+        val group = "group-${UUID.randomUUID()}"
+        backend.join(session, group)
+
+        assertThrows<KeeperException.NoAuthException> { anonymous.delete("/simba/groups/$group/$session", -1) }
+        backend.members(group).assert().containsExactly(session)
+    }
+
+    @Test
+    fun existingAncestorsUnderAParentTheBackendMayNotCreateInAreKept() {
+        anonymous.create("/simba", ByteArray(0), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT)
+        anonymous.create("/simba/groups", ByteArray(0), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT)
+        anonymous.setACL("/", listOf(ACL(ZooDefs.Perms.READ, ZooDefs.Ids.ANYONE_ID_UNSAFE)), -1)
+        val session = backend.openSession(lease).id
+        val group = "group-${UUID.randomUUID()}"
+
+        // Both the missing group container and the missing leases parent go through /simba, which exists.
+        backend.join(session, group)
+        backend.granted(session, name())
+
+        backend.members(group).assert().containsExactly(session)
+    }
+
+    @Test
     fun backendsWithTheSameCredentialsShareLeasesAndGroups() {
         val session = backend.openSession(lease).id
         val name = name()
