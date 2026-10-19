@@ -74,10 +74,18 @@ data class ScriptReplies(val replies: List<List<Any?>>, val replicas: Int? = nul
 /**
  * After acquiring, wait until [replicas] replicas acknowledged the writes, at most [timeout] (`WAIT`). A new term
  * that is not acknowledged in time is released and the acquisition fails, so a failover is less likely to lose it.
+ * [timeout] is at least 1 ms and is sent in whole milliseconds.
  */
 data class ReplicaWait(val replicas: Int, val timeout: Duration) {
     init {
         require(replicas >= 1) { "replicas must be at least 1: $replicas" }
-        require(!timeout.isNegative && !timeout.isZero) { "timeout must be positive: $timeout" }
+        // WAIT takes whole milliseconds and `WAIT n 0` blocks forever, so a sub-millisecond timeout is rejected.
+        require(timeout >= MIN_TIMEOUT) { "timeout must be at least $MIN_TIMEOUT: $timeout" }
+    }
+
+    companion object {
+        /** Smallest timeout `WAIT` can express. */
+        @JvmField
+        val MIN_TIMEOUT: Duration = Duration.ofMillis(1)
     }
 }

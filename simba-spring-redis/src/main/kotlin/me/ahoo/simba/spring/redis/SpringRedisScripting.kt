@@ -26,7 +26,10 @@ import org.springframework.data.redis.connection.RedisConnectionFactory
 import org.springframework.data.redis.connection.ReturnType
 
 /**
- * [RedisScripting] over a Spring Data Redis [RedisConnectionFactory] (Lettuce).
+ * [RedisScripting] over a Spring Data Redis Lettuce connection factory.
+ *
+ * Only Lettuce is supported, and the constructor rejects any other factory (for example Jedis): a Jedis
+ * subscription blocks the subscribing thread, and `WAIT` uses the Lettuce API.
  *
  * Scripts run with `EVALSHA`, falling back to `EVAL` when the server lacks the script. Several calls are pipelined
  * on one connection, except on a Redis Cluster, where Spring Data Redis does not pipeline, and before a `WAIT`: then
@@ -34,9 +37,19 @@ import org.springframework.data.redis.connection.ReturnType
  * native connection it holds up other commands on it until the replicas acknowledge or the timeout passes.
  *
  * Subscriptions use a dedicated connection each, through [RedisConnection.pSubscribe], which returns once the server
- * confirmed the subscription with Lettuce (Jedis would block the calling thread instead).
+ * confirmed the subscription.
  */
 class SpringRedisScripting(private val connectionFactory: RedisConnectionFactory) : RedisScripting {
+    init {
+        // Checked by name, so a factory without Lettuce on the classpath fails here rather than with a linkage error.
+        val lettuce = generateSequence<Class<*>>(connectionFactory.javaClass) { it.superclass }
+            .any { it.name == LETTUCE_CONNECTION_FACTORY }
+        require(lettuce) {
+            "SpringRedisScripting needs a $LETTUCE_CONNECTION_FACTORY, was ${connectionFactory.javaClass.name}: " +
+                "other drivers (such as Jedis) block on subscribe and lack the Lettuce WAIT API."
+        }
+    }
+
     override val clustered: Boolean by lazy {
         connectionFactory.connection.use { it is RedisClusterConnection }
     }
@@ -126,4 +139,9 @@ class SpringRedisScripting(private val connectionFactory: RedisConnectionFactory
 
     private fun Throwable.isNoScript(): Boolean =
         generateSequence(this) { it.cause }.any { it.message?.contains("NOSCRIPT") == true }
+
+    private companion object {
+        const val LETTUCE_CONNECTION_FACTORY =
+            "org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory"
+    }
 }
