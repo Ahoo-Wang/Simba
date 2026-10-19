@@ -52,6 +52,7 @@ class SimbaEndpointAutoConfigurationTest {
             val election = snapshot.elections.single()
             election.name.assert().isEqualTo("endpoint")
             election.status.assert().isEqualTo("LEADER")
+            election.kind.assert().isEqualTo("ELECTION")
             election.token.assert().isEqualTo(term.token)
             (election.remainingMillis > 0).assert().isTrue()
             endpoint.election("endpoint")?.token.assert().isEqualTo(term.token)

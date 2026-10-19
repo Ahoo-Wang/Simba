@@ -25,7 +25,7 @@ Simba 是一个用于 **选主与分布式锁** 的 JVM 库。每个进程在你
 
 ## 安装
 
-需要 Java 21+。添加 Spring Boot starter 和 **一个** 后端：
+需要 Java 21+；starter 需要 Spring Boot 4（4.1+）。添加 Spring Boot starter 和 **一个** 后端：
 
 ```kotlin
 implementation("me.ahoo.simba:simba-spring-boot-starter:${simbaVersion}")

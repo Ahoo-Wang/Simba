@@ -16,6 +16,7 @@ import io.gitlab.arturbosch.detekt.extensions.DetektExtension
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.jetbrains.dokka.gradle.DokkaPlugin
 import org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension
+import org.jetbrains.kotlin.gradle.dsl.KotlinVersion
 
 plugins {
     alias(libs.plugins.publish)
@@ -33,6 +34,9 @@ val exampleProjects = setOf(
     project(":simba-example")
 )
 
+/** Kotlin API, language and stdlib version Simba's libraries are compiled for. */
+val KOTLIN_BASELINE = "2.2.21"
+
 val codeCoverageReportProject = project(":code-coverage-report")
 val testJavaVersion: Provider<Int> = providers.gradleProperty("testJavaVersion").map { it.toInt() }.orElse(21)
 val publishProjects = subprojects - exampleProjects - codeCoverageReportProject
@@ -42,8 +46,11 @@ ext.set("libraryProjects", libraryProjects)
 
 allprojects {
     repositories {
-        mavenLocal()
         mavenCentral()
+        // -PuseMavenLocal resolves locally installed snapshots, after Maven Central.
+        if (providers.gradleProperty("useMavenLocal").isPresent) {
+            mavenLocal()
+        }
     }
     apply<DetektPlugin>()
     configure<DetektExtension> {
@@ -76,11 +83,35 @@ configure(libraryProjects) {
         jvmToolchain {
             languageVersion.set(JavaLanguageVersion.of(21))
         }
+        // Consumers compile against Kotlin 2.2 metadata and stdlib (the Spring Boot 4 baseline), whatever compiler
+        // builds Simba.
+        coreLibrariesVersion = KOTLIN_BASELINE
+        compilerOptions {
+            apiVersion.set(KotlinVersion.KOTLIN_2_2)
+            languageVersion.set(KotlinVersion.KOTLIN_2_2)
+        }
     }
     tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         compilerOptions {
-            freeCompilerArgs = listOf("-Xjsr305=strict", "-Xjvm-default=all-compatibility")
+            freeCompilerArgs.addAll("-Xjsr305=strict", "-Xjvm-default=all-compatibility")
             javaParameters = true
+        }
+    }
+    val dokkaHtml = tasks.named("dokkaGeneratePublicationHtml")
+    tasks.named<Jar>("javadocJar") {
+        dependsOn(dokkaHtml)
+        from(dokkaHtml)
+    }
+    tasks.withType<Jar>().configureEach {
+        from(rootProject.file("LICENSE")) {
+            into("META-INF")
+        }
+        manifest {
+            attributes(
+                "Automatic-Module-Name" to "me.ahoo.simba." + project.name.removePrefix("simba-").replace('-', '.'),
+                "Implementation-Title" to project.name,
+                "Implementation-Version" to project.version,
+            )
         }
     }
     tasks.withType<JavaCompile> {
@@ -100,8 +131,23 @@ configure(libraryProjects) {
         // fix logging missing code for JacocoPlugin
         jvmArgs = listOf("-Dlogback.configurationFile=${rootProject.rootDir}/config/logback.xml")
     }
+    // simba-dependencies pins versions at build time only: it is not published as a dependency, so consumers get no
+    // Spring Boot constraints; the published POM and module metadata carry the resolved versions instead.
+    val versionPlatform = configurations.create("versionPlatform") {
+        isCanBeConsumed = false
+        isCanBeResolved = false
+    }
+    configurations.configureEach {
+        val classpath = name.endsWith("CompileClasspath", ignoreCase = true) ||
+            name.endsWith("RuntimeClasspath", ignoreCase = true) ||
+            name.endsWith("AnnotationProcessor", ignoreCase = true) ||
+            name.startsWith("kapt")
+        if (classpath && this != versionPlatform) {
+            extendsFrom(versionPlatform)
+        }
+    }
     dependencies {
-        api(platform(dependenciesProject))
+        versionPlatform(platform(dependenciesProject))
         testImplementation(platform(rootProject.libs.junit.bom))
         testImplementation(platform(rootProject.libs.fluent.assert.bom))
         testImplementation(platform(rootProject.libs.testcontainers.bom))
@@ -151,9 +197,20 @@ configure(publishProjects) {
             val publishComponentName = if (isBom) "javaPlatform" else "java"
             create<MavenPublication>(publishName) {
                 from(components[publishComponentName])
+                if (!isBom) {
+                    versionMapping {
+                        usage("java-api") {
+                            fromResolutionOf("runtimeClasspath")
+                        }
+                        usage("java-runtime") {
+                            fromResolutionResult()
+                        }
+                    }
+                }
                 pom {
-                    name.set(rootProject.name)
-                    description.set(getPropertyOf("description"))
+                    name.set(project.name)
+                    // Lazily: the module scripts that set `description` run after this root configuration.
+                    description.set(provider { project.description ?: getPropertyOf("description") })
                     url.set(getPropertyOf("website"))
                     issueManagement {
                         system.set("GitHub")
@@ -161,7 +218,8 @@ configure(publishProjects) {
                     }
                     scm {
                         url.set(getPropertyOf("website"))
-                        connection.set(getPropertyOf("vcs"))
+                        connection.set("scm:git:${getPropertyOf("vcs")}")
+                        developerConnection.set("scm:git:${getPropertyOf("vcs")}")
                     }
                     licenses {
                         license {
