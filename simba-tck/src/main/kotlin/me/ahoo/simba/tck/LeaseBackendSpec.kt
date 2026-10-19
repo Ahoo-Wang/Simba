@@ -64,9 +64,6 @@ abstract class LeaseBackendSpec {
     /** Whether leases expire on their own rather than with their session; keep-alive then reports only `held`. */
     protected open val leasesExpireIndependently: Boolean = false
 
-    /** Whether each new term's token is exactly the previous one plus one (else only strictly greater). */
-    protected open val consecutiveTokens: Boolean = true
-
     /** Upper bound for anything a test waits for. */
     protected open val timeout: Duration = Duration.ofSeconds(30)
 
@@ -119,15 +116,15 @@ abstract class LeaseBackendSpec {
         val kept = open(shortLease)
         val control = open(shortLease)
         val name = name()
-        backend.acquire(kept, setOf(name)).assert().isEqualTo(mapOf(name to AcquireResult.Granted(FIRST_TOKEN)))
+        val token = backend.grantedToken(kept, name)
 
         // The control session opened together with the kept one; once it expired, the kept one outlived its lease.
         awaitExpired(control) {
             backend.keepAlive(kept, shortLease, setOf(name)).live()
         }
 
-        backend.keepAlive(kept, lease, setOf(name)).live().owned.assert().containsEntry(name, FIRST_TOKEN)
-        backend.acquire(open(), setOf(name)).assert().isEqualTo(mapOf(name to AcquireResult.HeldBy(kept, FIRST_TOKEN)))
+        backend.keepAlive(kept, lease, setOf(name)).live().owned.assert().containsEntry(name, token)
+        backend.acquire(open(), setOf(name)).assert().isEqualTo(mapOf(name to AcquireResult.HeldBy(kept, token)))
     }
 
     @Test
@@ -190,10 +187,13 @@ abstract class LeaseBackendSpec {
     // ---- acquire --------------------------------------------------------------------------------------------------
 
     @Test
-    fun aFreeLeaseIsGrantedWithTheFirstToken() {
+    fun aFreeLeaseIsGrantedWithAPositiveToken() {
         val name = name()
 
-        backend.acquire(open(), setOf(name)).assert().isEqualTo(mapOf(name to AcquireResult.Granted(FIRST_TOKEN)))
+        val result = backend.acquire(open(), setOf(name)).getValue(name)
+
+        result.assert().isInstanceOf(AcquireResult.Granted::class.java)
+        (result as AcquireResult.Granted).token.assert().isPositive()
     }
 
     @Test
@@ -201,10 +201,9 @@ abstract class LeaseBackendSpec {
         val owner = open()
         val contender = open()
         val name = name()
-        backend.acquire(owner, setOf(name))
+        val token = backend.grantedToken(owner, name)
 
-        backend.acquire(contender, setOf(name)).assert()
-            .isEqualTo(mapOf(name to AcquireResult.HeldBy(owner, FIRST_TOKEN)))
+        backend.acquire(contender, setOf(name)).assert().isEqualTo(mapOf(name to AcquireResult.HeldBy(owner, token)))
     }
 
     @Test
@@ -222,9 +221,8 @@ abstract class LeaseBackendSpec {
         val first = open()
         val second = open()
         val name = name()
-        var token = FIRST_TOKEN
+        var token = backend.grantedToken(first, name)
 
-        backend.acquire(first, setOf(name)).assert().isEqualTo(mapOf(name to AcquireResult.Granted(token)))
         backend.release(first, mapOf(name to token))
         token = backend.grantedToken(second, name).also { it.assertAfter(token) }
         backend.release(second, mapOf(name to token))
@@ -271,7 +269,11 @@ abstract class LeaseBackendSpec {
         val results = backend.acquire(session, free + held)
 
         results.keys.assert().isEqualTo(free + held)
-        free.forEach { results[it].assert().isEqualTo(AcquireResult.Granted(FIRST_TOKEN)) }
+        free.forEach {
+            val granted = results[it]
+            granted.assert().isInstanceOf(AcquireResult.Granted::class.java)
+            (granted as AcquireResult.Granted).token.assert().isPositive()
+        }
         results[held].assert().isEqualTo(AcquireResult.HeldBy(other, heldToken))
     }
 
@@ -367,7 +369,7 @@ abstract class LeaseBackendSpec {
         val names = setOf(name(), name())
         val tokens = names.associateWith { backend.grantedToken(owner, it) }
 
-        backend.release(owner, tokens + (name() to FIRST_TOKEN))
+        backend.release(owner, tokens + (name() to tokens.values.first()))
 
         backend.acquire(open(), names).values.forEach { it.assert().isInstanceOf(AcquireResult.Granted::class.java) }
     }
@@ -498,18 +500,15 @@ abstract class LeaseBackendSpec {
 
     protected fun group(): String = "tck.${UUID.randomUUID()}"
 
+    /** Tokens only strictly increase per name: by one on a counter, by more on a global id such as a czxid. */
     private fun Long.assertAfter(previous: Long) {
-        if (consecutiveTokens) {
-            assert().isEqualTo(previous + 1)
-        } else {
-            assert().isGreaterThan(previous)
-        }
+        assert().isGreaterThan(previous)
     }
 
     private fun LeaseBackend.grantedToken(session: SessionId, name: LeaseName): Long {
         val result = acquire(session, setOf(name)).getValue(name)
         result.assert().isInstanceOf(AcquireResult.Granted::class.java)
-        return (result as AcquireResult.Granted).token
+        return (result as AcquireResult.Granted).token.also { it.assert().isPositive() }
     }
 
     private fun KeepAliveResult.live(): KeepAliveResult.Live {
@@ -576,8 +575,6 @@ abstract class LeaseBackendSpec {
     }
 
     companion object {
-        /** Token of the first term of a name when [consecutiveTokens]. */
-        const val FIRST_TOKEN = 1L
         private const val CONTENDERS = 8
         private const val ROUNDS = 5
         private const val POLL_MILLIS = 20L
