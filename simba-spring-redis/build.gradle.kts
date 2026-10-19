@@ -14,7 +14,9 @@
 dependencies {
     api(project(":simba-core"))
     api("org.springframework.data:spring-data-redis")
+    compileOnly("io.lettuce:lettuce-core")
     testImplementation(project(":simba-test"))
+    testImplementation(project(":simba-tck"))
     testImplementation("io.lettuce:lettuce-core")
     testImplementation("org.testcontainers:testcontainers")
 }
