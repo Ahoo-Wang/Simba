@@ -93,7 +93,7 @@ interface LeadershipListener {
 
 | 类型 | 成员 |
 |---|---|
-| `DistributedLock` | `name`；`acquire(timeout): LockTerm`（抛出 `LockTimeoutException`）；`tryAcquire(): LockTerm?` |
+| `DistributedLock` | `name`；`acquire(timeout): LockTerm`（抛出 `LockTimeoutException`）；`tryAcquire(): LockTerm?`；5.1 起 `acquireAsync(timeout): CompletionStage<LockTerm>` 与 `tryAcquireAsync(): CompletionStage<LockTerm?>`（取消会放弃本次尝试并释放已赢得的任期） |
 | `LockTerm : Term, AutoCloseable` | `releaseAsync(): CompletionStage<Void>`；`close()`（幂等） |
 | `LockTimeoutException` | `name`、`timeout` |
 

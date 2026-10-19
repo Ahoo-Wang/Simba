@@ -97,7 +97,7 @@ overruns skips the missed starts.
 
 | Type | Members |
 |---|---|
-| `DistributedLock` | `name`; `acquire(timeout): LockTerm` (throws `LockTimeoutException`); `tryAcquire(): LockTerm?` |
+| `DistributedLock` | `name`; `acquire(timeout): LockTerm` (throws `LockTimeoutException`); `tryAcquire(): LockTerm?`; since 5.1 `acquireAsync(timeout): CompletionStage<LockTerm>` and `tryAcquireAsync(): CompletionStage<LockTerm?>` (cancelling abandons the attempt and releases a won term) |
 | `LockTerm : Term, AutoCloseable` | `releaseAsync(): CompletionStage<Void>`; `close()` (idempotent) |
 | `LockTimeoutException` | `name`, `timeout` |
 

@@ -30,6 +30,30 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 |---|---|
 | `acquire(timeout)` | 最多等待 `timeout`（按客户端时钟）以获得一个任期；未能及时赢得时抛出 `LockTimeoutException`。刚赢得就结束的任期不会结束等待：锁会继续竞争直到超时。中断调用方会放弃本次尝试并重新抛出 `InterruptedException`。 |
 | `tryAcquire()` | 只尝试一次：本客户端赢得第一个得到应答的尝试时返回任期；当另一个会话或本客户端持有该租约，或在一个租约时长内没有尝试得到应答（后端不可达）时返回 `null`。 |
+| `acquireAsync(timeout)` | 不阻塞的 `acquire`（5.1 起）：返回 `CompletionStage<LockTerm>`，以任期完成；超时则以 `LockTimeoutException`、客户端关闭则以 `IllegalStateException` 异常完成。 |
+| `tryAcquireAsync()` | 不阻塞的 `tryAcquire`（5.1 起）：返回 `CompletionStage<LockTerm?>`，以任期或 `null` 完成。 |
+
+### 不阻塞地获取 {#without-blocking}
+
+`acquireAsync` 和 `tryAcquireAsync` 等待时不占用线程，在客户端的回调执行器上完成，绝不在事件循环上完成。**取消**返回的
+future（`toCompletableFuture().cancel(...)`）会放弃本次尝试，并释放已经赢得的任期，因此被取消的获取绝不会让锁一直被持有。
+Reactor 用户可以用 `Mono.fromCompletionStage` 包装它。
+
+```kotlin
+simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
+    .thenCompose { term ->
+        invoiceStore.writeAsync(invoice, fencingToken = term.token)
+            .whenComplete { _, _ -> term.releaseAsync() }
+    }
+```
+
+```java
+simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
+    .thenCompose(term -> invoiceStore.writeAsync(invoice, term.getToken())
+        .whenComplete((result, error) -> term.releaseAsync()));
+```
+
+客户端之外的 `DistributedLock` 实现会继承默认方法：它们在虚拟线程上调用阻塞版本，取消时中断该线程。
 
 在一个客户端内，同一名称**最多只有一个持有者**：对同一名称的第二次 `acquire` 会等到第一次被释放（或它自己的超时到期）。
 同名的锁和选举共享一个租约，因此不要把同一个名称同时用于两者。

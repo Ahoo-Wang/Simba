@@ -110,7 +110,12 @@ simba.lock("invoice-42").acquire(Duration.ofSeconds(5)).use { term ->
 }
 ```
 
-返回的 `LockTerm` 就是凭证：关闭它即释放租约。
+返回的 `LockTerm` 就是凭证：关闭它即释放租约。5.1 起，`acquireAsync` 等待时不阻塞线程；取消它的 future 会放弃本次尝试：
+
+```kotlin
+simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
+    .thenCompose { term -> invoiceStore.writeAsync(invoice, term.token).whenComplete { _, _ -> term.releaseAsync() } }
+```
 
 ### 可观测性
 

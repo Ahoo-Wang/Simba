@@ -119,7 +119,9 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   `LeaderTask` or `LockTerm` stops only its own run (closing it again never touches a later run of the name).
 - `lock(name)`: one holder per name per client; a lock term lost other than by release is released for good, not
   re-acquired, but `acquire(timeout)` keeps contending until its timeout when the term it won ended before it
-  returned. Timers that are no longer needed (lock deadlines, schedule wake-ups, call timeouts) are cancelled.
+  returned. `acquireAsync` / `tryAcquireAsync` wait without a thread and complete on the callback executor; the
+  blocking calls wait on them, and cancelling one (or interrupting a blocking caller) abandons the attempt and releases
+  a term it already won. Timers that are no longer needed (lock deadlines, schedule wake-ups, call timeouts) are cancelled.
 - Groups: the engine joins the group with every session and publishes member views (`Effect.Members`); each node runs
   the partitions `PartitionAssignment` gives it over the session ids and hands the others over. Leaving while a join
   is in flight sends the leave once the join answers (even a failed one); a failed leave retries; the membership of

@@ -30,6 +30,32 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 |---|---|
 | `acquire(timeout)` | Waits up to `timeout` (on the client's clock) for a term; throws `LockTimeoutException` when none was won in time. A term that ends right after it was won does not end the wait: the lock contends again until the timeout. Interrupting the caller abandons the attempt and rethrows `InterruptedException`. |
 | `tryAcquire()` | One attempt: the term when this client wins the first answered attempt; `null` when another session or this client holds the lease, or when no attempt is answered within one lease duration (backend unreachable). |
+| `acquireAsync(timeout)` | `acquire` without blocking (since 5.1): a `CompletionStage<LockTerm>` that completes with the term, or exceptionally with `LockTimeoutException` (timeout) or `IllegalStateException` (client closed). |
+| `tryAcquireAsync()` | `tryAcquire` without blocking (since 5.1): a `CompletionStage<LockTerm?>` that completes with the term or `null`. |
+
+### Without Blocking
+
+`acquireAsync` and `tryAcquireAsync` wait without a thread and complete on the client's callback executor, never on
+its event loop. **Cancelling** the returned future (`toCompletableFuture().cancel(...)`) abandons the attempt and
+releases a term it already won, so a cancelled acquisition never leaves the lock held. Reactor users can wrap the
+stage with `Mono.fromCompletionStage`.
+
+```kotlin
+simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
+    .thenCompose { term ->
+        invoiceStore.writeAsync(invoice, fencingToken = term.token)
+            .whenComplete { _, _ -> term.releaseAsync() }
+    }
+```
+
+```java
+simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
+    .thenCompose(term -> invoiceStore.writeAsync(invoice, term.getToken())
+        .whenComplete((result, error) -> term.releaseAsync()));
+```
+
+`DistributedLock` implementations other than the client's inherit default methods that run the blocking call on a
+virtual thread and interrupt it on cancellation.
 
 Within one client a name has **at most one holder**: a second `acquire` of the same name waits until the first is
 released (or its own timeout passes). A lock and an election of the same name share one lease, so do not use one
