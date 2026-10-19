@@ -87,7 +87,7 @@ for longer than the lease). Micrometer: `simba.session.renew`, `simba.session.st
 
 ```kotlin
 val simba = Simba.builder()
-    .backend(JdbcLeaseBackend.mysql(dataSource))          // JdbcLeaseBackend.postgres(...)
+    .backend(JdbcLeaseBackend.mysql(dataSource))          // JdbcLeaseBackend.postgres(...); statement timeout 5 s
     // .backend(RedisLeaseBackend(SpringRedisScripting(connectionFactory)))
     // .backend(ZookeeperLeaseBackend("zk:2181"))
     .config(SimbaConfig(leaseDuration = Duration.ofSeconds(15)))
