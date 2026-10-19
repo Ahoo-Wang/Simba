@@ -45,6 +45,14 @@ class SimulationSpec {
     }
 
     @Test
+    fun `handovers wait for work and some time out`() {
+        val results = (0L until 50L).map { Simulation(it).run() }
+        results.sumOf { it.handovers }.assert().isGreaterThan(0)
+        results.sumOf { it.handoverTimeouts }.assert().isGreaterThan(0)
+        (results.sumOf { it.handovers } > results.sumOf { it.handoverTimeouts }).assert().isTrue()
+    }
+
+    @Test
     fun `the checker catches clocks drifting beyond the configured bound`() {
         val broken = SimulationParams().let { it.copy(clockRateSpread = 0.3, config = it.config.copy(drift = 0.0)) }
         assertThrows<SimulationFailure> {

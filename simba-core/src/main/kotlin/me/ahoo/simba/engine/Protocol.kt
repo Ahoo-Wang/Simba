@@ -33,17 +33,25 @@ sealed interface Event {
     /** Opens the first session. */
     data object Boot : Event
 
-    data class Start(val name: LeaseName) : Event
+    /**
+     * Starts contending for [name]. With [work], every term carries work that must exit (see [WorkExited]) before a
+     * stop or step-down releases the lease. [probe] completes when the first answered attempt does not elect this
+     * node (used by `tryAcquire`); it may never complete if the election stops first.
+     */
+    data class Start(
+        val name: LeaseName,
+        val work: Boolean = false,
+        val probe: CompletableFuture<Void>? = null,
+    ) : Event
 
     /**
-     * Stops the election. A held term is revoked, then its lease released, then [done] completes.
-     *
-     * TODO(ADR 0010 contract 3, phase 5): once work is bound to terms, release only after [WorkExited] for the term
-     * or after the term's remaining time, whichever comes first; with no work bound, release at once as today.
+     * Stops the election (ADR 0010 contract 3): a held term is revoked first. Without work running, its lease is
+     * released at once; otherwise only after [WorkExited] for the term or after the session's local deadline at the
+     * time of the stop, whichever comes first. Then [done] completes.
      */
     data class Stop(val name: LeaseName, val done: CompletableFuture<Void>) : Event
 
-    /** Gives up the held term like [Stop] (same TODO about waiting for work) and pauses for [cooldown] nanoseconds. */
+    /** Gives up the held term like [Stop] and does not contend before [cooldown] nanoseconds from now. */
     data class StepDown(val name: LeaseName, val cooldown: Long, val done: CompletableFuture<Void>) : Event
 
     data class Close(val done: CompletableFuture<Void>) : Event
@@ -56,10 +64,16 @@ sealed interface Event {
     data class Hint(val hint: BackendHint) : Event
 
     /**
-     * Reserved for phase 5 (ADR 0010 contract 3): the work bound to [term] of [name] exited, so the lease of a
-     * stopping or stepping-down term may be released. Ignored until work is bound to terms.
+     * The work bound to [term] of [name] exited (ADR 0010 contract 3): a stopping or stepping-down term releases its
+     * lease now, and a later stop of a still-held term releases at once.
      */
     data class WorkExited(val name: LeaseName, val term: Long) : Event
+
+    /** Joins [group] with the current session and every later one, and publishes its members. */
+    data class Join(val group: String) : Event
+
+    /** Leaves [group]. */
+    data class Leave(val group: String) : Event
 }
 
 /** Output of [step], executed in order by a shell. */
@@ -84,6 +98,12 @@ sealed interface Effect {
     data class Complete(val name: LeaseName?, val done: CompletableFuture<Void>) : Effect
 
     data class Publish(val event: SimbaEvent) : Effect
+
+    /**
+     * The view of [group] changed: its live [members] as seen by [session], or no session and no members while this
+     * node has no live session in the group.
+     */
+    data class Members(val group: String, val session: SessionId?, val members: List<SessionId>) : Effect
 }
 
 @InternalSimbaApi
@@ -97,6 +117,12 @@ sealed interface BackendRequest {
     data class Release(val session: SessionId, val leases: Map<LeaseName, Long>) : BackendRequest
 
     data class CloseSession(val session: SessionId) : BackendRequest
+
+    data class Join(val session: SessionId, val group: String) : BackendRequest
+
+    data class Leave(val session: SessionId, val group: String) : BackendRequest
+
+    data class Members(val group: String) : BackendRequest
 }
 
 @InternalSimbaApi
@@ -108,6 +134,8 @@ sealed interface BackendResult {
     data class Acquired(val results: Map<LeaseName, AcquireResult>) : BackendResult
 
     data object Done : BackendResult
+
+    data class Members(val members: List<SessionId>) : BackendResult
 
     data class Failed(val cause: Throwable) : BackendResult
 }
@@ -131,6 +159,18 @@ fun LeaseBackend.execute(request: BackendRequest): BackendResult =
                 closeSession(request.session)
                 BackendResult.Done
             }
+
+            is BackendRequest.Join -> {
+                join(request.session, request.group)
+                BackendResult.Done
+            }
+
+            is BackendRequest.Leave -> {
+                leave(request.session, request.group)
+                BackendResult.Done
+            }
+
+            is BackendRequest.Members -> BackendResult.Members(members(request.group))
         }
     } catch (error: Exception) {
         BackendResult.Failed(error)
