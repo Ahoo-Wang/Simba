@@ -15,6 +15,7 @@ package me.ahoo.simba.spring.boot.starter.metrics
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import me.ahoo.simba.RevokeReason
+import me.ahoo.simba.event.ElectionKind
 import me.ahoo.simba.event.SimbaEvent
 import me.ahoo.simba.event.WorkOutcome
 import me.ahoo.simba.spi.LeaseName
@@ -58,7 +59,7 @@ class MicrometerSimbaEventListenerTest {
         listener.onEvent(SimbaEvent.Revoked(name, 1, RevokeReason.TAKEN_OVER))
         registry.get(MicrometerSimbaEventListener.LEADERSHIP).tag("name", "orders").gauge().value()
             .assert().isEqualTo(0.0)
-        registry.get(MicrometerSimbaEventListener.REVOCATIONS).tag("reason", "taken_over")
+        registry.get(MicrometerSimbaEventListener.REVOCATIONS).tags("reason", "taken_over", "kind", "election")
             .counter().count().assert().isEqualTo(1.0)
         registry.get(MicrometerSimbaEventListener.REVOCATIONS).counter().id.getTag("name").assert().isNull()
         listener.onEvent(SimbaEvent.AcquireFailed(name, IllegalStateException("down")))
@@ -81,6 +82,36 @@ class MicrometerSimbaEventListenerTest {
     fun `a stop of a name never elected is only counted`() {
         listener.onEvent(SimbaEvent.Revoked(name, 1, RevokeReason.STOPPED))
         registry.find(MicrometerSimbaEventListener.LEADERSHIP).gauges().assert().isEmpty()
+    }
+
+    @Test
+    fun `locks are counted together, never by name`() {
+        val invoice = LeaseName("invoice-42")
+        listener.onEvent(SimbaEvent.Elected(invoice, 1, ElectionKind.LOCK))
+        listener.onEvent(SimbaEvent.Elected(LeaseName("invoice-43"), 1, ElectionKind.LOCK))
+        registry.get(MicrometerSimbaEventListener.LOCKS_HELD).gauge().value().assert().isEqualTo(2.0)
+        registry.find(MicrometerSimbaEventListener.LEADERSHIP).gauges().assert().isEmpty()
+
+        listener.onEvent(SimbaEvent.Revoked(invoice, 1, RevokeReason.STOPPED, ElectionKind.LOCK))
+        listener.onEvent(SimbaEvent.Revoked(invoice, 1, RevokeReason.STOPPED, ElectionKind.LOCK))
+        registry.get(MicrometerSimbaEventListener.LOCKS_HELD).gauge().value().assert().isEqualTo(0.0)
+        registry.get(MicrometerSimbaEventListener.REVOCATIONS).tags("reason", "stopped", "kind", "lock")
+            .counter().count().assert().isEqualTo(2.0)
+        registry.find(MicrometerSimbaEventListener.REVOCATIONS).counters().forEach {
+            it.id.getTag("name").assert().isNull()
+        }
+    }
+
+    @Test
+    fun `partitions are tagged by their lease name and removed when they move away`() {
+        val partition = LeaseName("billing.3")
+        listener.onEvent(SimbaEvent.Elected(partition, 7, ElectionKind.GROUP))
+        registry.get(MicrometerSimbaEventListener.LEADERSHIP).tag("name", "billing.3").gauge().value()
+            .assert().isEqualTo(1.0)
+        listener.onEvent(SimbaEvent.Revoked(partition, 7, RevokeReason.STOPPED, ElectionKind.GROUP))
+        registry.find(MicrometerSimbaEventListener.LEADERSHIP).gauges().assert().isEmpty()
+        registry.get(MicrometerSimbaEventListener.REVOCATIONS).tags("reason", "stopped", "kind", "group")
+            .counter().count().assert().isEqualTo(1.0)
     }
 
     @Test

@@ -18,6 +18,7 @@ import io.micrometer.core.instrument.Gauge
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Timer
 import me.ahoo.simba.RevokeReason
+import me.ahoo.simba.event.ElectionKind
 import me.ahoo.simba.event.SessionStatus
 import me.ahoo.simba.event.SimbaEvent
 import me.ahoo.simba.event.SimbaEventListener
@@ -33,19 +34,22 @@ import java.util.concurrent.atomic.AtomicReference
  * |---|---|---|
  * | `simba.session.renew` | timer: successful keep-alive latency | |
  * | `simba.session.state` | gauge: 1 for the current session status, 0 otherwise | `state` |
- * | `simba.leadership` | gauge: 1 while this node holds a term of the name, 0 after losing it | `name` |
- * | `simba.revocations` | counter: ended terms, every reason | `reason` |
+ * | `simba.leadership` | gauge: 1 while this node holds a term of the election, 0 after losing it | `name` |
+ * | `simba.locks.held` | gauge: locks this node holds | |
+ * | `simba.revocations` | counter: ended terms, every reason | `reason`, `kind` (`election`, `lock`, `group`) |
  * | `simba.work` | timer: leader work runs | `name`, `outcome` |
  *
- * Partition elections count as names too (`{group}.{partition}`). To keep the number of series bounded, a name's
- * `simba.leadership` gauge exists only from its first term until the term ends by a stop (`STOPPED`: the election
- * stopped, the client closed, or a lock was released), and revocations carry no name.
+ * Only elections and partitions (`{group}.{partition}`), whose names come from the application's code, are tagged by
+ * name; locks, whose names often come from data, are counted together ([ElectionKind] of the event). A name's
+ * `simba.leadership` gauge exists from its first term until a term ends `STOPPED` (the election stopped, the
+ * partition moved away, or the client closed), so stopped elections leave no series.
  */
 class MicrometerSimbaEventListener(private val registry: MeterRegistry) : SimbaEventListener {
     companion object {
         const val SESSION_RENEW = "simba.session.renew"
         const val SESSION_STATE = "simba.session.state"
         const val LEADERSHIP = "simba.leadership"
+        const val LOCKS_HELD = "simba.locks.held"
         const val REVOCATIONS = "simba.revocations"
         const val WORK = "simba.work"
         private const val NAME = "name"
@@ -53,6 +57,7 @@ class MicrometerSimbaEventListener(private val registry: MeterRegistry) : SimbaE
 
     private val state = AtomicReference(SessionStatus.OPENING)
     private val leaders = ConcurrentHashMap<LeaseName, Leader>()
+    private val locksHeld = AtomicInteger()
 
     private class Leader(val held: AtomicInteger, val gauge: Gauge)
     private val renew = Timer.builder(SESSION_RENEW)
@@ -60,6 +65,9 @@ class MicrometerSimbaEventListener(private val registry: MeterRegistry) : SimbaE
         .register(registry)
 
     init {
+        Gauge.builder(LOCKS_HELD, locksHeld) { it.get().toDouble() }
+            .description("Locks this node holds")
+            .register(registry)
         SessionStatus.entries.forEach { status ->
             Gauge.builder(SESSION_STATE, state) { if (it.get() == status) 1.0 else 0.0 }
                 .description("1 for the current status of the Simba session")
@@ -79,19 +87,13 @@ class MicrometerSimbaEventListener(private val registry: MeterRegistry) : SimbaE
             is SimbaEvent.SessionSuspended -> state.set(SessionStatus.SUSPENDED)
             is SimbaEvent.SessionExpired -> state.set(SessionStatus.OPENING)
             is SimbaEvent.SessionClosed -> state.set(SessionStatus.CLOSED)
-            is SimbaEvent.Elected -> leader(event.name).held.set(1)
-            is SimbaEvent.Revoked -> {
-                if (event.reason == RevokeReason.STOPPED) {
-                    leaders.remove(event.name)?.let { registry.remove(it.gauge) }
-                } else {
-                    leaders[event.name]?.held?.set(0)
-                }
-                Counter.builder(REVOCATIONS)
-                    .description("Terms this node lost or gave up")
-                    .tag("reason", event.reason.tag())
-                    .register(registry)
-                    .increment()
+            is SimbaEvent.Elected -> if (event.kind == ElectionKind.LOCK) {
+                locksHeld.incrementAndGet()
+            } else {
+                leader(event.name).held.set(1)
             }
+
+            is SimbaEvent.Revoked -> revoked(event)
 
             is SimbaEvent.WorkCompleted -> Timer.builder(WORK)
                 .description("Leader work runs")
@@ -101,6 +103,19 @@ class MicrometerSimbaEventListener(private val registry: MeterRegistry) : SimbaE
 
             is SimbaEvent.AcquireFailed -> Unit
         }
+    }
+
+    private fun revoked(event: SimbaEvent.Revoked) {
+        when {
+            event.kind == ElectionKind.LOCK -> locksHeld.updateAndGet { (it - 1).coerceAtLeast(0) }
+            event.reason == RevokeReason.STOPPED -> leaders.remove(event.name)?.let { registry.remove(it.gauge) }
+            else -> leaders[event.name]?.held?.set(0)
+        }
+        Counter.builder(REVOCATIONS)
+            .description("Terms this node lost or gave up")
+            .tags("reason", event.reason.tag(), "kind", event.kind.tag())
+            .register(registry)
+            .increment()
     }
 
     private fun leader(name: LeaseName): Leader =

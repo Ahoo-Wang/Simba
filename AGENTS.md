@@ -129,10 +129,11 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   `notLiveFor`, and per election status, token, remaining and `kind` (`ElectionKind`: `ELECTION`, `LOCK`, `GROUP`,
   also on `Elected` / `Revoked`). Close publishes `SessionClosed` once. `healthy` = not live for at most `leaseDuration`; the
   starter's health indicator is exactly that rule.
-- Micrometer (starter): `simba.session.renew` (timer), `simba.session.state` (gauge per `state`),
-  `simba.leadership` (gauge per `name`, removed when a term of the name ends `STOPPED`, so released locks and stopped
-  elections leave no series), `simba.revocations` (counter per `reason` only, every reason), `simba.work` (timer per
-  `name`, `outcome`). Never tag a meter with a name that is not bounded by the application's code.
+- Micrometer (starter): `simba.session.renew` (timer), `simba.session.state` (gauge per `state`, `closed` from
+  `SessionClosed`), `simba.leadership` (gauge per `name`, elections and partitions only, removed when a term of the
+  name ends `STOPPED`), `simba.locks.held` (gauge, no tags), `simba.revocations` (counter per `reason` and `kind`),
+  `simba.work` (timer per `name`, `outcome`). Locks (`ElectionKind.LOCK`) are never tagged by name: their names come
+  from data.
 
 ### Wire contracts
 - Lease names (`LeaseName`): 1–128 characters of `[A-Za-z0-9._:-]`, not `.` or `..`. Partition `p` of group `g` is the lease
