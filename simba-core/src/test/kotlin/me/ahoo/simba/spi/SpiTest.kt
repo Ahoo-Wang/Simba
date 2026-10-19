@@ -52,6 +52,22 @@ class SpiTest {
     }
 
     @Test
+    fun `backend input rules`() {
+        LeaseBackend.requireLease(Duration.ofMillis(1)).assert().isEqualTo(Duration.ofMillis(1))
+        assertThrows<IllegalArgumentException> { LeaseBackend.requireLease(Duration.ofNanos(999_999)) }
+        assertThrows<IllegalArgumentException> { LeaseBackend.requireLease(Duration.ZERO) }
+        assertThrows<IllegalArgumentException> { LeaseBackend.requireLease(Duration.ofSeconds(-1)) }
+        LeaseBackend.requireGroup("orders.v2").assert().isEqualTo("orders.v2")
+        listOf("", "a/b", "{a}", ".", "x".repeat(LeaseName.MAX_LENGTH + 1)).forEach {
+            assertThrows<IllegalArgumentException> { LeaseBackend.requireGroup(it) }
+        }
+        LeaseBackend.requireBatch(List(LeaseBackend.MAX_BATCH) { LeaseName("n$it") })
+        assertThrows<IllegalArgumentException> {
+            LeaseBackend.requireBatch(List(LeaseBackend.MAX_BATCH + 1) { LeaseName("n$it") })
+        }
+    }
+
+    @Test
     fun `defaults of a minimal backend`() {
         val backend = ThrowingBackend()
         backend.capabilities.assert().isEqualTo(Capabilities())

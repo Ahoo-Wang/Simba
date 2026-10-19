@@ -84,7 +84,6 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         private val log = KotlinLogging.logger {}
         const val DEFAULT_ROOT = "/simba"
         private const val DEFAULT_CONNECTION_TIMEOUT_SECONDS = 15L
-        private const val MAX_BATCH = 64
         private const val MAX_ATTEMPTS = 8
         private const val RETRY_BASE_MILLIS = 100
         private const val RETRY_COUNT = 3
@@ -133,18 +132,14 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         require(this.root.startsWith('/')) { "Root [$root] must be an absolute path." }
     }
 
-    override val capabilities: Capabilities = Capabilities(
-        releaseHints = true,
-        membershipHints = true,
-        maxBatch = MAX_BATCH,
-    )
+    override val capabilities: Capabilities = Capabilities(releaseHints = true, membershipHints = true)
 
     /**
      * Connects a new Zookeeper session; [metadata] is not stored (Zookeeper sessions carry none). Fails once the
      * backend is closed, closing the client it may have opened meanwhile.
      */
     override fun openSession(lease: Duration, metadata: Map<String, String>): SessionGrant {
-        require(lease.isPositive) { "Lease [$lease] must be positive." }
+        LeaseBackend.requireLease(lease)
         ensureOpen()
         val startedAt = System.nanoTime()
         val watcher = SessionWatcher()
@@ -175,6 +170,7 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
     }
 
     override fun keepAlive(session: SessionId, lease: Duration, held: Set<LeaseName>): KeepAliveResult {
+        LeaseBackend.requireLease(lease)
         val live = sessions[session] ?: return KeepAliveResult.Expired
         val startedAt = System.nanoTime()
         return live.expiringOn {
@@ -204,7 +200,7 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
     }
 
     override fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult> {
-        require(names.size <= MAX_BATCH) { "At most $MAX_BATCH names per acquire, was ${names.size}." }
+        LeaseBackend.requireBatch(names)
         names.forEach(::leasePath)
         val live = sessions[session] ?: throw SessionExpiredException(session)
         return live.expiringOn {
@@ -322,12 +318,9 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         return "$leasesPath/${name.value}"
     }
 
-    private fun groupPath(group: String): String {
-        require(group.isNotEmpty() && '/' !in group && group != "." && group != "..") {
-            "Group [$group] must be a non-empty Zookeeper node name."
-        }
-        return "$groupsPath/$group"
-    }
+    /** Group names follow the lease name rules, so each is one valid node name. */
+    private fun groupPath(group: String): String = "$groupsPath/${LeaseBackend.requireGroup(group)}"
+
 
     private fun memberPath(group: String, session: SessionId): String = "${groupPath(group)}/${session.value}"
 
