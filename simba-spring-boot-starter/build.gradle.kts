@@ -52,6 +52,8 @@ dependencies {
     "zookeeperSupportImplementation"(project(":simba-zookeeper"))
 
     api("org.springframework.boot:spring-boot-starter")
+    // Binds the Kotlin @ConfigurationProperties data classes through their primary constructor (with defaults).
+    implementation(kotlin("reflect"))
     compileOnly("io.micrometer:micrometer-core")
     compileOnly("org.springframework.boot:spring-boot-actuator-autoconfigure")
     compileOnly("org.springframework.boot:spring-boot-health")
@@ -66,7 +68,7 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-micrometer-metrics")
     testImplementation("com.mysql:mysql-connector-j")
     testImplementation("org.springframework.boot:spring-boot-starter-jdbc")
-    testImplementation("org.apache.curator:curator-test")
+    testImplementation(libs.curator.test)
     testImplementation("io.lettuce:lettuce-core")
     testImplementation(project(":simba-testing"))
 }
