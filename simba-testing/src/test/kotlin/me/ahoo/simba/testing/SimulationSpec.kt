@@ -43,6 +43,16 @@ class SimulationSpec {
     }
 
     @Test
+    fun `invariants hold when self-expiring grants last only as long as the session has left`() {
+        val range = only?.let { it..it } ?: 0 until seeds
+        var elections = 0L
+        for (seed in range) {
+            elections += Simulation(seed, SESSION_BOUND).run().elections
+        }
+        elections.assert().isGreaterThan(0)
+    }
+
+    @Test
     fun `a seed replays exactly`() {
         Simulation(SAMPLE_SEED).run().assert().isEqualTo(Simulation(SAMPLE_SEED).run())
     }
@@ -77,5 +87,6 @@ class SimulationSpec {
         const val DEFAULT_SEEDS = 10_000L
         const val SAMPLE_SEED = 42L
         val SELF_EXPIRING = SimulationParams.builder().selfExpiringLeases(true).build()
+        val SESSION_BOUND = SimulationParams.builder().selfExpiringLeases(true).sessionBoundGrants(true).build()
     }
 }

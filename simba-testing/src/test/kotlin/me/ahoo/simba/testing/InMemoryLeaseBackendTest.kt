@@ -114,4 +114,36 @@ class InMemoryLeaseBackendTest {
         assertThrows<IllegalStateException> { fixed.openSession(lease) }
         InMemoryLeaseBackend().openSession(lease).id.value.length.assert().isEqualTo(32)
     }
+
+    @Test
+    fun `acquiring an owned self-expiring lease extends it by a full lease beyond its session`() {
+        val selfExpiring = InMemoryLeaseBackend(clock, true) { SessionId("s${++ids}") }
+        val session = selfExpiring.openSession(lease).id
+        selfExpiring.acquire(session, setOf(name))[name].assert().isEqualTo(AcquireResult.Granted(1))
+        clock.advance(Duration.ofSeconds(2))
+
+        selfExpiring.acquire(session, setOf(name))[name].assert().isEqualTo(AcquireResult.Granted(1))
+
+        // The session expired at 3 s; the lease refreshed at 2 s lasts until 5 s.
+        clock.advance(Duration.ofMillis(1500))
+        selfExpiring.owner(name).assert().isEqualTo(InMemoryLeaseBackend.Owner(session, 1))
+        clock.advance(Duration.ofMillis(1500))
+        selfExpiring.owner(name).assert().isNull()
+    }
+
+    @Test
+    fun `session-bound grants last only as long as the session has left`() {
+        val sessionBound = InMemoryLeaseBackend(clock, true, true) { SessionId("s${++ids}") }
+        val session = sessionBound.openSession(lease).id
+        clock.advance(Duration.ofSeconds(2))
+
+        sessionBound.acquire(session, setOf(name))[name].assert().isEqualTo(AcquireResult.Granted(1))
+
+        clock.advance(Duration.ofMillis(999))
+        sessionBound.owner(name).assert().isEqualTo(InMemoryLeaseBackend.Owner(session, 1))
+        clock.advance(Duration.ofMillis(1))
+        sessionBound.owner(name).assert().isNull()
+        sessionBound.acquire(sessionBound.openSession(lease).id, setOf(name))[name]
+            .assert().isEqualTo(AcquireResult.Granted(2))
+    }
 }

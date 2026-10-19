@@ -113,7 +113,9 @@ val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
 ### Cluster {#cluster}
 
 在 Redis Cluster 上（`RedisScripting.clustered`，或 `simba.redis.route-by-slot=true`），每次脚本调用都限定在一个哈希槽内：
-一次调用先访问会话所在的槽，然后为其余键的每个槽各运行一个脚本。此时租约和会话所在的槽可能位于时钟不同的节点上；它们之间的时钟偏差会让租约缩短或延长相应的时长。
+一次调用先访问会话所在的槽，然后为其余键的每个槽各运行一个脚本。后面这些脚本可能比第一个晚很久才到达 Redis（虚拟线程饥饿，或驱动在重连前一直扣着命令），这时会话可能已经死亡。
+每个脚本都带上会话调用时的 Redis 时间加会话租约再加 `maxClockSkew`（构造参数，默认 1 秒）：超过这个时刻的授予和延长都不会发生，在它之后才到达的获取或加入不做任何修改并失败。
+续约只在不可能再有这样的获取拿到某个丢失的租约之后，才把它从会话的索引中移除，因此 `owned` 始终完整。租约和会话所在的槽可能位于时钟不同的节点上；超过 `maxClockSkew` 的时钟偏差可能让租约早于会话结束。
 
 ### 主从切换后 token 回退 {#token-regression-after-a-failover}
 
