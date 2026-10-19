@@ -64,7 +64,7 @@ deadline = sentAt + remaining × (1 − drift) − margin
 | `token` | Fencing token：大于零，在任期内不变，在同一名称的任期之间严格递增 |
 | `isValid` | 未被撤销，且会话的本地截止时刻未过 |
 | `remaining()` | 距本地截止时刻的剩余时间；任期结束后为 `Duration.ZERO` |
-| `ensureValid(minRemaining)` | 除非任期在超过 `minRemaining` 的时间内仍然有效，否则抛出 `LeaseExpiredException` |
+| `ensureValid(minRemaining)` | 除非任期在超过 `minRemaining` 的时间内仍然有效，否则抛出 `TermExpiredException` |
 | `revoked` | `CompletionStage<RevokeReason>`，在任期结束时恰好完成一次 |
 
 `isValid` 和 `remaining()` 是单调时钟与会话截止时刻的纯函数：不需要先运行任何看门狗线程，因此一个从长时间暂停中醒来的进程在第一次读取时就会看到
@@ -93,9 +93,13 @@ deadline = sentAt + remaining × (1 − drift) − margin
 | `retryJitter` | `renewInterval / 2` | 候选者在 `renewInterval / 2` 加上 `[0, retryJitter)` 内的随机延迟后重试 |
 | `minBackoff` | 100 ms | 续约失败后退避时间的下限 |
 
-除非 `renewInterval × 2 ≤ leaseDuration`（截止时刻之前至少能容纳两次续约尝试）且
-`leaseDuration × (1 − drift) − margin > renewInterval`（否则每个任期都会抖动），否则构造会失败。在 Spring Boot 中，它们对应
+用 `SimbaConfig.builder()` 构建（`toBuilder()` 可派生变体）；除非 `renewInterval × 2 ≤ leaseDuration`（截止时刻之前至少能容纳两次续约尝试）且
+`leaseDuration × (1 − drift) − margin > renewInterval`（否则每个任期都会抖动），否则 `build()` 会失败。在 Spring Boot 中，它们对应
 [`simba.session.*`](/zh/guide/configuration#properties) 属性。
+
+后端给出的时间可能少于 `leaseDuration`——Zookeeper 服务端会把会话超时限制在 `maxSessionTimeout` 以内。当它给出的本地有效期内已容纳不下两次间隔为
+`renewInterval` 的续约时，客户端改为每隔本地有效期的三分之一续约一次，并且每个会话发布一次 `SessionLeaseShortened`（同时记录 warn 日志），
+而不是让每个任期都以 `DEADLINE_PASSED` 结束。
 
 如何选择：
 
@@ -186,7 +190,7 @@ synchronized(state) {
 
 ## 在每个步骤前检查任期 {#checking-the-term-before-each-step}
 
-除非任期在超过 `minRemaining` 的时间内仍然有效，否则 `term.ensureValid(minRemaining)` 抛出 `LeaseExpiredException`。
+除非任期在超过 `minRemaining` 的时间内仍然有效，否则 `term.ensureValid(minRemaining)` 抛出 `TermExpiredException`。
 在任期即将结束时不应开始的步骤之前调用它：
 
 ```kotlin

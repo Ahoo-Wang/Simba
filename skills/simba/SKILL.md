@@ -90,7 +90,7 @@ val simba = Simba.builder()
     .backend(JdbcLeaseBackend.mysql(dataSource))          // JdbcLeaseBackend.postgres(...); statement timeout 5 s
     // .backend(RedisLeaseBackend(SpringRedisScripting(connectionFactory)))
     // .backend(ZookeeperLeaseBackend("zk:2181"))
-    .config(SimbaConfig(leaseDuration = Duration.ofSeconds(15)))
+    .config(SimbaConfig.builder().leaseDuration(Duration.ofSeconds(15)).build())
     .listener { event -> log.debug { "$event" } }        // SimbaEventListener
     .build()
 // simba.close() revokes every term and frees every lease at once; close the backend afterwards.
@@ -164,8 +164,7 @@ released for good, never re-acquired.
 
 ## Timing
 
-`SimbaConfig(leaseDuration = 15s, renewInterval = lease/3, drift = 0.01, margin = 50ms, retryJitter = renew/2,
-minBackoff = 100ms)`. Local deadline = `sentAt + remaining × (1 − drift) − margin`. Constraints: `renewInterval × 2 ≤
+`SimbaConfig.builder().leaseDuration(15s).renewInterval(lease/3).drift(0.01).margin(50ms).retryJitter(renew/2).minBackoff(100ms).build()`. Local deadline = `sentAt + remaining × (1 − drift) − margin`. Constraints: `renewInterval × 2 ≤
 leaseDuration` and `leaseDuration × (1 − drift) − margin > renewInterval`. Crash failover ≈ `leaseDuration` + next
 candidate attempt (`renewInterval / 2` + jitter); clean stop on Redis/Zookeeper is taken over at once.
 

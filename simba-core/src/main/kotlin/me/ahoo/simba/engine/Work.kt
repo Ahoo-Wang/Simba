@@ -16,10 +16,11 @@ package me.ahoo.simba.engine
 import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.LeaderWork
 import me.ahoo.simba.LeadershipListener
-import me.ahoo.simba.LeaseExpiredException
 import me.ahoo.simba.RevokeReason
 import me.ahoo.simba.Schedule
 import me.ahoo.simba.Term
+import me.ahoo.simba.TermExpiredException
+import me.ahoo.simba.event.ElectionKind
 import me.ahoo.simba.event.SimbaEvent
 import me.ahoo.simba.event.WorkOutcome
 import me.ahoo.simba.spi.Ticker
@@ -29,22 +30,30 @@ import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
 
 /**
- * The body of term-bound work; [electedAt] is when the term was handed to the work (ticker nanoseconds). The returned
- * event is published together with the exit, so an observer of it finds the exit already handled.
+ * What term-bound work left: the [event] published together with the exit (so an observer of it finds the exit
+ * already handled), and a [fatal] error that ends the term's work for good.
  */
+internal class WorkResult(val event: SimbaEvent?, val fatal: VirtualMachineError? = null)
+
+/** The body of term-bound work; [electedAt] is when the term was handed to the work (ticker nanoseconds). */
 internal fun interface TermBody {
-    fun run(term: EngineTerm, electedAt: Long): SimbaEvent?
+    fun run(term: EngineTerm, electedAt: Long): WorkResult
 }
 
 /**
  * Runs [body] once per term on a new task of [executor] (ADR 0010 contract 4): the task's thread is interrupted
  * when the term is revoked, and its exit is reported to the engine as [Event.WorkExited] so that a stop or step-down
  * can release the lease (contract 3). The election must be started with work.
+ *
+ * Failures of the work never affect the election, with one exception: a [VirtualMachineError] (out of memory, stack
+ * overflow, an internal JVM error) means this node cannot do the work reliably, so the election steps down for
+ * [fatalCooldown] nanoseconds and the error is rethrown to the work thread's uncaught-exception handler.
  */
 internal class WorkListener(
     private val shell: EngineShell,
     private val executor: Executor,
     private val ticker: Ticker,
+    private val fatalCooldown: Long,
     private val body: TermBody,
 ) : LeadershipListener {
     companion object {
@@ -88,11 +97,11 @@ internal class WorkListener(
                 }
                 !cancelled
             }
-            var event: SimbaEvent? = null
+            var result = WorkResult(null)
             try {
                 if (started) {
                     working.set(true)
-                    event = body.run(term, electedAt)
+                    result = body.run(term, electedAt)
                 }
             } finally {
                 working.remove()
@@ -101,30 +110,46 @@ internal class WorkListener(
                     thread = null
                     Thread.interrupted()
                 }
-                shell.workExited(term.name, term.id, event)
+                shell.workExited(term.name, term.id, result.event)
+            }
+            result.fatal?.let { fatal ->
+                log.error(fatal) { "Work of [${term.name}] term [${term.token}] hit a fatal error; stepping down." }
+                if (term.revokeReason == null) {
+                    shell.stepDown(term.name, fatalCooldown)
+                }
+                throw fatal
             }
         }
     }
 }
 
-/** Runs [work] once and returns its [SimbaEvent.WorkCompleted]; exceptions are logged, never rethrown. */
-internal fun runReported(ticker: Ticker, term: EngineTerm, work: LeaderWork): SimbaEvent.WorkCompleted {
+/**
+ * Runs [work] once and returns its [SimbaEvent.WorkCompleted]: anything it throws is logged and reported, never
+ * rethrown; a [VirtualMachineError] is also handed back as fatal.
+ */
+internal fun runReported(ticker: Ticker, term: EngineTerm, work: LeaderWork, kind: ElectionKind): WorkResult {
     val begin = ticker.nanoTime()
-    val error = try {
+    val error = attempt(term, work)
+    return WorkResult(completed(term, error, ticker.nanoTime() - begin, kind), error as? VirtualMachineError)
+}
+
+/** Runs [work] once; what it threw, if anything. */
+@Suppress("TooGenericExceptionCaught")
+private fun attempt(term: EngineTerm, work: LeaderWork): Throwable? =
+    try {
         work.run(term)
         null
-    } catch (error: Exception) {
+    } catch (error: Throwable) {
         error
     }
-    return completed(term, error, ticker.nanoTime() - begin)
-}
 
 private val workLog = KotlinLogging.logger {}
 
-internal fun completed(term: EngineTerm, error: Exception?, nanos: Long): SimbaEvent.WorkCompleted {
+internal fun completed(term: EngineTerm, error: Throwable?, nanos: Long, kind: ElectionKind): SimbaEvent.WorkCompleted {
     val outcome = when {
         error == null -> WorkOutcome.COMPLETED
-        term.revokeReason != null || error is LeaseExpiredException -> WorkOutcome.CANCELLED
+        error is VirtualMachineError -> WorkOutcome.FAILED
+        term.revokeReason != null || error is TermExpiredException -> WorkOutcome.CANCELLED
         else -> WorkOutcome.FAILED
     }
     if (outcome == WorkOutcome.FAILED) {
@@ -132,46 +157,47 @@ internal fun completed(term: EngineTerm, error: Exception?, nanos: Long): SimbaE
     } else if (error != null) {
         workLog.debug(error) { "Work of [${term.name}] term [${term.token}] ended with its term." }
     }
-    return SimbaEvent.WorkCompleted(term.name, term.token, outcome, Duration.ofNanos(nanos), error)
+    return SimbaEvent.WorkCompleted(term.name, term.token, outcome, Duration.ofNanos(nanos), error, kind)
 }
 
 /**
  * The [schedule] loop of one term, on the term's work thread. The wake-up of the next run is armed before the run
- * is published, so an observer of [SimbaEvent.WorkCompleted] always finds the next timer in place.
+ * is published, so an observer of [SimbaEvent.WorkCompleted] always finds the next timer in place. A run that throws
+ * (an [Error] included) is reported as failed and the loop goes on; an interrupt ends the loop, and so does a
+ * [VirtualMachineError], which is handed back as fatal.
  */
 internal class ScheduleBody(
     private val shell: EngineShell,
     private val ticker: Ticker,
     private val schedule: Schedule,
     private val work: LeaderWork,
+    private val kind: ElectionKind,
 ) : TermBody {
-    override fun run(term: EngineTerm, electedAt: Long): SimbaEvent? {
+    override fun run(term: EngineTerm, electedAt: Long): WorkResult {
         var at = electedAt + schedule.initialDelay.toNanos()
         var wake = Wake(at)
         try {
             while (await(term, wake.future)) {
                 try {
                     term.ensureValid()
-                } catch (error: LeaseExpiredException) {
+                } catch (error: TermExpiredException) {
                     workLog.debug(error) { "Schedule of [${term.name}] term [${term.token}] ends with its term." }
-                    return null
+                    return WorkResult(null)
                 }
                 val begin = ticker.nanoTime()
-                val error = try {
-                    work.run(term)
-                    null
-                } catch (error: Exception) {
-                    error
-                }
+                val error = attempt(term, work)
                 val end = ticker.nanoTime()
                 at = schedule.next(at, end)
                 wake = Wake(at)
-                shell.publish(completed(term, error, end - begin))
+                shell.publish(completed(term, error, end - begin, kind))
+                if (error is VirtualMachineError) {
+                    return WorkResult(null, error)
+                }
                 if (error is InterruptedException || Thread.currentThread().isInterrupted) {
-                    return null
+                    return WorkResult(null)
                 }
             }
-            return null
+            return WorkResult(null)
         } finally {
             // The loop ended with its term: drop the next wake-up instead of leaving it on the loop.
             wake.timer.cancel()

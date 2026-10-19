@@ -13,8 +13,8 @@
 
 package me.ahoo.simba.engine
 
-import me.ahoo.simba.LeaseExpiredException
 import me.ahoo.simba.RevokeReason
+import me.ahoo.simba.TermExpiredException
 import me.ahoo.simba.spi.LeaseName
 import me.ahoo.simba.spi.SessionId
 import me.ahoo.test.asserts.assert
@@ -36,7 +36,7 @@ class TermsTest {
 
         term.remaining().assert().isEqualTo(Duration.ofNanos(1_000))
         term.ensureValid(Duration.ofNanos(999))
-        assertThrows<LeaseExpiredException> { term.ensureValid(Duration.ofNanos(1_000)) }
+        assertThrows<TermExpiredException> { term.ensureValid(Duration.ofNanos(1_000)) }
         term.toString().assert().contains("token=7")
         now = 1_000
         term.isValid.assert().isFalse()

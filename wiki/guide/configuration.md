@@ -90,7 +90,7 @@ Build the client with `Simba.builder()`:
 ```kotlin
 val simba = Simba.builder()
     .backend(JdbcLeaseBackend.mysql(dataSource, queryTimeout = Duration.ofSeconds(5)))
-    .config(SimbaConfig(leaseDuration = Duration.ofSeconds(15), renewInterval = Duration.ofSeconds(5)))
+    .config(SimbaConfig.builder().leaseDuration(Duration.ofSeconds(15)).renewInterval(Duration.ofSeconds(5)).build())
     .listener(myEventListener)
     .build()
 ```
@@ -98,7 +98,7 @@ val simba = Simba.builder()
 | Builder method | Default | Description |
 |---|---|---|
 | `backend(LeaseBackend)` | required | The backend; the client does not close it |
-| `config(SimbaConfig)` | `SimbaConfig()` | Session timing, see [Timing](/guide/correctness#timing) |
+| `config(SimbaConfig)` | `SimbaConfig.builder().build()` | Session timing, see [Timing](/guide/correctness#timing) |
 | `listener(SimbaEventListener)` | none | Receives every [`SimbaEvent`](/guide/observability#events); may be called several times |
 | `ioExecutor(Executor)` | a virtual thread per call | Runs backend calls |
 | `callbackExecutor(Executor)` | virtual threads | Runs leadership callbacks, serially per election |

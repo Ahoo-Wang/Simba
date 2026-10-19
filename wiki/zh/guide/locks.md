@@ -21,6 +21,8 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
     invoiceStore.write(invoice, term.getToken());
 } catch (LockTimeoutException e) {
     // held elsewhere
+} catch (InterruptedException e) {
+    Thread.currentThread().interrupt();
 }
 ```
 
@@ -28,7 +30,7 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 
 | 方法 | 行为 |
 |---|---|
-| `acquire(timeout)` | 最多等待 `timeout`（按客户端时钟）以获得一个任期；未能及时赢得时抛出 `LockTimeoutException`。刚赢得就结束的任期不会结束等待：锁会继续竞争直到超时。中断调用方会放弃本次尝试并重新抛出 `InterruptedException`。 |
+| `acquire(timeout)` | 最多等待 `timeout`（按客户端时钟）以获得一个任期；未能及时赢得时抛出 `LockTimeoutException`。刚赢得就结束的任期不会结束等待：锁会继续竞争直到超时。超出纳秒表示范围的超时按 `Long.MAX_VALUE` 纳秒等待。中断调用方会放弃本次尝试并重新抛出 `InterruptedException`（对 Java 已声明）。在引擎循环上调用（只有直接执行的回调执行器才会走到）会抛出 `IllegalStateException`。 |
 | `tryAcquire()` | 只尝试一次：本客户端赢得第一个得到应答的尝试时返回任期；当另一个会话或本客户端持有该租约，或在一个租约时长内没有尝试得到应答（后端不可达）时返回 `null`。 |
 
 在一个客户端内，同一名称**最多只有一个持有者**：对同一名称的第二次 `acquire` 会等到第一次被释放（或它自己的超时到期）。
@@ -49,7 +51,7 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 此时锁被**永久释放**，不会在你不知情的情况下被重新获取：
 
 - `term.isValid` 变为 `false`，`term.revoked` 以原因完成；
-- 你的下一次 `ensureValid()` 抛出 `LeaseExpiredException`；
+- 你的下一次 `ensureValid()` 抛出 `TermExpiredException`；
 - 之后再关闭该 `LockTerm` 是无害的空操作。
 
 由于锁可能在你的代码仍在运行时结束，请把 `term.token` 传给受保护的资源，让它拒绝更低的 token；见

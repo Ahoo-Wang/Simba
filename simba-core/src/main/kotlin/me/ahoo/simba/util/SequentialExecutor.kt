@@ -94,22 +94,27 @@ internal class SequentialExecutor(private val delegate: Executor) : Executor {
         }
     }
 
+    /**
+     * Runs queued tasks until none is left. A task submitted after the last poll is picked up by this same drainer
+     * rather than by scheduling a new drain, so a rejecting delegate can never strand it from here.
+     */
     @Suppress("TooGenericExceptionCaught")
     private fun drain() {
-        try {
-            while (true) {
-                val task = queue.poll() ?: break
-                try {
-                    task.run()
-                } catch (error: Throwable) {
-                    log.error(error) { "drain - task failed." }
+        while (true) {
+            try {
+                while (true) {
+                    val task = queue.poll() ?: break
+                    try {
+                        task.run()
+                    } catch (error: Throwable) {
+                        log.error(error) { "drain - task failed." }
+                    }
                 }
+            } finally {
+                draining.set(false)
             }
-        } finally {
-            draining.set(false)
-            // A task submitted after the last poll but before the flag reset must not be stranded.
-            if (queue.isNotEmpty()) {
-                scheduleDrain()
+            if (queue.isEmpty() || !draining.compareAndSet(false, true)) {
+                return
             }
         }
     }

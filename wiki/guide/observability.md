@@ -30,19 +30,23 @@ lease). `token` and `remaining` are `0` without a term.
 ## Events
 
 Register a `SimbaEventListener` with `Simba.builder().listener(...)`, or as a bean with the starter. Events are
-published from the engine's loop: keep listeners fast and thread-safe; exceptions are logged and ignored.
+delivered in order on one serial dispatcher over the callback executor, never on the engine's loop, so a listener may
+call `snapshot()`, `stop()` and other client APIs; blocking `close()` methods do not wait when called from a listener.
+`close()` completes after the last event was delivered. Keep listeners fast; exceptions are logged and ignored. Events
+are plain classes with value equality (no `copy` or destructuring), so later versions can add properties.
 
 | `SimbaEvent` | When |
 |---|---|
 | `SessionOpened(session)` | A new session was opened |
 | `SessionRenewed(session, latency)` | A keep-alive succeeded |
 | `SessionSuspended(session, cause)` | A keep-alive failed before the local deadline |
-| `SessionExpired(session, reason)` | The session ended: deadline passed or the backend reported it expired |
+| `SessionExpired(session, reason)` | The session ended: `reason` is `DEADLINE_PASSED` (no keep-alive succeeded before the local deadline) or `SESSION_EXPIRED` (the backend reported it expired) |
+| `SessionLeaseShortened(session, remaining, renewEvery)` | The backend grants less than the configured lease (e.g. a capped Zookeeper session timeout), so the client renews every `renewEvery` (a third of the local validity) instead; once per session, also logged as a warning |
 | `SessionClosed(session)` | The client closed (`session` is `null` when none was open); published once |
 | `Elected(name, token, kind)` | This node got a term; `kind` (`ELECTION`, `LOCK`, `GROUP`) tells which API started the election, so metrics can label by kind instead of by unbounded lock names |
 | `Revoked(name, token, reason, kind)` | A term ended |
-| `AcquireFailed(name, cause)` | An acquire call failed (not "held by someone else", which is normal) |
-| `WorkCompleted(name, token, outcome, duration, cause)` | One run of leader work ended: `COMPLETED`, `FAILED` or `CANCELLED` |
+| `AcquireFailed(name, cause, kind)` | An acquire call failed (not "held by someone else", which is normal) |
+| `WorkCompleted(name, token, outcome, duration, cause, kind)` | One run of leader work ended: `COMPLETED`, `FAILED` or `CANCELLED` |
 
 ```kotlin
 @Component

@@ -72,7 +72,7 @@ A **term** is one period during which this node owns a lease. Winning the same n
 | `token` | Fencing token: greater than zero, constant within the term, strictly increasing across terms of the name |
 | `isValid` | Not revoked and the session's local deadline has not passed |
 | `remaining()` | Time left before the local deadline; `Duration.ZERO` once the term ended |
-| `ensureValid(minRemaining)` | Throws `LeaseExpiredException` unless the term is valid for more than `minRemaining` |
+| `ensureValid(minRemaining)` | Throws `TermExpiredException` unless the term is valid for more than `minRemaining` |
 | `revoked` | `CompletionStage<RevokeReason>` that completes exactly once, when the term ends |
 
 `isValid` and `remaining()` are pure functions of the monotonic clock and the session's deadline: no watchdog thread
@@ -103,9 +103,15 @@ that arrives late cannot free a later term.
 | `retryJitter` | `renewInterval / 2` | Candidates retry after `renewInterval / 2` plus a random delay in `[0, retryJitter)` |
 | `minBackoff` | 100 ms | Lower bound of the backoff after a failed keep-alive |
 
-Construction fails unless `renewInterval × 2 ≤ leaseDuration` (at least two keep-alive attempts fit before the
-deadline) and `leaseDuration × (1 − drift) − margin > renewInterval` (otherwise every term would flap). In Spring Boot
-these are the [`simba.session.*`](/guide/configuration#properties) properties.
+Build it with `SimbaConfig.builder()` (`toBuilder()` derives a variant); `build()` fails unless
+`renewInterval × 2 ≤ leaseDuration` (at least two keep-alive attempts fit before the deadline) and
+`leaseDuration × (1 − drift) − margin > renewInterval` (otherwise every term would flap). In Spring Boot these are the
+[`simba.session.*`](/guide/configuration#properties) properties.
+
+A backend may grant less than `leaseDuration` — a Zookeeper server caps the session timeout at its
+`maxSessionTimeout`. When two keep-alives at `renewInterval` no longer fit in the local validity it grants, the client
+renews every third of that validity instead and publishes `SessionLeaseShortened` (and a warning) once per session,
+rather than letting every term end with `DEADLINE_PASSED`.
 
 How to choose:
 
@@ -204,7 +210,7 @@ synchronized(state) {
 
 ## Checking the Term Before Each Step
 
-`term.ensureValid(minRemaining)` throws `LeaseExpiredException` unless the term stays valid for more than
+`term.ensureValid(minRemaining)` throws `TermExpiredException` unless the term stays valid for more than
 `minRemaining`. Call it before a step that should not start when the term is about to end:
 
 ```kotlin

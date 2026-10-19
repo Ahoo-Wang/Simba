@@ -27,20 +27,23 @@ Spring Boot starter 基于快照构建 Actuator 端点和健康指示器，基�
 
 ## 事件 {#events}
 
-通过 `Simba.builder().listener(...)` 注册 `SimbaEventListener`，或在使用 starter 时将其声明为 bean。事件从引擎循环上发布：
-监听器要快速且线程安全；异常会被记录日志并忽略。
+通过 `Simba.builder().listener(...)` 注册 `SimbaEventListener`，或在使用 starter 时将其声明为 bean。事件在回调执行器上的一个串行派发器里按顺序投递，
+从不在引擎循环上运行，因此监听器可以调用 `snapshot()`、`stop()` 等客户端 API；在监听器里调用阻塞的 `close()` 方法不会等待。
+`close()` 在最后一个事件投递之后完成。监听器要快速；异常会被记录日志并忽略。事件是按值比较的普通类（没有 `copy` 和解构），
+以后的版本可以兼容地增加属性。
 
 | `SimbaEvent` | 触发时机 |
 |---|---|
 | `SessionOpened(session)` | 打开了一个新会话 |
 | `SessionRenewed(session, latency)` | 一次续约 (keep-alive) 成功 |
 | `SessionSuspended(session, cause)` | 一次续约 (keep-alive) 在本地截止时刻之前失败 |
-| `SessionExpired(session, reason)` | 会话结束：截止时刻已过，或后端报告其已过期 |
+| `SessionExpired(session, reason)` | 会话结束：`reason` 为 `DEADLINE_PASSED`（本地截止时刻前没有一次续约成功）或 `SESSION_EXPIRED`（后端报告其已过期） |
+| `SessionLeaseShortened(session, remaining, renewEvery)` | 后端给出的时间少于配置的租期（例如 Zookeeper 的会话超时上限），客户端改为每 `renewEvery`（本地有效期的三分之一）续约一次；每个会话一次，同时记录 warn 日志 |
 | `SessionClosed(session)` | 客户端已关闭（未打开会话时 `session` 为 `null`）；只发布一次 |
 | `Elected(name, token, kind)` | 本节点获得了一个任期；`kind`（`ELECTION`、`LOCK`、`GROUP`）表示选举由哪个 API 启动，指标可以按 kind 打标签，而不必按数量无界的锁名打标签 |
 | `Revoked(name, token, reason, kind)` | 一个任期结束 |
-| `AcquireFailed(name, cause)` | 一次获取调用失败（不包括“被他人持有”，那是正常情况） |
-| `WorkCompleted(name, token, outcome, duration, cause)` | leader 任务的一次运行结束：`COMPLETED`、`FAILED` 或 `CANCELLED` |
+| `AcquireFailed(name, cause, kind)` | 一次获取调用失败（不包括“被他人持有”，那是正常情况） |
+| `WorkCompleted(name, token, outcome, duration, cause, kind)` | leader 任务的一次运行结束：`COMPLETED`、`FAILED` 或 `CANCELLED` |
 
 ```kotlin
 @Component

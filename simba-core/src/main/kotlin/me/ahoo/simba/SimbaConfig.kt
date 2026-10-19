@@ -14,32 +14,35 @@
 package me.ahoo.simba
 
 import java.time.Duration
+import java.util.Objects
 
 /**
- * Session timing.
+ * Session timing, built with [builder].
  *
  * The local deadline of a session is `sentAt + remaining × (1 − drift) − margin`, measured from when the keep-alive
  * was *sent*; it is always reached before the backend expires the session as long as the local clock rate is within
  * `1 ± drift` of the backend's.
  *
- * @param leaseDuration the backend expires a session this long after its last keep-alive.
- * @param renewInterval keep-alive period; at most half of [leaseDuration] so that at least two attempts fit before
- *   the deadline.
- * @param drift upper bound of the clock rate difference between this node and the backend.
- * @param margin extra safety subtracted from every deadline.
- * @param retryJitter candidates retry after `renewInterval / 2` plus a random delay in `[0, retryJitter)`.
- * @param minBackoff lower bound of the halving backoff after a failed keep-alive.
+ * A plain immutable class with value equality and no public constructor, so later versions can add settings without
+ * breaking callers; derive a variant with [toBuilder].
  *
- * From Java, use [builder] (unset values keep their defaults, derived ones from the values set) or the overloaded
- * constructors.
+ * @property leaseDuration the backend expires a session this long after its last keep-alive (default 15 s).
+ * @property renewInterval keep-alive period (default `leaseDuration / 3`); at most half of [leaseDuration] so that at
+ *   least two attempts fit before the deadline. A backend granting less than [leaseDuration] makes the client renew
+ *   more often (see `SimbaEvent.SessionLeaseShortened`).
+ * @property drift upper bound of the clock rate difference between this node and the backend (default 0.01).
+ * @property margin extra safety subtracted from every deadline (default 50 ms).
+ * @property retryJitter candidates retry after `renewInterval / 2` plus a random delay in `[0, retryJitter)`
+ *   (default `renewInterval / 2`).
+ * @property minBackoff lower bound of the halving backoff after a failed keep-alive (default 100 ms).
  */
-data class SimbaConfig @JvmOverloads constructor(
-    val leaseDuration: Duration = Duration.ofSeconds(15),
-    val renewInterval: Duration = leaseDuration.dividedBy(3),
-    val drift: Double = 0.01,
-    val margin: Duration = Duration.ofMillis(50),
-    val retryJitter: Duration = renewInterval.dividedBy(2),
-    val minBackoff: Duration = Duration.ofMillis(100),
+class SimbaConfig private constructor(
+    val leaseDuration: Duration,
+    val renewInterval: Duration,
+    val drift: Double,
+    val margin: Duration,
+    val retryJitter: Duration,
+    val minBackoff: Duration,
 ) {
     init {
         require(!renewInterval.isNegative && !renewInterval.isZero) { "renewInterval must be positive." }
@@ -58,14 +61,40 @@ data class SimbaConfig @JvmOverloads constructor(
     /** Local validity granted by a fresh keep-alive, in nanoseconds. */
     internal fun localValidity(): Long = (leaseDuration.toNanos() * (1.0 - drift)).toLong() - margin.toNanos()
 
-    /** Builds a [SimbaConfig]; [renewInterval] and [retryJitter] default to values derived as in the constructor. */
+    /** A builder holding every value of this config, as set; derived values are kept, not derived again. */
+    fun toBuilder(): Builder =
+        Builder()
+            .leaseDuration(leaseDuration)
+            .renewInterval(renewInterval)
+            .drift(drift)
+            .margin(margin)
+            .retryJitter(retryJitter)
+            .minBackoff(minBackoff)
+
+    override fun equals(other: Any?): Boolean =
+        this === other ||
+            other is SimbaConfig &&
+            leaseDuration == other.leaseDuration &&
+            renewInterval == other.renewInterval &&
+            drift == other.drift &&
+            margin == other.margin &&
+            retryJitter == other.retryJitter &&
+            minBackoff == other.minBackoff
+
+    override fun hashCode(): Int = Objects.hash(leaseDuration, renewInterval, drift, margin, retryJitter, minBackoff)
+
+    override fun toString(): String =
+        "SimbaConfig(leaseDuration=$leaseDuration, renewInterval=$renewInterval, drift=$drift, margin=$margin, " +
+            "retryJitter=$retryJitter, minBackoff=$minBackoff)"
+
+    /** Builds a [SimbaConfig]; [renewInterval] and [retryJitter] default to values derived from the values set. */
     class Builder internal constructor() {
-        private var leaseDuration: Duration = Duration.ofSeconds(15)
+        private var leaseDuration: Duration = DEFAULT_LEASE
         private var renewInterval: Duration? = null
-        private var drift: Double = 0.01
-        private var margin: Duration = Duration.ofMillis(50)
+        private var drift: Double = DEFAULT_DRIFT
+        private var margin: Duration = DEFAULT_MARGIN
         private var retryJitter: Duration? = null
-        private var minBackoff: Duration = Duration.ofMillis(100)
+        private var minBackoff: Duration = DEFAULT_MIN_BACKOFF
 
         fun leaseDuration(leaseDuration: Duration) = apply { this.leaseDuration = leaseDuration }
 
@@ -79,6 +108,7 @@ data class SimbaConfig @JvmOverloads constructor(
 
         fun minBackoff(minBackoff: Duration) = apply { this.minBackoff = minBackoff }
 
+        /** Validates and builds; throws [IllegalArgumentException] on inconsistent timings. */
         fun build(): SimbaConfig {
             val renew = renewInterval ?: leaseDuration.dividedBy(3)
             return SimbaConfig(leaseDuration, renew, drift, margin, retryJitter ?: renew.dividedBy(2), minBackoff)
@@ -87,6 +117,10 @@ data class SimbaConfig @JvmOverloads constructor(
 
     companion object {
         const val MAX_DRIFT = 0.5
+        private val DEFAULT_LEASE: Duration = Duration.ofSeconds(15)
+        private const val DEFAULT_DRIFT = 0.01
+        private val DEFAULT_MARGIN: Duration = Duration.ofMillis(50)
+        private val DEFAULT_MIN_BACKOFF: Duration = Duration.ofMillis(100)
 
         @JvmStatic
         fun builder(): Builder = Builder()

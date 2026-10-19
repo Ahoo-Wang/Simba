@@ -47,7 +47,7 @@ simba.election("report").schedule(
 | `Schedule.fixedDelay(delay, initialDelay = 0)` | 从一次运行结束到下一次运行开始 |
 | `Schedule.fixedRate(period, initialDelay = 0)` | 相邻两次计划开始之间；超时的运行会跳过错过的开始，而不是集中补跑 |
 
-`initialDelay` 从每个任期开始时计算。失败的运行会被记录并发布，循环继续；循环随其任期结束。每个调度没有自己的线程池。
+`initialDelay` 从每个任期开始时计算。失败的运行（包括抛出 `Error`）会被记录并发布，循环继续；`VirtualMachineError` 会结束循环并让选举让出一个租期。循环随其任期结束。每个调度没有自己的线程池。
 
 ## 分区组 {#partition-groups}
 
@@ -126,5 +126,5 @@ public class Billing {
 - **把 `term.token` 传给任务对共享资源的每一次写入**。暂停的节点在其任期结束后仍可能写入成功；只有校验
   [fencing token](/zh/guide/correctness#fencing-tokens) 的资源才能拒绝它。
 - **在被中断时停止。** 忽略中断的阻塞 I/O 会把交接最多推迟到任期的剩余时间。
-- **在耗时步骤之前检查：** `term.ensureValid(expectedStepDuration)` 会抛出 `LeaseExpiredException`，而不是开始一个会超出任期的步骤。
+- **在耗时步骤之前检查：** `term.ensureValid(expectedStepDuration)` 会抛出 `TermExpiredException`，而不是开始一个会超出任期的步骤。
 - 尽可能**让任务幂等**：故障转移之后，下一个 leader 可能会重做最后一个步骤。
