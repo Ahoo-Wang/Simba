@@ -281,34 +281,41 @@ abstract class LeaseBackendSpec {
     fun concurrentSessionsNeverShareATerm() {
         val sessions = List(CONTENDERS) { open() }
         val name = name()
-        val pool = Executors.newFixedThreadPool(CONTENDERS)
-        try {
-            var previous = 0L
-            repeat(ROUNDS) {
-                val start = CountDownLatch(1)
-                val results = sessions.map { session ->
-                    CompletableFuture.supplyAsync({
-                        start.await()
-                        session to backend.acquire(session, setOf(name)).getValue(name)
-                    }, pool)
-                }
-                start.countDown()
-                val answers = results.map { it.get(timeout.toMillis(), TimeUnit.MILLISECONDS) }
-
-                val winners = answers.filter { it.second is AcquireResult.Granted }
-                winners.size.assert().isEqualTo(1)
-                val (winner, granted) = winners.single()
-                val token = (granted as AcquireResult.Granted).token
-                token.assertAfter(previous)
-                answers.filter { it.first != winner }.forEach {
-                    it.second.assert().isEqualTo(AcquireResult.HeldBy(winner, token))
-                }
-                backend.release(winner, mapOf(name to token))
-                previous = token
-            }
-        } finally {
-            pool.shutdownNow()
+        var previous = 0L
+        repeat(ROUNDS) {
+            val (winner, token) = race(sessions, name)
+            token.assertAfter(previous)
+            backend.release(winner, mapOf(name to token))
+            previous = token
         }
+    }
+
+    @Test
+    fun concurrentSessionsTakeOverAnExpiredLeaseInOneTerm() {
+        val expiring = open(shortLease)
+        val name = name()
+        val token = backend.grantedToken(expiring, name)
+        val sessions = List(CONTENDERS) { open() }
+
+        awaitExpired(expiring)
+
+        race(sessions, name).second.assertAfter(token)
+    }
+
+    @Test
+    fun leaseNamesAreCaseSensitive() {
+        val base = "tck.${UUID.randomUUID()}"
+        val upper = LeaseName("$base.Orders")
+        val lower = LeaseName("$base.orders")
+        val first = open()
+        val second = open()
+        val upperToken = backend.grantedToken(first, upper)
+
+        backend.grantedToken(second, lower)
+
+        val result = backend.acquire(second, setOf(upper))
+
+        result.assert().isEqualTo(mapOf(upper to AcquireResult.HeldBy(first, upperToken)))
     }
 
     // ---- release --------------------------------------------------------------------------------------------------
@@ -411,7 +418,32 @@ abstract class LeaseBackendSpec {
         owned.assert().isEqualTo(mapOf(kept to keptToken))
     }
 
+    @Test
+    fun keepAliveNeverReportsALeaseAnotherSessionTookOver() {
+        val session = open()
+        val other = open()
+        val name = name()
+        backend.release(session, mapOf(name to backend.grantedToken(session, name)))
+        val otherToken = backend.grantedToken(other, name)
+
+        backend.keepAlive(session, lease, setOf(name)).live().owned.assert().doesNotContainKey(name)
+        backend.keepAlive(other, lease, setOf(name)).live().owned.assert().containsEntry(name, otherToken)
+    }
+
     // ---- membership -----------------------------------------------------------------------------------------------
+
+    @Test
+    fun groupNamesAreCaseSensitive() {
+        val base = "tck.${UUID.randomUUID()}"
+        val upper = open()
+        val lower = open()
+
+        backend.join(upper, "$base.Orders")
+        backend.join(lower, "$base.orders")
+
+        backend.members("$base.Orders").assert().containsExactly(upper)
+        backend.members("$base.orders").assert().containsExactly(lower)
+    }
 
     @Test
     fun membersListsTheLiveMembersSorted() {
@@ -499,6 +531,36 @@ abstract class LeaseBackendSpec {
     protected fun name(): LeaseName = LeaseName("tck.${UUID.randomUUID()}")
 
     protected fun group(): String = "tck.${UUID.randomUUID()}"
+
+    /**
+     * Lets [sessions] acquire [name] at once and checks that exactly one wins and every other one sees the winner's
+     * term; answers the winner and its token.
+     */
+    private fun race(sessions: List<SessionId>, name: LeaseName): Pair<SessionId, Long> {
+        val pool = Executors.newFixedThreadPool(sessions.size)
+        try {
+            val start = CountDownLatch(1)
+            val results = sessions.map { session ->
+                CompletableFuture.supplyAsync({
+                    start.await()
+                    session to backend.acquire(session, setOf(name)).getValue(name)
+                }, pool)
+            }
+            start.countDown()
+            val answers = results.map { it.get(timeout.toMillis(), TimeUnit.MILLISECONDS) }
+
+            val winners = answers.filter { it.second is AcquireResult.Granted }
+            winners.size.assert().isEqualTo(1)
+            val (winner, granted) = winners.single()
+            val token = (granted as AcquireResult.Granted).token
+            answers.filter { it.first != winner }.forEach {
+                it.second.assert().isEqualTo(AcquireResult.HeldBy(winner, token))
+            }
+            return winner to token
+        } finally {
+            pool.shutdownNow()
+        }
+    }
 
     /** Tokens only strictly increase per name: by one on a counter, by more on a global id such as a czxid. */
     private fun Long.assertAfter(previous: Long) {
