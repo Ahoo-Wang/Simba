@@ -36,8 +36,9 @@ Spring Boot starter 基于快照构建 Actuator 端点和健康指示器，基�
 | `SessionRenewed(session, latency)` | 一次续约 (keep-alive) 成功 |
 | `SessionSuspended(session, cause)` | 一次续约 (keep-alive) 在本地截止时刻之前失败 |
 | `SessionExpired(session, reason)` | 会话结束：截止时刻已过，或后端报告其已过期 |
-| `Elected(name, token)` | 本节点获得了一个任期 |
-| `Revoked(name, token, reason)` | 一个任期结束 |
+| `SessionClosed(session)` | 客户端已关闭（未打开会话时 `session` 为 `null`）；只发布一次 |
+| `Elected(name, token, kind)` | 本节点获得了一个任期；`kind`（`ELECTION`、`LOCK`、`GROUP`）表示选举由哪个 API 启动，指标可以按 kind 打标签，而不必按数量无界的锁名打标签 |
+| `Revoked(name, token, reason, kind)` | 一个任期结束 |
 | `AcquireFailed(name, cause)` | 一次获取调用失败（不包括“被他人持有”，那是正常情况） |
 | `WorkCompleted(name, token, outcome, duration, cause)` | leader 任务的一次运行结束：`COMPLETED`、`FAILED` 或 `CANCELLED` |
 
@@ -63,11 +64,15 @@ classpath 上有 Micrometer 且存在 `MeterRegistry` bean 时，starter 注册 
 |---|---|---|---|
 | `simba.session.renew` | Timer | — | 成功续约 (keep-alive) 的延迟 |
 | `simba.session.state` | Gauge | `state`（`opening`、`live`、`suspended`、`closed`） | 当前会话状态对应的值为 `1` |
-| `simba.leadership` | Gauge | `name` | 本节点持有该名称的任期时为 `1` |
-| `simba.revocations` | Counter | `name`、`reason` | 已结束的任期，按 `RevokeReason`（小写）区分 |
+| `simba.leadership` | Gauge | `name` | 本节点持有该选举或分区的任期时为 `1`，失去任期后为 `0` |
+| `simba.locks.held` | Gauge | — | 本节点持有的锁数量 |
+| `simba.revocations` | Counter | `reason`、`kind`（`election`、`lock`、`group`） | 已结束的任期，按 `RevokeReason`（小写）区分，包括 `stopped` 和 `stepped_down` |
 | `simba.work` | Timer | `name`、`outcome` | leader 任务的运行（`completed`、`failed`、`cancelled`） |
 
-分区选举也以名称（`{group}.{partition}`）出现。不使用 Spring 时，自行把 `MicrometerSimbaEventListener(registry)` 加到 builder 上。
+只有选举和分区（`{group}.{partition}`）按名称打标签，它们的名称来自你的代码。锁的名称常常来自数据（如 `invoice-42`），
+因此只做汇总：`simba.locks.held` 和 `kind="lock"` 的 revocations，正常解锁不会被当成"没有 leader"。某个名称的
+`simba.leadership` 序列从它的第一个任期存在到某个任期以 `stopped` 结束（选举停止、分区迁移到其他节点或客户端关闭），
+因此停止的选举不会留下序列。不使用 Spring 时，自行把 `MicrometerSimbaEventListener(registry)` 加到 builder 上。
 
 ## 告警规则 {#alert-rules}
 
@@ -90,11 +95,11 @@ groups:
       - alert: SimbaTermsLost
         expr: increase(simba_revocations_total{reason=~"deadline_passed|session_expired|taken_over"}[10m]) > 0
         annotations:
-          summary: "{{ $labels.name }} lost a term ({{ $labels.reason }}); protect writes with fencing tokens"
+          summary: "{{ $labels.instance }} lost a {{ $labels.kind }} term ({{ $labels.reason }}); protect writes with fencing tokens"
       - alert: SimbaLeadershipFlapping
-        expr: increase(simba_revocations_total[10m]) > 3
+        expr: increase(simba_revocations_total{kind!="lock", reason!~"stopped|stepped_down"}[10m]) > 3
         annotations:
-          summary: "Leadership of {{ $labels.name }} moves too often"
+          summary: "Leadership on {{ $labels.instance }} moves too often"
       - alert: SimbaWorkFailing
         expr: increase(simba_work_seconds_count{outcome="failed"}[10m]) > 0
         annotations:

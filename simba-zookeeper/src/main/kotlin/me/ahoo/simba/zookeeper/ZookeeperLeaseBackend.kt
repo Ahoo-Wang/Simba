@@ -45,6 +45,7 @@ import java.util.concurrent.ExecutionException
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * [LeaseBackend] on Zookeeper ephemeral nodes (ADR 0010 §7.3).
@@ -58,7 +59,11 @@ import java.util.concurrent.TimeUnit
  *   the node's `ephemeralOwner`, so a lease belongs to its session exactly while Zookeeper keeps the session.
  * - A member is the ephemeral node `{root}/groups/{group}/{sessionId}` under a container node.
  * - Hints: every acquire leaves an exists watch on the lease node, whose deletion is announced as
- *   [BackendHint.Released]; [members] leaves a children watch, and [join] / [leave] announce their own change.
+ *   [BackendHint.Released]; [members] leaves a children watch (an exists watch while the group node is missing), and
+ *   [join] / [leave] announce their own change.
+ * - A name is recorded as possibly owned before its create is sent, so [keepAlive] reports (after checking the node's
+ *   owner) a lease whose create succeeded although its reply was lost. Releases of one session run one at a time, so
+ *   the owner and czxid check before a delete cannot be overtaken by another release of the same session.
  *
  * The Zookeeper client heartbeats on its own, so a session would otherwise outlive a caller that stopped keeping it
  * alive. A local watchdog therefore closes a session (deleting its nodes) once no keep-alive started within the last
@@ -85,6 +90,9 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         private const val RETRY_COUNT = 3
         private val EMPTY = ByteArray(0)
 
+        /** Stands for `/` in a keep-alive without leases; the root is never an ephemeral node, so never reported. */
+        private val ROOT_PROBE = LeaseName("root")
+
         internal fun sessionIdOf(zookeeperSessionId: Long): SessionId = SessionId("%016x".format(zookeeperSessionId))
     }
 
@@ -93,6 +101,10 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
     private val groupsPath = "${this.root}/groups"
     private val sessions = ConcurrentHashMap<SessionId, Session>()
     private val listeners = CopyOnWriteArrayList<BackendHintListener>()
+    private val epochs = AtomicLong()
+
+    @Volatile
+    private var closed = false
     private val watchdog = ScheduledThreadPoolExecutor(1) { runnable ->
         Thread(runnable, "simba-zookeeper-watchdog").apply { isDaemon = true }
     }.apply { removeOnCancelPolicy = true }
@@ -110,6 +122,7 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
     }
     private val groupWatcher = Watcher { event ->
         if (event.type == Watcher.Event.EventType.NodeChildrenChanged ||
+            event.type == Watcher.Event.EventType.NodeCreated ||
             event.type == Watcher.Event.EventType.NodeDeleted
         ) {
             publish(BackendHint.MembersChanged(event.path.substringAfterLast('/')))
@@ -126,9 +139,13 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         maxBatch = MAX_BATCH,
     )
 
-    /** Connects a new Zookeeper session; [metadata] is not stored (Zookeeper sessions carry none). */
+    /**
+     * Connects a new Zookeeper session; [metadata] is not stored (Zookeeper sessions carry none). Fails once the
+     * backend is closed, closing the client it may have opened meanwhile.
+     */
     override fun openSession(lease: Duration, metadata: Map<String, String>): SessionGrant {
         require(lease.isPositive) { "Lease [$lease] must be positive." }
+        ensureOpen()
         val startedAt = System.nanoTime()
         val watcher = SessionWatcher()
         val zooKeeper = ZooKeeper(connectString, lease.toMillis().coerceIn(1, Int.MAX_VALUE.toLong()).toInt(), watcher)
@@ -144,8 +161,15 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         }
         val session = Session(sessionIdOf(zooKeeper.sessionId), zooKeeper)
         sessions[session.id] = session
-        watcher.attach(session)
-        session.extend(startedAt, lease)
+        try {
+            // close() sets the flag before closing the registered sessions: one of both sees the other.
+            ensureOpen()
+            watcher.attach(session)
+            session.extend(startedAt, lease)
+        } catch (error: Throwable) {
+            session.expire()
+            throw error
+        }
         log.debug { "Opened Zookeeper session [${session.id}], timeout ${zooKeeper.sessionTimeout} ms." }
         return SessionGrant(session.id, session.remaining(lease))
     }
@@ -155,24 +179,24 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         val startedAt = System.nanoTime()
         return live.expiringOn {
             live.ensureConnected()
-            val acquired = HashMap(live.acquired)
-            val names = held + acquired.keys
-            // At least one round trip, so the reply proves Zookeeper still knows the session.
-            val stats = if (names.isEmpty()) {
-                live.zooKeeper.exists("/", false)
-                emptyMap()
-            } else {
-                names.associateWith { live.zooKeeper.existsAsync(leasePath(it), null) }.mapValues { it.value.await() }
+            val heldPaths = held.associateWith(::leasePath)
+            val (candidates, pending) = live.sendLocked {
+                val candidates = HashMap(live.candidates)
+                val paths = heldPaths + candidates.keys.associateWith(::leasePath)
+                candidates to paths.mapValues { live.zooKeeper.existsAsync(it.value, null) }
             }
+            // At least one round trip, so the reply proves Zookeeper still knows the session.
+            val stats = pending.ifEmpty { mapOf(ROOT_PROBE to live.zooKeeper.existsAsync("/", null)) }
+                .mapValues { it.value.await() }
             if (!live.extend(startedAt, lease)) {
                 return KeepAliveResult.Expired
             }
             val owned = stats.mapNotNull { (name, reply) ->
                 reply.stat?.takeIf { live.owns(it) }?.let { name to it.czxid }
             }.toMap()
-            acquired.forEach { (name, token) ->
-                if (owned[name] != token) {
-                    live.acquired.remove(name, token)
+            candidates.forEach { (name, epoch) ->
+                if (name !in owned) {
+                    live.candidates.remove(name, epoch)
                 }
             }
             KeepAliveResult.Live(live.remaining(lease), owned)
@@ -181,6 +205,7 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
 
     override fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult> {
         require(names.size <= MAX_BATCH) { "At most $MAX_BATCH names per acquire, was ${names.size}." }
+        names.forEach(::leasePath)
         val live = sessions[session] ?: throw SessionExpiredException(session)
         return live.expiringOn {
             live.ensureConnected()
@@ -199,28 +224,16 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         } ?: throw SessionExpiredException(session)
     }
 
-    /** Deletes each lease node [session] owns with czxid equal to the token, at the version just read. */
+    /**
+     * Deletes each lease node [session] owns with czxid equal to the token. Releases of a session are serialized, as
+     * only its own client deletes its nodes: the check cannot be overtaken by another of its releases.
+     */
     override fun release(session: SessionId, leases: Map<LeaseName, Long>) {
+        val paths = leases.keys.associateWith(::leasePath)
         val live = sessions[session] ?: return
         live.expiringOn {
             live.ensureConnected()
-            val stats = leases.keys.associateWith { live.zooKeeper.existsAsync(leasePath(it), null) }
-            val deletes = stats.mapNotNull { (name, pending) ->
-                val stat = pending.await().stat ?: return@mapNotNull null
-                if (!live.owns(stat) || stat.czxid != leases.getValue(name)) {
-                    return@mapNotNull null
-                }
-                name to live.zooKeeper.deleteAsync(leasePath(name), stat.version)
-            }
-            deletes.forEach { (name, pending) ->
-                val rc = pending.await()
-                if (rc != KeeperException.Code.OK && rc != KeeperException.Code.NONODE &&
-                    rc != KeeperException.Code.BADVERSION
-                ) {
-                    throw KeeperException.create(rc, leasePath(name))
-                }
-                live.acquired.remove(name, leases.getValue(name))
-            }
+            synchronized(live.releaseLock) { live.release(leases, paths) }
         }
     }
 
@@ -267,12 +280,17 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
 
     override fun members(group: String): List<SessionId> {
         val path = groupPath(group)
-        val children = try {
-            reader.children.usingWatcher(groupWatcher).forPath(path)
-        } catch (_: KeeperException.NoNodeException) {
-            emptyList()
+        repeat(MAX_ATTEMPTS) {
+            try {
+                return reader.children.usingWatcher(groupWatcher).forPath(path).map(::SessionId).sortedBy { it.value }
+            } catch (_: KeeperException.NoNodeException) {
+                // No children watch without the node: watch for its creation instead, unless it was just created.
+                if (reader.checkExists().usingWatcher(groupWatcher).forPath(path) == null) {
+                    return emptyList()
+                }
+            }
         }
-        return children.map(::SessionId).sortedBy { it.value }
+        throw SimbaException("Group [$group] kept appearing and disappearing while reading its members.")
     }
 
     override fun subscribe(listener: BackendHintListener): AutoCloseable {
@@ -280,8 +298,9 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         return AutoCloseable { listeners -= listener }
     }
 
-    /** Closes every open session and the reader client. */
+    /** Closes every open session and the reader client; later [openSession] calls fail. */
     override fun close() {
+        closed = true
         try {
             sessions.values.forEach(Session::expire)
         } finally {
@@ -293,7 +312,15 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
     /** The Zookeeper client behind [session], for tests that break it. */
     internal fun zooKeeperOf(session: SessionId): ZooKeeper? = sessions[session]?.zooKeeper
 
-    private fun leasePath(name: LeaseName): String = "$leasesPath/${name.value}"
+    private fun ensureOpen() {
+        check(!closed) { "ZookeeperLeaseBackend is closed." }
+    }
+
+    /** The node of [name]; validated up front, so a batch never fails half-sent on a path the client rejects. */
+    private fun leasePath(name: LeaseName): String {
+        require(name.value != "." && name.value != "..") { "Lease name [$name] is not a valid Zookeeper node name." }
+        return "$leasesPath/${name.value}"
+    }
 
     private fun groupPath(group: String): String {
         require(group.isNotEmpty() && '/' !in group && group != "." && group != "..") {
@@ -348,8 +375,14 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
     private inner class Session(val id: SessionId, val zooKeeper: ZooKeeper) {
         private val ownerId = zooKeeper.sessionId
 
-        /** Leases acquired through this session with their tokens: candidates keep-alive verifies and reports. */
-        val acquired = ConcurrentHashMap<LeaseName, Long>()
+        /**
+         * Names this session may own, each with the epoch of its latest acquire. A name is added before its create is
+         * sent and removed only by a keep-alive or release whose reads were sent after that create (under [sendLock])
+         * and found the node not owned or deleted it.
+         */
+        val candidates = ConcurrentHashMap<LeaseName, Long>()
+        private val sendLock = Any()
+        val releaseLock = Any()
         private var deadline = 0L
         private var check: ScheduledFuture<*>? = null
 
@@ -426,6 +459,32 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
             }
         }
 
+        /** Runs [send], which only queues requests, so no request of another call slips in between. */
+        fun <T> sendLocked(send: () -> T): T = synchronized(sendLock, send)
+
+        /** Releases under [releaseLock]: read each node, then delete those this session owns with the given token. */
+        fun release(leases: Map<LeaseName, Long>, paths: Map<LeaseName, String>) {
+            val (snapshot, stats) = sendLocked {
+                HashMap(candidates) to paths.mapValues { zooKeeper.existsAsync(it.value, null) }
+            }
+            val deletes = stats.mapNotNull { (name, pending) ->
+                val stat = pending.await().stat ?: return@mapNotNull null
+                if (!owns(stat) || stat.czxid != leases.getValue(name)) {
+                    return@mapNotNull null
+                }
+                name to zooKeeper.deleteAsync(paths.getValue(name), stat.version)
+            }
+            deletes.forEach { (name, pending) ->
+                val rc = pending.await()
+                if (rc != KeeperException.Code.OK && rc != KeeperException.Code.NONODE &&
+                    rc != KeeperException.Code.BADVERSION
+                ) {
+                    throw KeeperException.create(rc, paths.getValue(name))
+                }
+                snapshot[name]?.let { candidates.remove(name, it) }
+            }
+        }
+
         /**
          * Runs [action]; answers `null` (after expiring this session) when Zookeeper reports the session expired, and
          * reports a lost connection as a suspended session.
@@ -450,9 +509,13 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
          */
         fun tryAcquire(names: Set<LeaseName>, results: MutableMap<LeaseName, AcquireResult>): Set<LeaseName> {
             val data = id.value.toByteArray()
-            val replies = names.associateWith { name ->
-                val path = leasePath(name)
-                zooKeeper.createAsync(path, data) to zooKeeper.existsAsync(path, leaseWatcher)
+            val epoch = epochs.incrementAndGet()
+            val replies = sendLocked {
+                names.associateWith { name ->
+                    val path = leasePath(name)
+                    candidates[name] = epoch
+                    zooKeeper.createAsync(path, data) to zooKeeper.existsAsync(path, leaseWatcher)
+                }
             }
             val retry = HashSet<LeaseName>()
             var missingParent = false
@@ -469,12 +532,11 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
                         throw KeeperException.create(created, leasePath(name))
 
                     stat == null -> retry += name
-                    owns(stat) -> {
-                        acquired[name] = stat.czxid
-                        results[name] = AcquireResult.Granted(stat.czxid)
+                    owns(stat) -> results[name] = AcquireResult.Granted(stat.czxid)
+                    else -> {
+                        candidates.remove(name, epoch)
+                        results[name] = AcquireResult.HeldBy(sessionIdOf(stat.ephemeralOwner), stat.czxid)
                     }
-
-                    else -> results[name] = AcquireResult.HeldBy(sessionIdOf(stat.ephemeralOwner), stat.czxid)
                 }
             }
             if (missingParent) {

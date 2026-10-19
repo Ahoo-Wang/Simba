@@ -29,9 +29,23 @@ sealed interface SimbaEvent {
 
     data class SessionExpired(val session: SessionId, val reason: RevokeReason) : SimbaEvent
 
-    data class Elected(val name: LeaseName, val token: Long) : SimbaEvent
+    /** The client closed; [session] is the session it closed, `null` when none was open. Published once. */
+    data class SessionClosed(val session: SessionId?) : SimbaEvent
 
-    data class Revoked(val name: LeaseName, val token: Long, val reason: RevokeReason) : SimbaEvent
+    /** A term began; [kind] tells which API started the election, so metrics need not label by [name]. */
+    data class Elected(
+        val name: LeaseName,
+        val token: Long,
+        val kind: ElectionKind = ElectionKind.ELECTION,
+    ) : SimbaEvent
+
+    /** A term ended; [kind] as in [Elected]. */
+    data class Revoked(
+        val name: LeaseName,
+        val token: Long,
+        val reason: RevokeReason,
+        val kind: ElectionKind = ElectionKind.ELECTION,
+    ) : SimbaEvent
 
     data class AcquireFailed(val name: LeaseName, val cause: Throwable) : SimbaEvent
 
@@ -49,6 +63,18 @@ sealed interface SimbaEvent {
         val duration: Duration,
         val cause: Throwable? = null,
     ) : SimbaEvent
+}
+
+/** Which API started an election. */
+enum class ElectionKind {
+    /** `Simba.election`: listeners, `runWhileLeader` and schedules. */
+    ELECTION,
+
+    /** `Simba.lock`. */
+    LOCK,
+
+    /** A partition of `Simba.group`. */
+    GROUP,
 }
 
 /** How a run of leader work ended. */

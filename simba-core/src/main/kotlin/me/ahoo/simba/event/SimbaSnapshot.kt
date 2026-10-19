@@ -65,12 +65,14 @@ enum class SessionStatus {
  *
  * @param token the fencing token of the current term; `0` without one.
  * @param remaining time left of the current term; [Duration.ZERO] without one.
+ * @param kind which API started the election.
  */
 data class ElectionSnapshot(
     val name: LeaseName,
     val status: ElectionStatus,
     val token: Long,
     val remaining: Duration,
+    val kind: ElectionKind = ElectionKind.ELECTION,
 )
 
 enum class ElectionStatus {

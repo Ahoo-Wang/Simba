@@ -23,6 +23,7 @@ import me.ahoo.simba.engine.TermBody
 import me.ahoo.simba.engine.VirtualThreads
 import me.ahoo.simba.engine.WorkListener
 import me.ahoo.simba.engine.runReported
+import me.ahoo.simba.event.ElectionKind
 import me.ahoo.simba.event.SimbaEventListener
 import me.ahoo.simba.event.SimbaSnapshot
 import me.ahoo.simba.partition.GroupTask
@@ -59,6 +60,9 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
     private val shell: EngineShell
     private val workExecutor: Executor
     private val running = ConcurrentHashMap<LeaseName, Run>()
+
+    /** Orders every claim-and-start and remove-and-stop, so that a stop always reaches the loop before a restart. */
+    private val lifecycle = Any()
     private val groups = ConcurrentHashMap.newKeySet<String>()
     private val closing = AtomicBoolean(false)
     private val closed = CompletableFuture<Void>()
@@ -167,56 +171,76 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
         }
     }
 
-    /** Claims [name] for a new lifecycle; `null` when it is already started. */
-    private fun claim(name: LeaseName): Run? {
-        checkOpen()
-        val run = Run()
-        return if (running.putIfAbsent(name, run) == null) run else null
-    }
-
-    /** Stops [name] if [run] (or any run, when null) is the current lifecycle; completes when it stopped. */
-    private fun stopRun(name: LeaseName, run: Run?): CompletableFuture<Void> {
-        val stopped = if (run == null) running.remove(name) else run.takeIf { running.remove(name, it) }
-        if (stopped == null) {
-            return run?.stopped ?: CompletableFuture.completedFuture(null)
+    /**
+     * Claims [name] for [run] and starts its election; `false` when the name is already started. Claim and start
+     * happen under [lifecycle], like remove and stop in [stopRun], so the loop sees every stop before the next start.
+     */
+    private fun startRun(
+        name: LeaseName,
+        run: Run,
+        listener: LeadershipListener,
+        kind: ElectionKind,
+        work: Boolean = false,
+        probe: CompletableFuture<Void>? = null,
+    ): Boolean =
+        synchronized(lifecycle) {
+            checkOpen()
+            if (running.putIfAbsent(name, run) != null) {
+                return false
+            }
+            shell.start(name, listener, work, probe, kind)
+            true
         }
-        shell.stop(name).whenComplete { _, _ -> stopped.stopped.complete(null) }
-        return stopped.stopped
+
+    /**
+     * Stops [name] if [run] (or any run, when null) is the current lifecycle; completes when that run stopped. A run
+     * that is no longer current is not touched: its stop already happened, or a later run owns the name.
+     */
+    private fun stopRun(name: LeaseName, run: Run?): CompletableFuture<Void> {
+        val stopped = synchronized(lifecycle) {
+            val current = if (run == null) running.remove(name) else run.takeIf { running.remove(name, it) }
+            current?.also { stopping -> shell.stop(name).whenComplete { _, _ -> stopping.stopped.complete(null) } }
+        }
+        return (stopped ?: run)?.stopped ?: CompletableFuture.completedFuture(null)
     }
 
-    private fun startWork(name: LeaseName, executor: Executor?, body: TermBody): LeaderTask {
-        val election = ShellElection(name)
-        check(claim(name) != null) { "Election [$name] is already started." }
-        shell.start(name, WorkListener(shell, executor ?: workExecutor, ticker, body), work = true)
-        return ElectionTask(election)
+    private fun startWork(name: LeaseName, kind: ElectionKind, executor: Executor?, body: TermBody): LeaderTask {
+        val run = Run()
+        val listener = WorkListener(shell, executor ?: workExecutor, ticker, body)
+        check(startRun(name, run, listener, kind, work = true)) { "Election [$name] is already started." }
+        return ElectionTask(ShellElection(name, kind), run)
     }
 
     private fun leaderBody(work: LeaderWork) = TermBody { term, _ -> runReported(ticker, term, work) }
 
     private fun scheduleBody(schedule: Schedule, work: LeaderWork) = ScheduleBody(shell, ticker, schedule, work)
 
-    private inner class ShellElection(override val name: LeaseName) : Election {
+    private inner class ShellElection(
+        override val name: LeaseName,
+        private val kind: ElectionKind = ElectionKind.ELECTION,
+    ) : Election {
         override fun start(listener: LeadershipListener) {
-            check(claim(name) != null) { "Election [$name] is already started." }
-            shell.start(name, listener)
+            check(startRun(name, Run(), listener, kind)) { "Election [$name] is already started." }
         }
 
         override fun stop(): CompletionStage<Void> = stopRun(name, null).minimalCompletionStage()
 
         override fun stepDown(cooldown: Duration): CompletionStage<Void> {
             require(!cooldown.isNegative) { "cooldown must not be negative." }
+            checkOpen()
             return shell.stepDown(name, cooldown.toNanos()).minimalCompletionStage()
         }
 
         override fun runWhileLeader(executor: Executor?, work: LeaderWork): LeaderTask =
-            startWork(name, executor, leaderBody(work))
+            startWork(name, kind, executor, leaderBody(work))
 
         override fun schedule(schedule: Schedule, work: LeaderWork): LeaderTask =
-            startWork(name, null, scheduleBody(schedule, work))
+            startWork(name, kind, null, scheduleBody(schedule, work))
     }
 
-    private inner class ElectionTask(override val election: Election) : LeaderTask {
-        override fun stop(): CompletionStage<Void> = election.stop()
+    /** Stops only its own run: closing it after another run took the name leaves that run alone. */
+    private inner class ElectionTask(override val election: Election, private val run: Run) : LeaderTask {
+        override fun stop(): CompletionStage<Void> = stopRun(election.name, run).minimalCompletionStage()
 
         override fun close() {
             join(stop())
@@ -233,40 +257,65 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
 
         override fun tryAcquire(): LockTerm? = acquire(config.leaseDuration, probe = true)
 
+        /**
+         * Contends until a term is won or [timeout] passes (one attempt with [probe]). A term revoked right after it
+         * began does not end the wait: the lock contends again within the timeout. The deadline timer is cancelled
+         * on the way out.
+         */
         private fun acquire(timeout: Duration, probe: Boolean): LockTerm? {
             val deadline = CompletableFuture<Void>()
-            shell.schedule(ticker.nanoTime() + timeout.toNanos()) { deadline.complete(null) }
-            val run = claimLocally(probe, deadline) ?: return null
-            val listener = LockListener(name, run)
-            val lost = if (probe) CompletableFuture<Void>() else null
-            shell.start(name, listener, probe = lost)
+            val timer = shell.schedule(ticker.nanoTime() + timeout.toNanos()) { deadline.complete(null) }
             try {
-                awaitAny(listener.elected, lost, deadline, closed)
-            } catch (error: InterruptedException) {
-                stopRun(name, run)
-                throw error
+                while (true) {
+                    val run = Run()
+                    val listener = LockListener(name, run)
+                    val lost = if (probe) CompletableFuture<Void>() else null
+                    if (!startLocally(run, listener, lost, deadline)) {
+                        return null
+                    }
+                    try {
+                        awaitAny(listener.elected, lost, deadline, closed)
+                    } catch (error: InterruptedException) {
+                        stopRun(name, run)
+                        throw error
+                    }
+                    val term = listener.elected.getNow(null)
+                    if (term != null && term.isValid) {
+                        return ShellLockTerm(term) { stopRun(name, run) }
+                    }
+                    stopRun(name, run)
+                    checkOpen()
+                    if (probe || deadline.isDone) {
+                        return null
+                    }
+                }
+            } finally {
+                timer.cancel()
             }
-            val term = listener.elected.getNow(null)
-            if (term == null || !term.isValid) {
-                stopRun(name, run)
-                checkOpen()
-                return null
-            }
-            return ShellLockTerm(term) { stopRun(name, run) }
         }
 
-        /** Claims the name in this client, waiting for a current holder here unless [probe]; `null` on timeout. */
-        private fun claimLocally(probe: Boolean, deadline: CompletableFuture<Void>): Run? {
+        /**
+         * Starts [run] once no other run of this client holds the name, waiting for a current holder here unless
+         * probing; `false` on timeout or while probing a held name.
+         */
+        private fun startLocally(
+            run: Run,
+            listener: LockListener,
+            lost: CompletableFuture<Void>?,
+            deadline: CompletableFuture<Void>,
+        ): Boolean {
             while (true) {
-                claim(name)?.let { return it }
-                if (probe) {
-                    return null
+                if (startRun(name, run, listener, ElectionKind.LOCK, probe = lost)) {
+                    return true
+                }
+                if (lost != null) {
+                    return false
                 }
                 val holder = running[name] ?: continue
                 awaitAny(holder.stopped, deadline, closed)
                 checkOpen()
                 if (deadline.isDone) {
-                    return null
+                    return false
                 }
             }
         }
@@ -335,6 +384,9 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
     ) : GroupTask {
         private val lock = Any()
         private val tasks = TreeMap<Int, LeaderTask>()
+
+        /** Stops of partitions this node no longer owns, still handing over. */
+        private val handingOver = HashSet<CompletableFuture<Void>>()
         private var stopped: CompletableFuture<Void>? = null
 
         fun onView(session: SessionId?, members: List<SessionId>) {
@@ -347,11 +399,16 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
                 } else {
                     PartitionAssignment.partitionsOf(session.value, group.partitions, members.map { it.value })
                 }
-                (tasks.keys - mine).forEach { partition -> tasks.remove(partition)?.stop() }
+                (tasks.keys - mine).forEach { partition ->
+                    tasks.remove(partition)?.stop()?.toCompletableFuture()?.let { handover ->
+                        handingOver += handover
+                        handover.whenComplete { _, _ -> synchronized(lock) { handingOver -= handover } }
+                    }
+                }
                 (mine - tasks.keys).forEach { partition ->
                     val name = LeaseName(partitionName(group.name, partition))
                     try {
-                        tasks[partition] = startPartition(ShellElection(name), partition)
+                        tasks[partition] = startPartition(ShellElection(name, ElectionKind.GROUP), partition)
                     } catch (error: IllegalStateException) {
                         log.warn(error) { "Partition [$name] of group [${group.name}] could not start." }
                     }
@@ -364,7 +421,7 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
         override fun stop(): CompletionStage<Void> {
             val all = synchronized(lock) {
                 stopped?.let { return it.minimalCompletionStage() }
-                val stops = tasks.values.map { it.stop().toCompletableFuture() }
+                val stops = tasks.values.map { it.stop().toCompletableFuture() } + handingOver
                 tasks.clear()
                 CompletableFuture.allOf(*stops.toTypedArray()).also { stopped = it }
             }

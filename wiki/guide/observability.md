@@ -38,8 +38,9 @@ published from the engine's loop: keep listeners fast and thread-safe; exception
 | `SessionRenewed(session, latency)` | A keep-alive succeeded |
 | `SessionSuspended(session, cause)` | A keep-alive failed before the local deadline |
 | `SessionExpired(session, reason)` | The session ended: deadline passed or the backend reported it expired |
-| `Elected(name, token)` | This node got a term |
-| `Revoked(name, token, reason)` | A term ended |
+| `SessionClosed(session)` | The client closed (`session` is `null` when none was open); published once |
+| `Elected(name, token, kind)` | This node got a term; `kind` (`ELECTION`, `LOCK`, `GROUP`) tells which API started the election, so metrics can label by kind instead of by unbounded lock names |
+| `Revoked(name, token, reason, kind)` | A term ended |
 | `AcquireFailed(name, cause)` | An acquire call failed (not "held by someone else", which is normal) |
 | `WorkCompleted(name, token, outcome, duration, cause)` | One run of leader work ended: `COMPLETED`, `FAILED` or `CANCELLED` |
 
@@ -65,11 +66,16 @@ With Micrometer on the classpath and a `MeterRegistry` bean, the starter registe
 |---|---|---|---|
 | `simba.session.renew` | Timer | — | Latency of successful keep-alives |
 | `simba.session.state` | Gauge | `state` (`opening`, `live`, `suspended`, `closed`) | `1` for the current session status |
-| `simba.leadership` | Gauge | `name` | `1` while this node holds a term of the name |
-| `simba.revocations` | Counter | `name`, `reason` | Ended terms, by `RevokeReason` (lowercase) |
+| `simba.leadership` | Gauge | `name` | `1` while this node holds a term of the election or partition, `0` after it lost one |
+| `simba.locks.held` | Gauge | — | Locks this node holds |
+| `simba.revocations` | Counter | `reason`, `kind` (`election`, `lock`, `group`) | Ended terms, by `RevokeReason` (lowercase), including `stopped` and `stepped_down` |
 | `simba.work` | Timer | `name`, `outcome` | Leader work runs (`completed`, `failed`, `cancelled`) |
 
-Partition elections appear as names too (`{group}.{partition}`). Without Spring, add
+Only elections and partitions (`{group}.{partition}`), whose names come from your code, are tagged by name. Locks,
+whose names often come from data (`invoice-42`), are counted together: `simba.locks.held` and the `kind="lock"`
+revocations, so a normal unlock never reads as "no leader". A name's `simba.leadership` series exists from its first
+term until a term ends `stopped` (the election stopped, the partition moved to another node, or the client closed), so
+stopped elections leave no series behind. Without Spring, add
 `MicrometerSimbaEventListener(registry)` to the builder yourself.
 
 ## Alert Rules
@@ -93,11 +99,11 @@ groups:
       - alert: SimbaTermsLost
         expr: increase(simba_revocations_total{reason=~"deadline_passed|session_expired|taken_over"}[10m]) > 0
         annotations:
-          summary: "{{ $labels.name }} lost a term ({{ $labels.reason }}); protect writes with fencing tokens"
+          summary: "{{ $labels.instance }} lost a {{ $labels.kind }} term ({{ $labels.reason }}); protect writes with fencing tokens"
       - alert: SimbaLeadershipFlapping
-        expr: increase(simba_revocations_total[10m]) > 3
+        expr: increase(simba_revocations_total{kind!="lock", reason!~"stopped|stepped_down"}[10m]) > 3
         annotations:
-          summary: "Leadership of {{ $labels.name }} moves too often"
+          summary: "Leadership on {{ $labels.instance }} moves too often"
       - alert: SimbaWorkFailing
         expr: increase(simba_work_seconds_count{outcome="failed"}[10m]) > 0
         annotations:

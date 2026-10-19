@@ -61,14 +61,17 @@ management:
 | `SimbaEndpoint` (`simba`) | Actuator on the classpath and the endpoint available (enabled and exposed) |
 | `SimbaHealthIndicator` (`simba`) | Actuator on the classpath and `management.health.simba.enabled` |
 
-Every bean is `@ConditionalOnMissingBean`: define your own to replace it. To customize the client beyond the
-properties (executors, a fixed seed), define the `Simba` bean yourself with `Simba.builder()`.
+Every bean except the infrastructure (`SimbaBackendSelection`, the startup check of `simba.backend`, and
+`SimbaScheduledBeanPostProcessor`) is `@ConditionalOnMissingBean`: define your own to replace it. To customize the
+client beyond the properties (executors, a fixed seed), define the `Simba` bean yourself with `Simba.builder()`.
 
 ## Annotated Methods
 
 `@SimbaScheduled` runs a bean method on the leader of an election; `@SimbaPartitioned` runs it for every partition of
 a group this node leads. Both start after the context refreshed and stop on shutdown. Their attributes and method
-signatures are on the [Leader Work](/guide/leader-work#spring-annotations) page.
+signatures are on the [Leader Work](/guide/leader-work#spring-annotations) page. The lease names they elect (the
+`name` of `@SimbaScheduled`, `{group}.{partition}` of `@SimbaPartitioned`) and the groups must be unique across both
+annotations: startup fails on a conflict.
 
 ## Shutdown Order
 

@@ -92,14 +92,18 @@ class ClientEdgesTest {
     @Test
     fun `work failing after its term ended is cancelled, not failed`() {
         val client = simba.client()
+        val started = LinkedBlockingQueue<Long>()
         val task = client.election("cancelled").runWhileLeader { term ->
             try {
+                started += term.token
                 Thread.sleep(Long.MAX_VALUE)
             } catch (_: InterruptedException) {
                 error("interrupted ${term.token}")
             }
         }
         simba.settle()
+        // Work cancelled before its thread ran never starts and reports nothing; close only once it runs.
+        started.next()
         task.close()
         simba.nextEvent<SimbaEvent.WorkCompleted>().outcome.assert().isEqualTo(WorkOutcome.CANCELLED)
         SimbaEvent.WorkCompleted(LeaseName("x"), 1, WorkOutcome.COMPLETED, Duration.ZERO).cause.assert().isNull()

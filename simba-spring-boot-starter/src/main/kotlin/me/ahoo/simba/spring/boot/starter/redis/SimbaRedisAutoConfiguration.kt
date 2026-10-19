@@ -24,8 +24,13 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnSingleCandi
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.data.redis.connection.RedisConnectionFactory
+import org.springframework.util.ClassUtils
 
-/** A [RedisLeaseBackend] over the single `RedisConnectionFactory`, through [SpringRedisScripting]. */
+/**
+ * A [RedisLeaseBackend] over the single `RedisConnectionFactory`, through [SpringRedisScripting]. The factory must be
+ * Lettuce's (the Spring Boot default): with Jedis, subscriptions block the calling thread and `WAIT` needs Lettuce's
+ * native connection, so startup fails instead.
+ */
 @AutoConfiguration(afterName = ["org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration"])
 @ConditionalOnSimbaRedisEnabled
 @ConditionalOnClass(SpringRedisScripting::class, RedisConnectionFactory::class)
@@ -35,9 +40,25 @@ class SimbaRedisAutoConfiguration {
     @ConditionalOnMissingBean(LeaseBackend::class)
     @ConditionalOnSingleCandidate(RedisConnectionFactory::class)
     fun redisLeaseBackend(connectionFactory: RedisConnectionFactory, properties: RedisProperties): RedisLeaseBackend {
+        requireLettuce(connectionFactory)
         val scripting = SpringRedisScripting(connectionFactory)
         val wait = properties.waitReplicas.takeIf { it > 0 }?.let { ReplicaWait(it, properties.waitTimeout) }
         return properties.routeBySlot?.let { RedisLeaseBackend(scripting, wait, it) }
             ?: RedisLeaseBackend(scripting, wait)
+    }
+
+    companion object {
+        private const val LETTUCE_CLIENT = "io.lettuce.core.RedisClient"
+        private const val LETTUCE_FACTORY = "org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory"
+
+        internal fun requireLettuce(connectionFactory: RedisConnectionFactory) {
+            val classLoader = connectionFactory.javaClass.classLoader
+            val lettuce = ClassUtils.isPresent(LETTUCE_CLIENT, classLoader) &&
+                ClassUtils.forName(LETTUCE_FACTORY, classLoader).isInstance(connectionFactory)
+            check(lettuce) {
+                "Simba's Redis backend needs a Lettuce RedisConnectionFactory (the Spring Boot default), " +
+                    "not [${connectionFactory.javaClass.name}]: exclude Jedis or define your own LeaseBackend bean."
+            }
+        }
     }
 }

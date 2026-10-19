@@ -27,6 +27,7 @@ import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.SQLException
 import java.time.Duration
+import java.util.concurrent.atomic.AtomicLong
 import javax.sql.DataSource
 
 /**
@@ -40,14 +41,17 @@ import javax.sql.DataSource
  *
  * Lease rows are never deleted, so a name's token never resets. Expired sessions are cleaned up lazily: a lease of an
  * expired session is free for the next acquirer, a keep-alive that finds its session expired removes it, and
- * [purgeExpired] removes the rest when called.
+ * [purgeExpired] removes the rest (sessions of crashed nodes) at most once per [purgeInterval], run after an
+ * [openSession] or [keepAlive] of any session.
  *
  * @param queryTimeout per-statement timeout; zero waits indefinitely.
+ * @param purgeInterval least time between two automatic [purgeExpired] runs; zero disables them.
  */
 class JdbcLeaseBackend @JvmOverloads constructor(
     private val dataSource: DataSource,
     val dialect: Dialect,
     queryTimeout: Duration = Duration.ZERO,
+    val purgeInterval: Duration = DEFAULT_PURGE_INTERVAL,
 ) : LeaseBackend {
     companion object {
         private val log = KotlinLogging.logger {}
@@ -56,6 +60,11 @@ class JdbcLeaseBackend @JvmOverloads constructor(
         private const val MAX_GROUP_LENGTH = 128
         private const val MAX_METADATA_LENGTH = 1024
         private const val FREE = ""
+        private const val PURGE_BATCH = 1000
+
+        /** Default [purgeInterval]. */
+        @JvmField
+        val DEFAULT_PURGE_INTERVAL: Duration = Duration.ofMinutes(1)
 
         /** A backend on MySQL 8. */
         @JvmStatic
@@ -75,6 +84,13 @@ class JdbcLeaseBackend @JvmOverloads constructor(
         (queryTimeout.seconds + if (queryTimeout.nano > 0) 1 else 0).toInt()
     }
 
+    init {
+        require(!purgeInterval.isNegative) { "purgeInterval must not be negative: $purgeInterval" }
+    }
+
+    /** [System.nanoTime] from which the next automatic purge is due; the first one runs on first use. */
+    private val nextPurgeAt = AtomicLong(System.nanoTime())
+
     private val now = dialect.now
     private val sqlOpen = "insert into simba_session (session_id, expires_at, metadata) values (?, $now + ?, ?)"
     private val sqlKeepAlive =
@@ -93,13 +109,8 @@ class JdbcLeaseBackend @JvmOverloads constructor(
          where m.group_name = ? and s.expires_at > $now
          order by m.session_id
         """.trimIndent()
-    private val sqlNow = "select $now"
-    private val sqlPurgeLeases =
-        "update simba_lease set session_id = '$FREE' where session_id in " +
-            "(select session_id from simba_session where expires_at <= ?)"
-    private val sqlPurgeMembers =
-        "delete from simba_member where session_id in (select session_id from simba_session where expires_at <= ?)"
-    private val sqlPurgeSessions = "delete from simba_session where expires_at <= ?"
+    private val sqlLockExpired =
+        "select session_id from simba_session where expires_at <= $now order by expires_at limit $PURGE_BATCH for update"
 
     override val capabilities: Capabilities = Capabilities(maxBatch = MAX_BATCH)
 
@@ -119,25 +130,30 @@ class JdbcLeaseBackend @JvmOverloads constructor(
             }
         }
         log.debug { "Opened session [$id] on ${dialect.name} for $lease." }
+        purgeIfDue()
         return SessionGrant(id, lease)
     }
 
     override fun keepAlive(session: SessionId, lease: Duration, held: Set<LeaseName>): KeepAliveResult {
         val millis = lease.requirePositiveMillis()
-        return autoCommit { connection ->
-            val renewed = connection.prepare(sqlKeepAlive).use {
-                it.setLong(1, millis)
-                it.setString(2, session.value)
-                it.executeUpdate()
+        val owned = autoCommit { connection ->
+            val renewed = connection.retrying {
+                connection.prepare(sqlKeepAlive).use {
+                    it.setLong(1, millis)
+                    it.setString(2, session.value)
+                    it.executeUpdate()
+                }
             }
-            if (renewed == 0) {
-                // Expiry is final: the session was not renewed while live, and no statement extends it afterwards.
-                connection.end(session)
-                log.debug { "Session [$session] expired on ${dialect.name}." }
-                return@autoCommit KeepAliveResult.Expired
-            }
-            KeepAliveResult.Live(lease, connection.owned(session))
+            if (renewed == 0) null else connection.owned(session)
         }
+        if (owned == null) {
+            // Expiry is final: the session was not renewed while live, and no statement extends it afterwards.
+            log.debug { "Session [$session] expired on ${dialect.name}." }
+            closeSession(session)
+            return KeepAliveResult.Expired
+        }
+        purgeIfDue()
+        return KeepAliveResult.Live(lease, owned)
     }
 
     override fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult> {
@@ -236,24 +252,43 @@ class JdbcLeaseBackend @JvmOverloads constructor(
 
     /**
      * Removes every session expired by now, freeing its leases (tokens kept) and memberships. Not needed for
-     * correctness; call it from time to time to keep the tables small. Answers the number of sessions removed.
+     * correctness, only to keep the tables small; runs automatically every [purgeInterval]. Removes at most
+     * 1000 sessions per call and answers how many it removed.
      */
     fun purgeExpired(): Int =
         transaction { connection ->
-            val cutoff = connection.prepare(sqlNow).use { statement ->
+            // Locking the expired rows first serializes with a keep-alive that started before the expiry and commits
+            // now: the lock waits for it and re-reads the row, so a renewed session is never purged.
+            val expired = connection.prepare(sqlLockExpired).use { statement ->
                 statement.executeQuery().use { rows ->
-                    rows.next()
-                    rows.getLong(1)
+                    buildList {
+                        while (rows.next()) {
+                            add(SessionId(rows.getString(1).trimEnd()))
+                        }
+                    }
                 }
             }
-            // Expiry is final, so the sessions expired by the cutoff stay expired across the three statements.
-            listOf(sqlPurgeLeases, sqlPurgeMembers, sqlPurgeSessions).map { sql ->
-                connection.prepare(sql).use {
-                    it.setLong(1, cutoff)
-                    it.executeUpdate()
-                }
-            }.last()
+            expired.forEach { connection.end(it) }
+            expired.size
         }
+
+    /** Runs [purgeExpired] when [purgeInterval] passed since the last run; a failure is logged, never thrown. */
+    private fun purgeIfDue() {
+        if (purgeInterval.isZero) {
+            return
+        }
+        val now = System.nanoTime()
+        val due = nextPurgeAt.get()
+        if (now - due < 0 || !nextPurgeAt.compareAndSet(due, now + purgeInterval.toNanos())) {
+            return
+        }
+        try {
+            val purged = purgeExpired()
+            log.debug { "Purged $purged expired sessions on ${dialect.name}." }
+        } catch (error: SQLException) {
+            log.warn(error) { "Purging expired sessions on ${dialect.name} failed; retrying after $purgeInterval." }
+        }
+    }
 
     private class Lease(val session: String, val token: Long, val holderLive: Boolean)
 
@@ -350,15 +385,20 @@ class JdbcLeaseBackend @JvmOverloads constructor(
             }
         }
 
+    /** Runs [block] in one transaction, again from the start after a transient conflict (deadlock). */
     private fun <T> transaction(block: (Connection) -> T): T =
         dataSource.connection.use { connection ->
             val previous = connection.autoCommit
             connection.autoCommit = false
             try {
-                block(connection).also { connection.commit() }
-            } catch (error: Throwable) {
-                connection.rollback()
-                throw error
+                connection.retrying {
+                    try {
+                        block(connection).also { connection.commit() }
+                    } catch (error: Throwable) {
+                        connection.rollback()
+                        throw error
+                    }
+                }
             } finally {
                 connection.autoCommit = previous
             }

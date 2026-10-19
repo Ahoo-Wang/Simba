@@ -118,7 +118,7 @@ ids, so the assignment of partitions to nodes changes.
 | 4.x | 5.0 |
 |---|---|
 | `simba.mutex.owner{mutex}` | `simba.leadership{name}` |
-| `simba.mutex.ownership.changes{mutex,change}` | `simba.revocations{name,reason}` (losses) |
+| `simba.mutex.ownership.changes{mutex,change}` | `simba.revocations{reason,kind}` (every ended term, `stopped` and `stepped_down` included); locks: `simba.locks.held` |
 | `simba.mutex.contend{mutex,operation,outcome}` | `simba.session.renew` (one keep-alive per node) |
 | `simba.mutex.lease.expired{mutex}` | `simba.revocations{reason="deadline_passed"}` |
 | `simba.scheduler.work{mutex,outcome}` | `simba.work{name,outcome}` |

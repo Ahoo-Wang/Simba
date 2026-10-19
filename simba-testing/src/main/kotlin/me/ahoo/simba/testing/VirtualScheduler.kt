@@ -13,6 +13,7 @@
 
 package me.ahoo.simba.testing
 
+import me.ahoo.simba.engine.Cancellable
 import me.ahoo.simba.engine.Scheduler
 import java.time.Duration
 import java.util.PriorityQueue
@@ -31,15 +32,20 @@ class VirtualScheduler(val clock: VirtualClock = VirtualClock()) : Scheduler {
 
     override fun nanoTime(): Long = clock.nanoTime()
 
-    /** Queues [task]; a task already due runs on the next [advance], even one of zero. */
-    override fun schedule(at: Long, task: Runnable) {
-        synchronized(lock) {
-            tasks += Task(at, seq++, task)
-        }
+    /** Queues [task]; a task already due runs on the next [advance], even one of zero. Cancelling dequeues it. */
+    override fun schedule(at: Long, task: Runnable): Cancellable {
+        val queued = synchronized(lock) { Task(at, seq++, task).also { tasks += it } }
+        return Cancellable { synchronized(lock) { tasks -= queued } }
     }
 
     /** Timers not fired yet. */
     val pending: Int get() = synchronized(lock) { tasks.size }
+
+    /** Timers not fired yet that are due more than [horizon] from now. */
+    fun pendingBeyond(horizon: Duration): Int {
+        val limit = clock.nanoTime() + horizon.toNanos()
+        return synchronized(lock) { tasks.count { it.at - limit > 0 } }
+    }
 
     /**
      * Moves time forward by [duration], running every due task at its own time in order and calling [settle] before
