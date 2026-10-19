@@ -121,8 +121,10 @@ val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
 Release publishes `released` on the lease key's channel (`simba:lease:{name}`); it is the only broadcast and lets
 candidates take over at once. Every time decision uses Redis `TIME` inside the scripts.
 
-A new term lasts as long as its session, and a keep-alive extends only the leases the node still holds, so leases
-expire on their own even if a session key outlives them.
+Leases expire on their own: a new term lasts as long as its session (one full session lease on a Cluster), and a
+keep-alive extends every lease the session holds, found through its lease index, so a lease acquired while a
+keep-alive was in flight is extended too. Closing a session deletes it first, then frees its leases and memberships,
+then drops its indexes, so a close repeated after a failure finishes the job.
 
 ### Cluster
 

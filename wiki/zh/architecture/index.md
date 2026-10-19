@@ -49,7 +49,7 @@ graph BT
 | 用户 API | `Simba`、`Election`、`DistributedLock`、`PartitionGroup`、`Term` | 句柄；除引擎发布的内容外没有自己的状态 |
 | 引擎 | `engine.step(state, event, now)` | 纯状态机：没有线程、时钟或 I/O |
 | 外壳 | `EngineShell` | 在一个循环线程上运行 `step`，执行其效果：后端调用、定时器、回调、组视图 |
-| SPI | `LeaseBackend` | 每次调用一次往返：会话、租约、组、可选的提示 |
+| SPI | `LeaseBackend` | 每个方法只发出有限次数的调用：会话、租约、组、可选的提示 |
 
 ### 纯引擎 {#the-pure-engine}
 

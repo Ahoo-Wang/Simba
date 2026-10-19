@@ -65,23 +65,53 @@ class LeaseScript(val name: String, val source: String) {
     }
 }
 
-/** One script invocation; all [keys] belong to one hash slot on a Redis Cluster. */
-data class ScriptCall(val script: LeaseScript, val keys: List<String>, val args: List<String>)
+/**
+ * One script invocation; all [keys] belong to one hash slot on a Redis Cluster. An immutable value with equality by
+ * its fields; a plain class so that fields can be added without breaking binary compatibility.
+ */
+class ScriptCall(val script: LeaseScript, val keys: List<String>, val args: List<String>) {
+    override fun equals(other: Any?): Boolean =
+        other is ScriptCall && script == other.script && keys == other.keys && args == other.args
 
-/** Replies of [RedisScripting.eval], plus the replicas that acknowledged the writes when a wait was requested. */
-data class ScriptReplies(val replies: List<List<Any?>>, val replicas: Int? = null)
+    override fun hashCode(): Int = (script.hashCode() * HASH + keys.hashCode()) * HASH + args.hashCode()
+
+    override fun toString(): String = "ScriptCall(script=$script, keys=$keys, args=$args)"
+}
+
+/**
+ * Replies of [RedisScripting.eval], plus the replicas that acknowledged the writes when a wait was requested. An
+ * immutable value with equality by its fields; a plain class so that fields can be added compatibly.
+ */
+class ScriptReplies @JvmOverloads constructor(val replies: List<List<Any?>>, val replicas: Int? = null) {
+    override fun equals(other: Any?): Boolean =
+        other is ScriptReplies && replies == other.replies && replicas == other.replicas
+
+    override fun hashCode(): Int = replies.hashCode() * HASH + (replicas ?: 0)
+
+    override fun toString(): String = "ScriptReplies(replies=$replies, replicas=$replicas)"
+}
+
+private const val HASH = 31
 
 /**
  * After acquiring, wait until [replicas] replicas acknowledged the writes, at most [timeout] (`WAIT`). A new term
  * that is not acknowledged in time is released and the acquisition fails, so a failover is less likely to lose it.
- * [timeout] is at least 1 ms and is sent in whole milliseconds.
+ * [timeout] is at least 1 ms and is sent in whole milliseconds. An immutable value with equality by its fields; a
+ * plain class so that fields can be added compatibly.
  */
-data class ReplicaWait(val replicas: Int, val timeout: Duration) {
+class ReplicaWait(val replicas: Int, val timeout: Duration) {
     init {
         require(replicas >= 1) { "replicas must be at least 1: $replicas" }
         // WAIT takes whole milliseconds and `WAIT n 0` blocks forever, so a sub-millisecond timeout is rejected.
         require(timeout >= MIN_TIMEOUT) { "timeout must be at least $MIN_TIMEOUT: $timeout" }
     }
+
+    override fun equals(other: Any?): Boolean =
+        other is ReplicaWait && replicas == other.replicas && timeout == other.timeout
+
+    override fun hashCode(): Int = replicas * HASH + timeout.hashCode()
+
+    override fun toString(): String = "ReplicaWait(replicas=$replicas, timeout=$timeout)"
 
     companion object {
         /** Smallest timeout `WAIT` can express. */

@@ -45,6 +45,7 @@ import java.util.concurrent.TimeoutException
  * @param workShare share of starts whose terms carry work; such work exits on its own with probability
  *   [selfExitShare] within [maxWork], and otherwise within [maxWork] after its term is revoked (often after the
  *   handover timed out).
+ * @param selfExpiringLeases runs [InMemoryLeaseBackend] with leases that expire on their own, as on Redis.
  */
 data class SimulationParams(
     val config: SimbaConfig = SimbaConfig(
@@ -71,6 +72,7 @@ data class SimulationParams(
     val workShare: Double = 0.5,
     val selfExitShare: Double = 0.3,
     val maxWork: Duration = config.leaseDuration.multipliedBy(2),
+    val selfExpiringLeases: Boolean = false,
 ) {
     /**
      * I4 bound, measured from the start of the quiet phase: fault-phase messages land within two delays, a cooldown
@@ -123,7 +125,7 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
     private val random = SplittableRandom(seed)
     private val clock = VirtualClock()
     private var sessionCounter = 0
-    private val backend = InMemoryLeaseBackend(clock) { SessionId("s${++sessionCounter}") }
+    private val backend = InMemoryLeaseBackend(clock, params.selfExpiringLeases) { SessionId("s${++sessionCounter}") }
     private val engineConfig = EngineConfig.of(params.config)
     private val queue = PriorityQueue<Task>(compareBy<Task>({ it.at }, { it.seq }))
     private var seq = 0L

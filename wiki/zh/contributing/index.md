@@ -43,8 +43,8 @@ description: 构建 Simba、运行测试、安全地修改引擎、借助 TCK �
 
 ## 添加后端 {#adding-a-backend}
 
-1. 实现 `LeaseBackend`：每次调用一次往返，不做调度，不保存本地租约状态，剩余时间由后端的时钟测量并以时长返回，token 严格递增且永不重置，
-   过期的会话永不复活。
+1. 实现 `LeaseBackend`：每个方法只发出有限次数的调用，不做调度，不保存本地租约状态，剩余时间由后端的时钟测量并以时长返回，token 严格递增且永不重置，
+   过期的会话永不复活，续约回复列出持有的全部租约。
 2. 为它扩展 [`LeaseBackendSpec`](/zh/guide/testing#backend-tck)。具有可注入时钟的后端覆盖 `clock`；否则基于时间的测试会轮询，
    直到后端自己的租约耗尽。
 3. 添加一个由 `simba.enabled`、`simba.<backend>.enabled` 和 `simba.backend` 激活的 starter 自动配置，在

@@ -19,9 +19,13 @@ import java.time.Duration
 /**
  * Backend SPI: sessions, leases attached to sessions, and group membership.
  *
+ * Inputs every backend validates the same way, rejecting others with [IllegalArgumentException]: a lease duration
+ * is at least one millisecond ([requireLease]), a group name follows the [LeaseName] rules ([requireGroup]), and
+ * [acquire] takes at most [MAX_BATCH] names.
+ *
  * Rules for implementations:
- * - every method is one backend round trip (or one per slot), with no scheduling, no notification and no local
- *   state;
+ * - every method makes a bounded number of backend calls (a few, or a few per slot), without waiting, scheduling,
+ *   notifying or keeping local lease state;
  * - every remaining duration is computed with the backend's clock and returned as a *duration*, never a timestamp;
  * - a lease's token is greater than zero, strictly increases with every new term of its name and never resets (a
  *   counter advancing by one, or a globally increasing id such as a Zookeeper czxid);
@@ -29,6 +33,8 @@ import java.time.Duration
  *   its own (heartbeats);
  * - an expired session is never revived: [keepAlive] answers [KeepAliveResult.Expired] and [acquire] throws
  *   [SessionExpiredException];
+ * - [keepAlive] reports every lease the session owns, and a lease the session owns lasts at least as long as the
+ *   session, also when leases expire on their own (as on Redis);
  * - hints only accelerate; losing one never affects correctness.
  */
 interface LeaseBackend : AutoCloseable {
@@ -38,15 +44,18 @@ interface LeaseBackend : AutoCloseable {
     fun openSession(lease: Duration, metadata: Map<String, String> = emptyMap()): SessionGrant
 
     /**
-     * Extends [session] by [lease] together with every lease it owns. [held] names the leases the caller believes it
-     * owns; backends whose leases expire on their own refresh exactly those.
+     * Extends [session] by [lease] together with every lease and membership it owns, and reports every lease it owns
+     * in [KeepAliveResult.Live.owned]. [held] names the leases the caller believes it owns; it is only a hint (a
+     * backend may refresh those first) and never narrows what is extended or reported: a lease acquired while this
+     * call was in flight, or whose reply was lost, is extended and reported too.
      */
     fun keepAlive(session: SessionId, lease: Duration, held: Set<LeaseName>): KeepAliveResult
 
     /**
-     * Tries to acquire every name in [names] for [session]. A lease that is free, or owned by an expired session,
-     * moves to [session] with a token greater than every earlier one of that name; a name [session] already owns
-     * answers its current token.
+     * Tries to acquire every name in [names] (at most [MAX_BATCH]) for [session]. A lease that is free, or owned by
+     * an expired session, moves to [session] with a token greater than every earlier one of that name; a name
+     * [session] already owns answers its current token. A granted lease lasts at least as long as [session] does at
+     * the time of the call, also when it was already owned, until a keep-alive extends both.
      */
     fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult>
 
@@ -70,13 +79,45 @@ interface LeaseBackend : AutoCloseable {
     fun subscribe(listener: BackendHintListener): AutoCloseable = AutoCloseable {}
 
     override fun close() = Unit
+
+    companion object {
+        /** Most names one [acquire] takes. */
+        const val MAX_BATCH: Int = 64
+
+        /** Shortest lease duration a backend accepts. */
+        @JvmStatic
+        val MIN_LEASE: Duration = Duration.ofMillis(1)
+
+        /** Answers [lease] when it is at least [MIN_LEASE], else throws [IllegalArgumentException]. */
+        @JvmStatic
+        fun requireLease(lease: Duration): Duration {
+            require(lease >= MIN_LEASE) { "Lease [$lease] must be at least $MIN_LEASE." }
+            return lease
+        }
+
+        /** Answers [group] when it follows the [LeaseName] rules, else throws [IllegalArgumentException]. */
+        @JvmStatic
+        fun requireGroup(group: String): String {
+            try {
+                LeaseName(group)
+            } catch (error: IllegalArgumentException) {
+                throw IllegalArgumentException("Group name [$group] must follow the lease name rules.", error)
+            }
+            return group
+        }
+
+        /** Throws [IllegalArgumentException] when [names] has more than [MAX_BATCH] names. */
+        @JvmStatic
+        fun requireBatch(names: Collection<LeaseName>) {
+            require(names.size <= MAX_BATCH) { "At most $MAX_BATCH names per acquire, was ${names.size}." }
+        }
+    }
 }
 
 /** What a backend can do beyond the required contract. */
 data class Capabilities(
     val releaseHints: Boolean = false,
     val membershipHints: Boolean = false,
-    val maxBatch: Int = 1,
 )
 
 /** A new session and the backend-measured time until it expires. */
@@ -84,9 +125,9 @@ data class SessionGrant(val id: SessionId, val remaining: Duration)
 
 sealed interface KeepAliveResult {
     /**
-     * The session lives for [remaining] more. [owned] lists the leases the session owns, with their tokens: at least
-     * those in `held`, and every one when leases do not expire on their own (so the caller can release leases it
-     * acquired without knowing).
+     * The session lives for [remaining] more. [owned] lists every lease the session owns, with its token, whatever
+     * `held` said: the caller revokes terms missing from it and releases leases it acquired without knowing, so an
+     * incomplete list could hand an old token back to its holder.
      */
     data class Live(val remaining: Duration, val owned: Map<LeaseName, Long>) : KeepAliveResult
 
