@@ -21,11 +21,12 @@ import me.ahoo.simba.spi.SessionGrant
 import me.ahoo.simba.spi.SessionId
 import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.time.Duration
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
-class SimbaClientBoundedTest {
+class SimbaClientShellTest {
     /** Grants every lease; enough to drive the shell without simba-testing. */
     private class GrantingBackend : LeaseBackend {
         override fun openSession(lease: Duration, metadata: Map<String, String>) = SessionGrant(SessionId("s"), lease)
@@ -69,6 +70,73 @@ class SimbaClientBoundedTest {
 
             client.dispatcherCount().assert().isEqualTo(1)
         }
+    }
+
+    @Test
+    fun `builder options, listeners and failing callbacks`() {
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val events = LinkedBlockingQueue<me.ahoo.simba.event.SimbaEvent>()
+        val client = SimbaClient.builder()
+            .backend(GrantingBackend())
+            .config(SimbaConfig())
+            .ioExecutor(executor)
+            .callbackExecutor(executor)
+            .ticker(me.ahoo.simba.spi.Ticker.SYSTEM)
+            .seed(1)
+            .listener { events += it }
+            .listener { error("listener failure is ignored") }
+            .build()
+        val elected = LinkedBlockingQueue<Term>()
+        client.election("failing").start(object : LeadershipListener {
+            override fun onElected(term: Term) {
+                elected += term
+                error("callback failure is ignored")
+            }
+
+            override fun onRevoked(term: Term, reason: RevokeReason) = Unit
+        })
+        elected.poll(WAIT, TimeUnit.SECONDS).assert().isNotNull()
+        client.closeAsync().toCompletableFuture().get(WAIT, TimeUnit.SECONDS)
+        client.closeAsync().toCompletableFuture().isDone.assert().isTrue()
+        executor.shutdown()
+        events.map { it.javaClass.simpleName }.assert().contains("SessionOpened", "Elected", "Revoked")
+    }
+
+    @Test
+    fun `closing from a callback does not wait for itself`() {
+        val client = SimbaClient.builder().backend(GrantingBackend()).build()
+        val closed = java.util.concurrent.CompletableFuture<Unit>()
+        client.election("closer").start(object : LeadershipListener {
+            override fun onElected(term: Term) {
+                client.close()
+                closed.complete(Unit)
+            }
+
+            override fun onRevoked(term: Term, reason: RevokeReason) = Unit
+        })
+        closed.get(WAIT, TimeUnit.SECONDS)
+        client.closeAsync().toCompletableFuture().get(WAIT, TimeUnit.SECONDS)
+    }
+
+    @Test
+    fun `misuse is rejected`() {
+        assertThrows<IllegalArgumentException> { SimbaClient.builder().build() }
+        val client = SimbaClient.builder().backend(GrantingBackend()).build()
+        val election = client.election("misuse")
+        election.name.assert().isEqualTo(LeaseName("misuse"))
+        election.stop().toCompletableFuture().isDone.assert().isTrue()
+        assertThrows<IllegalArgumentException> { election.stepDown(Duration.ofSeconds(-1)) }
+        election.stepDown(Duration.ZERO).toCompletableFuture().get(WAIT, TimeUnit.SECONDS)
+        client.close()
+        assertThrows<IllegalStateException> { client.election("late") }
+        assertThrows<IllegalStateException> { election.start(NoopListener) }
+        election.stop().toCompletableFuture().isDone.assert().isTrue()
+    }
+
+    private object NoopListener : LeadershipListener {
+        override fun onElected(term: Term) = Unit
+
+        override fun onRevoked(term: Term, reason: RevokeReason) = Unit
     }
 
     companion object {

@@ -241,6 +241,213 @@ class EngineTest {
         active.abandoned[name].assert().isEqualTo(2L)
     }
 
+    @Test
+    fun `boot is idempotent and a failed open retries later`() {
+        on(Event.Boot)
+        val open = call<BackendRequest.OpenSession>()
+        on(Event.Boot).filterIsInstance<Effect.Call>().assert().isEmpty()
+        on(Event.Reply(open.requestId, BackendResult.Failed(IllegalStateException("down"))))
+        val retry = effects.filterIsInstance<Effect.Arm>().single()
+        on(Event.Timer(retry.id), now = retry.at)
+        call<BackendRequest.OpenSession>()
+    }
+
+    @Test
+    fun `an open reply slower than the lease is closed and retried`() {
+        on(Event.Boot)
+        on(Event.Reply(call<BackendRequest.OpenSession>().requestId, opened()), now = 3 * SECOND)
+        call<BackendRequest.CloseSession>().request.assert().isEqualTo(BackendRequest.CloseSession(session))
+        (state.session is SessionState.Opening).assert().isTrue()
+    }
+
+    @Test
+    fun `a session opened after close is closed again`() {
+        on(Event.Boot)
+        val open = call<BackendRequest.OpenSession>()
+        val done = CompletableFuture<Void>()
+        on(Event.Close(done))
+        effects.assert().contains(Effect.Complete(null, done))
+        on(Event.Reply(open.requestId, opened()))
+        call<BackendRequest.CloseSession>()
+        val again = CompletableFuture<Void>()
+        on(Event.Close(again))
+        effects.assert().contains(Effect.Complete(null, again))
+        on(Event.Start(name)).assert().isEmpty()
+    }
+
+    @Test
+    fun `starting twice and stopping or stepping down an unknown election only complete`() {
+        open()
+        on(Event.Start(name))
+        on(Event.Start(name)).assert().isEmpty()
+        val other = LeaseName("other")
+        val stopped = CompletableFuture<Void>()
+        on(Event.Stop(other, stopped)).assert().isEqualTo(listOf(Effect.Complete(other, stopped)))
+        val steppedDown = CompletableFuture<Void>()
+        on(Event.StepDown(other, 0, steppedDown)).assert().isEqualTo(listOf(Effect.Complete(other, steppedDown)))
+    }
+
+    @Test
+    fun `a candidate stepping down cools down and releases a late grant`() {
+        open()
+        on(Event.Start(name))
+        val acquire = call<BackendRequest.Acquire>()
+        on(Event.StepDown(name, SECOND, CompletableFuture()))
+        (state.elections[name] is ElectionState.Cooldown).assert().isTrue()
+        on(Event.StepDown(name, SECOND, CompletableFuture()))
+        on(Event.Reply(acquire.requestId, granted(1)))
+        call<BackendRequest.Release>()
+    }
+
+    @Test
+    fun `held-by and failed attempts retry later`() {
+        open()
+        on(Event.Start(name))
+        val heldBy = BackendResult.Acquired(mapOf(name to AcquireResult.HeldBy(SessionId("other"), 3)))
+        on(Event.Reply(call<BackendRequest.Acquire>().requestId, heldBy))
+        val retry = effects.filterIsInstance<Effect.Arm>().single()
+        retry.at.assert().isEqualTo(500 * MILLIS)
+
+        on(Event.Timer(retry.id), now = retry.at)
+        on(Event.Reply(call<BackendRequest.Acquire>().requestId, BackendResult.Acquired(emptyMap())), now = retry.at)
+        effects.filterIsInstance<Effect.Publish>().single().event.javaClass.simpleName.assert().isEqualTo(
+            "AcquireFailed"
+        )
+
+        on(Event.Timer(effects.filterIsInstance<Effect.Arm>().single().id), now = SECOND)
+        val failed = BackendResult.Failed(IllegalStateException("down"))
+        on(Event.Reply(call<BackendRequest.Acquire>().requestId, failed), now = SECOND)
+        effects.filterIsInstance<Effect.Arm>().size.assert().isEqualTo(1)
+    }
+
+    @Test
+    fun `an acquire answering session expired ends the session`() {
+        open()
+        on(Event.Start(name))
+        val expired = BackendResult.Failed(me.ahoo.simba.spi.SessionExpiredException(session))
+        on(Event.Reply(call<BackendRequest.Acquire>().requestId, expired))
+        call<BackendRequest.OpenSession>()
+    }
+
+    @Test
+    fun `a keep-alive failing with session expired or an unexpected result is handled`() {
+        open()
+        on(Event.Timer(active.renewTimer!!), now = SECOND)
+        on(Event.Reply(call<BackendRequest.KeepAlive>().requestId, BackendResult.Done), now = SECOND)
+        active.suspended.assert().isTrue()
+        on(Event.Timer(active.renewTimer!!), now = 2 * SECOND)
+        val expired = BackendResult.Failed(me.ahoo.simba.spi.SessionExpiredException(session))
+        on(Event.Reply(call<BackendRequest.KeepAlive>().requestId, expired), now = 2 * SECOND)
+        call<BackendRequest.OpenSession>()
+    }
+
+    @Test
+    fun `a renewal after a suspension resumes idle candidates`() {
+        open()
+        on(Event.Timer(active.renewTimer!!), now = SECOND)
+        on(
+            Event.Reply(call<BackendRequest.KeepAlive>().requestId, BackendResult.Failed(IllegalStateException())),
+            now = SECOND
+        )
+        on(Event.Start(name), now = SECOND)
+        effects.filterIsInstance<Effect.Call>().assert().isEmpty()
+        on(Event.Timer(active.renewTimer!!), now = 2 * SECOND)
+        val live = KeepAliveResult.Live(Duration.ofSeconds(3), emptyMap())
+        on(Event.Reply(call<BackendRequest.KeepAlive>().requestId, BackendResult.KeptAlive(live)), now = 2 * SECOND)
+        call<BackendRequest.Acquire>()
+    }
+
+    @Test
+    fun `a failed keep-alive past the deadline or a late renewal expires the session`() {
+        open()
+        on(Event.Timer(active.renewTimer!!), now = SECOND)
+        val keepAlive = call<BackendRequest.KeepAlive>()
+        on(Event.Reply(keepAlive.requestId, BackendResult.Failed(IllegalStateException())), now = 3 * SECOND)
+        call<BackendRequest.OpenSession>()
+
+        state = EngineState.initial(config, 7)
+        open()
+        on(Event.Timer(active.renewTimer!!), now = SECOND)
+        val live = KeepAliveResult.Live(Duration.ZERO, emptyMap())
+        on(Event.Reply(call<BackendRequest.KeepAlive>().requestId, BackendResult.KeptAlive(live)), now = 3 * SECOND)
+        call<BackendRequest.OpenSession>()
+    }
+
+    @Test
+    fun `a deadline timer before the deadline re-arms`() {
+        open()
+        on(Event.Timer(active.deadlineTimer), now = SECOND)
+        effects.filterIsInstance<Effect.Arm>().single().at.assert().isEqualTo(active.validUntil)
+    }
+
+    @Test
+    fun `a released hint makes an idle candidate try at once`() {
+        open()
+        on(Event.Start(name))
+        val heldBy = BackendResult.Acquired(mapOf(name to AcquireResult.HeldBy(SessionId("other"), 3)))
+        on(Event.Reply(call<BackendRequest.Acquire>().requestId, heldBy))
+        on(Event.Hint(me.ahoo.simba.spi.BackendHint.MembersChanged("g"))).assert().isEmpty()
+        on(Event.Hint(me.ahoo.simba.spi.BackendHint.Released(name)))
+        call<BackendRequest.Acquire>()
+        on(Event.Hint(me.ahoo.simba.spi.BackendHint.Released(name))).assert().isEmpty()
+        on(Event.Timer(Long.MAX_VALUE)).assert().isEmpty()
+        on(Event.WorkExited(name, 1)).assert().isEmpty()
+    }
+
+    @Test
+    fun `replies of unknown or other-session requests are ignored`() {
+        open()
+        on(Event.Reply(Long.MAX_VALUE, BackendResult.Done)).assert().isEmpty()
+        on(Event.Start(name))
+        val acquire = call<BackendRequest.Acquire>()
+        on(Event.Reply(call<BackendRequest.Acquire>().requestId, BackendResult.Done))
+        val again = on(Event.Reply(acquire.requestId, granted(1)))
+        again.assert().isEmpty()
+    }
+
+    @Test
+    fun `expiry keeps cooldowns, timers after close are ignored, and in-flight releases keep their tokens`() {
+        open()
+        elect(token = 3)
+        val other = LeaseName("other")
+        on(Event.Start(other))
+        on(Event.StepDown(other, SECOND, CompletableFuture()))
+        on(Event.Stop(name, CompletableFuture()))
+        val release = call<BackendRequest.Release>()
+        on(Event.Timer(active.renewTimer!!), now = SECOND)
+        val keepAlive = call<BackendRequest.KeepAlive>()
+        on(
+            Event.Reply(
+                keepAlive.requestId,
+                BackendResult.KeptAlive(KeepAliveResult.Live(Duration.ofSeconds(3), emptyMap()))
+            )
+        )
+        active.abandoned[name].assert().isEqualTo(3L)
+        on(Event.Reply(release.requestId, BackendResult.Done))
+        active.abandoned.assert().isEmpty()
+
+        on(Event.Timer(active.renewTimer!!), now = 2 * SECOND)
+        on(Event.Reply(call<BackendRequest.KeepAlive>().requestId, BackendResult.KeptAlive(KeepAliveResult.Expired)))
+        (state.elections[other] is ElectionState.Cooldown).assert().isTrue()
+
+        on(Event.Close(CompletableFuture()))
+        on(Event.Timer(1)).assert().isEmpty()
+    }
+
+    @Test
+    fun `jitter comes from the seeded state and replays exactly`() {
+        val jittered = config.copy(retryJitter = 500 * MILLIS)
+        fun firstRetry(seed: Long): Long {
+            state = EngineState.initial(jittered, seed)
+            on(Event.Boot)
+            on(Event.Reply(call<BackendRequest.OpenSession>().requestId, BackendResult.Failed(IllegalStateException())))
+            return effects.filterIsInstance<Effect.Arm>().single().at
+        }
+        val first = firstRetry(1)
+        firstRetry(1).assert().isEqualTo(first)
+        (first in 500 * MILLIS until SECOND).assert().isTrue()
+    }
+
     companion object {
         const val ONE_OFF_NAMES = 1_000
         const val MILLIS = 1_000_000L
