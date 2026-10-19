@@ -35,45 +35,43 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeoutException
 
 /**
- * Knobs of a [Simulation]. Durations are virtual. A plain class with value equality, so knobs can be added compatibly.
+ * Knobs of a [Simulation], built with [builder]. Durations are virtual. A plain class with value equality and no
+ * positional constructor, so knobs can be added compatibly.
  *
- * @param maxDelay each run draws its fault-phase delay ceiling from `[1ms, maxDelay]`; above half the renew interval,
+ * @property maxDelay each run draws its fault-phase delay ceiling from `[1ms, maxDelay]`; above half the renew interval,
  *   replies arrive after the call timed out.
- * @param maxDropRate each run draws its fault-phase loss rate from `[0, maxDropRate]`.
- * @param quietMaxDelay delay ceiling of the quiet phase.
- * @param clockRateSpread node clock rates are drawn from `[1 − spread, 1 + spread]`; the engine is only safe while
+ * @property maxDropRate each run draws its fault-phase loss rate from `[0, maxDropRate]`.
+ * @property quietMaxDelay delay ceiling of the quiet phase.
+ * @property clockRateSpread node clock rates are drawn from `[1 − spread, 1 + spread]`; the engine is only safe while
  *   the spread does not exceed [SimbaConfig.drift], which is what the checker's self-test relies on.
- * @param workShare share of starts whose terms carry work; such work exits on its own with probability
+ * @property workShare share of starts whose terms carry work; such work exits on its own with probability
  *   [selfExitShare] within [maxWork], and otherwise within [maxWork] after its term is revoked (often after the
  *   handover timed out).
- * @param selfExpiringLeases runs [InMemoryLeaseBackend] with leases that expire on their own, as on Redis.
+ * @property selfExpiringLeases runs [InMemoryLeaseBackend] with leases that expire on their own, as on Redis.
  */
-class SimulationParams(
-    val config: SimbaConfig = SimbaConfig.builder().leaseDuration(
-        Duration.ofSeconds(3)
-    ).renewInterval(
-        Duration.ofSeconds(1)
-    ).drift(
-        0.01
-    ).margin(Duration.ofMillis(20)).retryJitter(Duration.ofMillis(500)).minBackoff(Duration.ofMillis(50)).build(),
-    val minNodes: Int = 2,
-    val maxNodes: Int = 5,
-    val minNames: Int = 1,
-    val maxNames: Int = 3,
-    val maxDelay: Duration = Duration.ofMillis(700),
-    val maxDropRate: Double = 0.3,
-    val quietMaxDelay: Duration = Duration.ofMillis(50),
-    val clockRateSpread: Double = config.drift,
-    val meanPauseInterval: Duration = Duration.ofSeconds(8),
-    val maxPause: Duration = config.leaseDuration.multipliedBy(2),
-    val meanOperationInterval: Duration = Duration.ofSeconds(2),
-    val faultPhase: Duration = Duration.ofSeconds(60),
-    val quietPhase: Duration = Duration.ofSeconds(30),
-    val workShare: Double = 0.5,
-    val selfExitShare: Double = 0.3,
-    val maxWork: Duration = config.leaseDuration.multipliedBy(2),
-    val selfExpiringLeases: Boolean = false,
-) {
+class SimulationParams private constructor(builder: Builder) {
+    /** The defaults; see [builder] to change knobs. */
+    constructor() : this(Builder())
+
+    val config: SimbaConfig = builder.config
+    val minNodes: Int = builder.minNodes
+    val maxNodes: Int = builder.maxNodes
+    val minNames: Int = builder.minNames
+    val maxNames: Int = builder.maxNames
+    val maxDelay: Duration = builder.maxDelay
+    val maxDropRate: Double = builder.maxDropRate
+    val quietMaxDelay: Duration = builder.quietMaxDelay
+    val clockRateSpread: Double = builder.clockRateSpread ?: config.drift
+    val meanPauseInterval: Duration = builder.meanPauseInterval
+    val maxPause: Duration = builder.maxPause ?: config.leaseDuration.multipliedBy(2)
+    val meanOperationInterval: Duration = builder.meanOperationInterval
+    val faultPhase: Duration = builder.faultPhase
+    val quietPhase: Duration = builder.quietPhase
+    val workShare: Double = builder.workShare
+    val selfExitShare: Double = builder.selfExitShare
+    val maxWork: Duration = builder.maxWork ?: config.leaseDuration.multipliedBy(2)
+    val selfExpiringLeases: Boolean = builder.selfExpiringLeases
+
     /**
      * I4 bound, measured from the start of the quiet phase: fault-phase messages land within two delays, a cooldown
      * or a stale session may block the lease for one lease duration each, then a candidate retries within one renew
@@ -83,20 +81,132 @@ class SimulationParams(
         maxDelay.multipliedBy(2) + config.leaseDuration.multipliedBy(2) + config.renewInterval.multipliedBy(2) +
             quietMaxDelay.multipliedBy(4)
 
-    private fun values(): List<Any> = listOf(config, minNodes, maxNodes, minNames, maxNames, maxDelay, maxDropRate, quietMaxDelay, clockRateSpread, meanPauseInterval, maxPause, meanOperationInterval, faultPhase, quietPhase, workShare, selfExitShare, maxWork)
+    /** A builder holding every knob of these params, derived ones included. */
+    fun toBuilder(): Builder =
+        Builder()
+            .config(config)
+            .minNodes(minNodes)
+            .maxNodes(maxNodes)
+            .minNames(minNames)
+            .maxNames(maxNames)
+            .maxDelay(maxDelay)
+            .maxDropRate(maxDropRate)
+            .quietMaxDelay(quietMaxDelay)
+            .clockRateSpread(clockRateSpread)
+            .meanPauseInterval(meanPauseInterval)
+            .maxPause(maxPause)
+            .meanOperationInterval(meanOperationInterval)
+            .faultPhase(faultPhase)
+            .quietPhase(quietPhase)
+            .workShare(workShare)
+            .selfExitShare(selfExitShare)
+            .maxWork(maxWork)
+            .selfExpiringLeases(selfExpiringLeases)
+
+    private fun values(): List<Any> = listOf(config, minNodes, maxNodes, minNames, maxNames, maxDelay, maxDropRate, quietMaxDelay, clockRateSpread, meanPauseInterval, maxPause, meanOperationInterval, faultPhase, quietPhase, workShare, selfExitShare, maxWork, selfExpiringLeases)
 
     override fun equals(other: Any?): Boolean = this === other || other is SimulationParams && values() == other.values()
 
     override fun hashCode(): Int = values().hashCode()
 
     override fun toString(): String =
-        "SimulationParams(config=$config, minNodes=$minNodes, maxNodes=$maxNodes, " +
-            "minNames=$minNames, maxNames=$maxNames, maxDelay=$maxDelay, maxDropRate=$maxDropRate, " +
-            "quietMaxDelay=$quietMaxDelay, clockRateSpread=$clockRateSpread, " +
-            "meanPauseInterval=$meanPauseInterval, maxPause=$maxPause, " +
-            "meanOperationInterval=$meanOperationInterval, faultPhase=$faultPhase, " +
-            "quietPhase=$quietPhase, workShare=$workShare, selfExitShare=$selfExitShare, " +
-            "maxWork=$maxWork)"
+        "SimulationParams(" +
+            "config=$config, minNodes=$minNodes, maxNodes=$maxNodes, minNames=$minNames, " +
+            "maxNames=$maxNames, maxDelay=$maxDelay, maxDropRate=$maxDropRate, quietMaxDelay=$quietMaxDelay, " +
+            "clockRateSpread=$clockRateSpread, meanPauseInterval=$meanPauseInterval, maxPause=$maxPause, meanOperationInterval=$meanOperationInterval, " +
+            "faultPhase=$faultPhase, quietPhase=$quietPhase, workShare=$workShare, selfExitShare=$selfExitShare, " +
+            "maxWork=$maxWork, selfExpiringLeases=$selfExpiringLeases)"
+
+    /** Builds [SimulationParams]; `clockRateSpread` defaults to the config's drift, `maxPause` and `maxWork` to two leases. */
+    class Builder internal constructor() {
+        internal var config: SimbaConfig = SimbaConfig.builder().leaseDuration(
+            Duration.ofSeconds(3)
+        ).renewInterval(
+            Duration.ofSeconds(1)
+        ).drift(
+            0.01
+        ).margin(Duration.ofMillis(20)).retryJitter(Duration.ofMillis(500)).minBackoff(Duration.ofMillis(50)).build()
+            private set
+        internal var minNodes: Int = 2
+            private set
+        internal var maxNodes: Int = 5
+            private set
+        internal var minNames: Int = 1
+            private set
+        internal var maxNames: Int = 3
+            private set
+        internal var maxDelay: Duration = Duration.ofMillis(700)
+            private set
+        internal var maxDropRate: Double = 0.3
+            private set
+        internal var quietMaxDelay: Duration = Duration.ofMillis(50)
+            private set
+        internal var clockRateSpread: Double? = null
+            private set
+        internal var meanPauseInterval: Duration = Duration.ofSeconds(8)
+            private set
+        internal var maxPause: Duration? = null
+            private set
+        internal var meanOperationInterval: Duration = Duration.ofSeconds(2)
+            private set
+        internal var faultPhase: Duration = Duration.ofSeconds(60)
+            private set
+        internal var quietPhase: Duration = Duration.ofSeconds(30)
+            private set
+        internal var workShare: Double = 0.5
+            private set
+        internal var selfExitShare: Double = 0.3
+            private set
+        internal var maxWork: Duration? = null
+            private set
+        internal var selfExpiringLeases: Boolean = false
+            private set
+
+        fun config(config: SimbaConfig) = apply { this.config = config }
+
+        fun minNodes(minNodes: Int) = apply { this.minNodes = minNodes }
+
+        fun maxNodes(maxNodes: Int) = apply { this.maxNodes = maxNodes }
+
+        fun minNames(minNames: Int) = apply { this.minNames = minNames }
+
+        fun maxNames(maxNames: Int) = apply { this.maxNames = maxNames }
+
+        fun maxDelay(maxDelay: Duration) = apply { this.maxDelay = maxDelay }
+
+        fun maxDropRate(maxDropRate: Double) = apply { this.maxDropRate = maxDropRate }
+
+        fun quietMaxDelay(quietMaxDelay: Duration) = apply { this.quietMaxDelay = quietMaxDelay }
+
+        fun clockRateSpread(clockRateSpread: Double) = apply { this.clockRateSpread = clockRateSpread }
+
+        fun meanPauseInterval(meanPauseInterval: Duration) = apply { this.meanPauseInterval = meanPauseInterval }
+
+        fun maxPause(maxPause: Duration) = apply { this.maxPause = maxPause }
+
+        fun meanOperationInterval(meanOperationInterval: Duration) = apply {
+            this.meanOperationInterval = meanOperationInterval
+        }
+
+        fun faultPhase(faultPhase: Duration) = apply { this.faultPhase = faultPhase }
+
+        fun quietPhase(quietPhase: Duration) = apply { this.quietPhase = quietPhase }
+
+        fun workShare(workShare: Double) = apply { this.workShare = workShare }
+
+        fun selfExitShare(selfExitShare: Double) = apply { this.selfExitShare = selfExitShare }
+
+        fun maxWork(maxWork: Duration) = apply { this.maxWork = maxWork }
+
+        fun selfExpiringLeases(selfExpiringLeases: Boolean) = apply { this.selfExpiringLeases = selfExpiringLeases }
+
+        fun build(): SimulationParams = SimulationParams(this)
+    }
+
+    companion object {
+        @JvmStatic
+        fun builder(): Builder = Builder()
+    }
 }
 
 /** What a run did, for sanity checks and replay comparisons. */
@@ -358,7 +468,7 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
     private fun call(node: Node, effect: Effect.Call) {
         checkHandover(node, effect.request)
         node.unresolved += effect.requestId
-        after(engineConfig.renewInterval) {
+        after(effect.timeout) {
             if (node.unresolved.remove(effect.requestId)) {
                 deliver(node, Event.Reply(effect.requestId, BackendResult.Failed(TimeoutException("timeout"))))
             }

@@ -72,7 +72,7 @@ Fencing token 会重新开始：5.x 的 token 来自新的存储，从 `1` 开�
 | `MicrometerContendObserver` | `MicrometerSimbaEventListener` |
 | `SimbaServiceTracker`（Actuator） | 已删除：端点读取 `simba.snapshot()` |
 | `ScheduledWork` / `PartitionedWork` | `LeaderWork`（`run(term)`）/ `PartitionWork`（`run(term, partition)`） |
-| `me.ahoo.simba.core.LeaseExpiredException` | `me.ahoo.simba.LeaseExpiredException`，由 `Term.ensureValid` 抛出 |
+| `me.ahoo.simba.core.LeaseExpiredException` | `me.ahoo.simba.TermExpiredException`，由 `Term.ensureValid` 抛出 |
 
 行为上的变化：
 

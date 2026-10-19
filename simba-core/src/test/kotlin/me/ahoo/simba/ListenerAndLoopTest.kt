@@ -135,6 +135,32 @@ class ListenerAndLoopTest {
     }
 
     @Test
+    fun `waiting for a pending stage on the loop fails fast and chaining on it works`() {
+        val outcomes = LinkedBlockingQueue<Any>()
+        Simba.builder()
+            .backend(GrantingBackend())
+            .ioExecutor(Runnable::run)
+            .callbackExecutor(Runnable::run)
+            .build()
+            .use { client ->
+                val election = client.election("waited")
+                election.start(object : LeadershipListener {
+                    override fun onElected(term: Term) {
+                        val stopping = election.stop()
+                        outcomes += runCatching { stopping.toCompletableFuture().join() }.exceptionOrNull()!!
+                        stopping.thenRun { outcomes += "stopped" }
+                    }
+
+                    override fun onRevoked(term: Term, reason: RevokeReason) = Unit
+                })
+                outcomes.poll(WAIT, TimeUnit.SECONDS).assert().isInstanceOf(IllegalStateException::class.java)
+                outcomes.poll(WAIT, TimeUnit.SECONDS).assert().isEqualTo("stopped")
+                // Off the loop, the same stage converts and waits as usual.
+                election.stop().toCompletableFuture().get(WAIT, TimeUnit.SECONDS)
+            }
+    }
+
+    @Test
     fun `a failed close future ends a wait as a closed client, not an execution exception`() {
         val failure = IllegalArgumentException("close failed")
         val error = assertThrows<IllegalStateException> {

@@ -47,7 +47,8 @@ graph LR
 deadline = sentAt + remaining × (1 − drift) − margin
 ```
 
-`sentAt` 是续约请求 **发出** 的时刻，而不是回复到达的时刻，因此慢回复只会缩短截止时刻。只要两个时钟的速率之比在
+`sentAt` 是续约请求 **发出** 的时刻，而不是回复到达的时刻，因此慢回复只会缩短截止时刻。每次后端调用都在当前生效的续约周期后超时（后端给的时间少于租期时会更短），因此卡住的调用不会占着唯一的续约名额，越过截止时刻前剩余的重试机会。
+只要两个时钟的速率之比在
 `1 ± drift` 之内，本地截止时刻就会在后端让会话过期并把其租约交给别人之前到达。本地截止时刻一旦已过，迟到的续约回复不会再延长它：
 会话按 `DEADLINE_PASSED` 结束，其任期保持结束状态。
 
@@ -239,6 +240,10 @@ autonumber
 - `stop()` 和 `stepDown()` 返回一个 `CompletionStage<Void>`，在最后一个 `onRevoked` 运行之后完成；`stop()` 完成后，监听器不会再收到任何回调。
 - 当同一名称已在本客户端上启动时，`start(listener)` 抛出 `IllegalStateException`。
 - 阻塞的 `close()` 方法（`Simba`、`LeaderTask`、`LockTerm`、`GroupTask`）在回调或 leader 任务中调用时不会等待，因为那样会等待自己。
+- 使用直接执行的回调执行器时，回调运行在引擎循环上：在那里请链式处理客户端返回的 stage。对尚未完成的 stage 调用
+  `toCompletableFuture()` 会抛出 `IllegalStateException`，因为等待它会阻塞负责完成它的循环。
+- 如果回调执行器拒绝了 `onElected`，没有人知道这个任期，它的工作也不会启动：选举让出一个租期，该任期的 `onRevoked` 也不会投递，
+  回调因此保持配对。
 
 ## 故障模式 {#failure-modes}
 

@@ -65,7 +65,9 @@ class SimulationSpec {
     @Test
     fun `the checker catches clocks drifting beyond the configured bound`() {
         val broken =
-            SimulationParams(config = SimulationParams().config.toBuilder().drift(0.0).build(), clockRateSpread = 0.3)
+            SimulationParams.builder().config(
+                SimulationParams().config.toBuilder().drift(0.0).build()
+            ).clockRateSpread(0.3).build()
         assertThrows<SimulationFailure> {
             (0L until 200L).forEach { Simulation(it, broken).run() }
         }
@@ -74,6 +76,6 @@ class SimulationSpec {
     companion object {
         const val DEFAULT_SEEDS = 10_000L
         const val SAMPLE_SEED = 42L
-        val SELF_EXPIRING = SimulationParams(selfExpiringLeases = true)
+        val SELF_EXPIRING = SimulationParams.builder().selfExpiringLeases(true).build()
     }
 }

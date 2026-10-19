@@ -15,6 +15,7 @@ package me.ahoo.simba.spi
 
 import me.ahoo.simba.SimbaException
 import java.time.Duration
+import java.util.Objects
 
 /**
  * Backend SPI: sessions, leases attached to sessions, and group membership.
@@ -114,14 +115,40 @@ interface LeaseBackend : AutoCloseable {
     }
 }
 
-/** What a backend can do beyond the required contract. */
-data class Capabilities(
+/**
+ * What a backend can do beyond the required contract. The SPI result and hint types are plain classes with value
+ * equality (no `copy` or destructuring), so properties can be added without breaking backends compiled against them.
+ */
+class Capabilities(
     val releaseHints: Boolean = false,
     val membershipHints: Boolean = false,
-)
+) {
+    override fun equals(other: Any?): Boolean =
+        this === other ||
+            other is Capabilities &&
+            releaseHints == other.releaseHints &&
+            membershipHints == other.membershipHints
+
+    override fun hashCode(): Int = Objects.hash(releaseHints, membershipHints)
+
+    override fun toString(): String = "Capabilities(releaseHints=$releaseHints, membershipHints=$membershipHints)"
+}
 
 /** A new session and the backend-measured time until it expires. */
-data class SessionGrant(val id: SessionId, val remaining: Duration)
+class SessionGrant(
+    val id: SessionId,
+    val remaining: Duration,
+) {
+    override fun equals(other: Any?): Boolean =
+        this === other ||
+            other is SessionGrant &&
+            id == other.id &&
+            remaining == other.remaining
+
+    override fun hashCode(): Int = Objects.hash(id, remaining)
+
+    override fun toString(): String = "SessionGrant(id=$id, remaining=$remaining)"
+}
 
 sealed interface KeepAliveResult {
     /**
@@ -129,7 +156,20 @@ sealed interface KeepAliveResult {
      * `held` said: the caller revokes terms missing from it and releases leases it acquired without knowing, so an
      * incomplete list could hand an old token back to its holder.
      */
-    data class Live(val remaining: Duration, val owned: Map<LeaseName, Long>) : KeepAliveResult
+    class Live(
+        val remaining: Duration,
+        val owned: Map<LeaseName, Long>,
+    ) : KeepAliveResult {
+        override fun equals(other: Any?): Boolean =
+            this === other ||
+                other is Live &&
+                remaining == other.remaining &&
+                owned == other.owned
+
+        override fun hashCode(): Int = Objects.hash(remaining, owned)
+
+        override fun toString(): String = "Live(remaining=$remaining, owned=$owned)"
+    }
 
     /** The session expired; it will never be revived. */
     data object Expired : KeepAliveResult
@@ -137,19 +177,65 @@ sealed interface KeepAliveResult {
 
 sealed interface AcquireResult {
     /** The caller's session owns the lease in the term numbered [token]. */
-    data class Granted(val token: Long) : AcquireResult
+    class Granted(
+        val token: Long,
+    ) : AcquireResult {
+        override fun equals(other: Any?): Boolean =
+            this === other ||
+                other is Granted &&
+                token == other.token
+
+        override fun hashCode(): Int = Objects.hashCode(token)
+
+        override fun toString(): String = "Granted(token=$token)"
+    }
 
     /** Another live session owns the lease in the term numbered [token]. */
-    data class HeldBy(val session: SessionId, val token: Long) : AcquireResult
+    class HeldBy(
+        val session: SessionId,
+        val token: Long,
+    ) : AcquireResult {
+        override fun equals(other: Any?): Boolean =
+            this === other ||
+                other is HeldBy &&
+                session == other.session &&
+                token == other.token
+
+        override fun hashCode(): Int = Objects.hash(session, token)
+
+        override fun toString(): String = "HeldBy(session=$session, token=$token)"
+    }
 }
 
 /** Optional backend notification. */
 sealed interface BackendHint {
     /** The lease [name] was released. */
-    data class Released(val name: LeaseName) : BackendHint
+    class Released(
+        val name: LeaseName,
+    ) : BackendHint {
+        override fun equals(other: Any?): Boolean =
+            this === other ||
+                other is Released &&
+                name == other.name
+
+        override fun hashCode(): Int = Objects.hashCode(name)
+
+        override fun toString(): String = "Released(name=$name)"
+    }
 
     /** The members of [group] changed. */
-    data class MembersChanged(val group: String) : BackendHint
+    class MembersChanged(
+        val group: String,
+    ) : BackendHint {
+        override fun equals(other: Any?): Boolean =
+            this === other ||
+                other is MembersChanged &&
+                group == other.group
+
+        override fun hashCode(): Int = Objects.hashCode(group)
+
+        override fun toString(): String = "MembersChanged(group=$group)"
+    }
 }
 
 fun interface BackendHintListener {

@@ -129,7 +129,8 @@ simba.election("report").schedule(Schedule.fixedRate(Duration.ofMinutes(1))) { t
 }
 ```
 
-One virtual thread per term, `ensureValid()` before each run, failures logged and published, loop continues.
+One virtual thread per term, `ensureValid()` before each run, failures (an `Error` included) logged and published,
+loop continues; a `VirtualMachineError` ends the loop and the election steps down for one lease duration.
 
 ### Partitions
 

@@ -329,7 +329,9 @@ deadline = sentAt + remaining × (1 − drift) − margin
 ```
 
 `sentAt` is when the keep-alive was **sent**, not when the reply arrived, so a slow reply only shortens the deadline.
-As long as the two clocks run at rates within `1 ± drift` of each other, the local deadline passes before the backend
+Every backend call times out after the renew period in effect (shorter when the backend grants less than the lease),
+so a stuck call never holds the only keep-alive slot past the retries left before the deadline. As long as the two
+clocks run at rates within `1 ± drift` of each other, the local deadline passes before the backend
 can expire the session and give its leases to someone else. Once the local deadline has passed, a renewal that arrives
 late never extends it: the session ends (`DEADLINE_PASSED`) and its terms stay ended.
 
@@ -540,6 +542,11 @@ it to move leadership off a node before a deploy or to drain it. `stop()` ends t
 - `start(listener)` throws `IllegalStateException` while the same name is already started on this client.
 - Blocking `close()` methods (`Simba`, `LeaderTask`, `LockTerm`, `GroupTask`) do not wait when called from a
   callback or from leader work, where waiting would wait for itself.
+- With a direct callback executor, callbacks run on the engine loop: chain on the stages the client returns there.
+  Converting a pending one with `toCompletableFuture()` throws `IllegalStateException`, since waiting for it would
+  block the loop that completes it.
+- If the callback executor rejects an `onElected`, nobody learns of the term and its work never starts: the election
+  steps down for one lease duration, and that term's `onRevoked` is not delivered either, so callbacks stay paired.
 
 ## Failure Modes
 
@@ -743,6 +750,30 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 - Writes commit through a quorum, so a leader change keeps every token; tokens can only go back if the ensemble's data
   is lost or restored from an older snapshot. Session timeouts are tracked with the servers' elapsed time, so a wall
   clock step on an ensemble host does not shorten them.
+- Group names follow the `LeaseName` rules (1–128 characters of `[A-Za-z0-9._:-]`, not `.` or `..`), as on every
+  backend. `members` syncs the group path first, so a join that just returned is always in the view.
+
+### Security
+
+By default the nodes get `OPEN_ACL_UNSAFE`: any client of the ensemble can delete or pre-create lease nodes and forge
+group members. On a shared ensemble, authenticate and restrict the ACL:
+
+```kotlin
+val backend = ZookeeperLeaseBackend(
+    "zk1:2181,zk2:2181,zk3:2181",
+    authInfo = listOf(AuthInfo("digest", "simba:secret".toByteArray())),
+    aclProvider = myAclProvider, // e.g. ZooDefs.Ids.CREATOR_ALL_ACL for every path
+    clientConfig = ZKClientConfig(), // TLS or SASL settings, optional
+)
+```
+
+- Every client (each session's and the one `members` reads with) adds `authInfo` and is built with `clientConfig`.
+- Every node the backend creates gets the ACL of `aclProvider`, including the parents it creates. Parents that already
+  exist keep their ACL, and the ACL of `{root}/leases` and `{root}/groups/{group}` decides who may create or delete
+  leases and members: create them with the backend's identity, or set their ACL yourself.
+- Spring Boot: `simba.zookeeper.auth.scheme` / `simba.zookeeper.auth.credentials` and `simba.zookeeper.acl`
+  (`auto` gives creator-only nodes once credentials are set); an `ACLProvider` bean replaces the ACL and a
+  `ZKClientConfig` bean configures every client (see [Configuration](./configuration.md)).
 
 ## Selecting a Backend in Spring Boot
 
@@ -783,6 +814,9 @@ indicator.
 | `simba.zookeeper.connect-string` | `localhost:2181` | Ensemble the backend opens its sessions on |
 | `simba.zookeeper.root` | `/simba` | Parent path of the lease and group nodes |
 | `simba.zookeeper.connection-timeout` | `15s` | How long opening a session may take |
+| `simba.zookeeper.auth.scheme` | `digest` | Authentication scheme every Zookeeper client adds |
+| `simba.zookeeper.auth.credentials` | — | Auth data of the scheme (UTF-8), e.g. `user:password` for `digest`; unset: no authentication |
+| `simba.zookeeper.acl` | `auto` | ACL of the nodes the backend creates: `open` (`OPEN_ACL_UNSAFE`), `creator` (`CREATOR_ALL_ACL`, needs credentials) or `auto` (`creator` with credentials, else `open`); an `ACLProvider` bean takes precedence |
 | `simba.scheduling.enabled` | `true` | Runs `@SimbaScheduled` and `@SimbaPartitioned` methods |
 | `simba.metrics.enabled` | `true` | Records Micrometer metrics when a `MeterRegistry` bean exists |
 | `management.health.simba.enabled` | `true` | The `simba` health indicator |
@@ -806,7 +840,7 @@ management:
 
 | Bean | Condition |
 |---|---|
-| `LeaseBackend` (`JdbcLeaseBackend`, `RedisLeaseBackend` or `ZookeeperLeaseBackend`) | The backend is active and the application defines no `LeaseBackend`; JDBC needs a single `DataSource`, Redis a single `RedisConnectionFactory` |
+| `LeaseBackend` (`JdbcLeaseBackend`, `RedisLeaseBackend` or `ZookeeperLeaseBackend`) | The backend is active and the application defines no `LeaseBackend`; JDBC needs a single `DataSource`, Redis a single `RedisConnectionFactory`; Zookeeper uses an `ACLProvider` and a `ZKClientConfig` bean when present |
 | `Simba` | A `LeaseBackend` bean exists; built with `simba.session.*` and every `SimbaEventListener` bean |
 | `SimbaLifecycle` | Closes the client on shutdown |
 | `SimbaScheduledBeanPostProcessor` | `simba.scheduling.enabled` |
@@ -1524,7 +1558,7 @@ start the 5.x tokens above it (for JDBC, by inserting `simba_lease` rows with a 
 | `MicrometerContendObserver` | `MicrometerSimbaEventListener` |
 | `SimbaServiceTracker` (Actuator) | Removed: the endpoint reads `simba.snapshot()` |
 | `ScheduledWork` / `PartitionedWork` | `LeaderWork` (`run(term)`) / `PartitionWork` (`run(term, partition)`) |
-| `me.ahoo.simba.core.LeaseExpiredException` | `me.ahoo.simba.LeaseExpiredException`, thrown by `Term.ensureValid` |
+| `me.ahoo.simba.core.LeaseExpiredException` | `me.ahoo.simba.TermExpiredException`, thrown by `Term.ensureValid` |
 
 Behavior that changed:
 

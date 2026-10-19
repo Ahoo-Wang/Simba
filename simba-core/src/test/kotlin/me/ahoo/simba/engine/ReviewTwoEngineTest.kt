@@ -66,6 +66,29 @@ class ReviewTwoEngineTest : EngineHarness() {
     }
 
     @Test
+    fun `backend calls time out after the renew period in effect`() {
+        on(Event.Boot)
+        call<BackendRequest.OpenSession>().timeout.assert().isEqualTo(config.renewInterval)
+        on(
+            Event.Reply(
+                call<BackendRequest.OpenSession>().requestId,
+                BackendResult.Opened(SessionGrant(session, short))
+            )
+        )
+        val every = (1_168 * MILLIS) / 3
+        on(Event.Start(name))
+        // A stuck call must not hold the only keep-alive slot past the retries a shortened period leaves.
+        call<BackendRequest.Acquire>().timeout.assert().isEqualTo(every)
+        on(Event.Timer(active.renewTimer!!), now = every)
+        call<BackendRequest.KeepAlive>().timeout.assert().isEqualTo(every)
+
+        val full = KeepAliveResult.Live(Duration.ofSeconds(3), emptyMap())
+        on(Event.Reply(call<BackendRequest.KeepAlive>().requestId, BackendResult.KeptAlive(full)), now = every)
+        on(Event.Timer(active.renewTimer!!), now = every + config.renewInterval)
+        call<BackendRequest.KeepAlive>().timeout.assert().isEqualTo(config.renewInterval)
+    }
+
+    @Test
     fun `a backend granting the full lease keeps the configured renew interval`() {
         open()
         effects.assert().contains(Effect.Arm(active.renewTimer!!, config.renewInterval))
