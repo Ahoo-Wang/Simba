@@ -103,6 +103,9 @@ internal class EngineShell(
     private val dispatchers = HashMap<LeaseName, Dispatcher>()
     private val groupViews = HashMap<String, (SessionId?, List<SessionId>) -> Unit>()
     private val handled = AtomicLong()
+
+    /** Terms whose onElected the callback executor rejected: their onRevoked is not delivered either. */
+    private val undelivered = HashSet<Long>()
     private val hintSubscription = backend.subscribe { hint -> post(Event.Hint(hint)) }
     private var sessionStatus = SessionStatus.OPENING
     private var notLiveSince = ticker.nanoTime()
@@ -421,15 +424,8 @@ internal class EngineShell(
             is Effect.Call -> call(effect)
             is Effect.Arm -> timers.schedule(effect.at) { post(Event.Timer(effect.id)) }
             is Effect.Deadline -> terms.deadline(effect)
-            is Effect.Elected -> {
-                val term = terms.elected(effect)
-                dispatch(effect.name) { it.onElected(term) }
-            }
-
-            is Effect.Revoked -> {
-                val term = terms.revoked(effect)
-                dispatch(effect.name) { it.onRevoked(term, effect.reason) }
-            }
+            is Effect.Elected -> elected(effect)
+            is Effect.Revoked -> revoked(effect)
 
             is Effect.Complete -> {
                 val dispatcher = effect.name?.let { dispatchers[it] }
@@ -457,6 +453,28 @@ internal class EngineShell(
                 } catch (error: Throwable) {
                     log.warn(error) { "Group view of [${effect.group}] failed." }
                 }
+            }
+        }
+    }
+
+    private fun elected(effect: Effect.Elected) {
+        val term = terms.elected(effect)
+        dispatch(effect.name, { it.onElected(term) }) {
+            // Nobody learned of the term, so no work runs for it: give it up rather than hold the lease
+            // idle, and keep callbacks paired by never delivering its onRevoked either.
+            undelivered += term.id
+            log.warn { "Callback executor rejected onElected of [${effect.name}]; stepping down." }
+            // Its work never started either: report it exited, so the step-down releases at once.
+            post(Event.WorkExited(effect.name, term.id))
+            post(Event.StepDown(effect.name, config.leaseDuration.toNanos(), CompletableFuture()))
+        }
+    }
+
+    private fun revoked(effect: Effect.Revoked) {
+        val term = terms.revoked(effect)
+        if (!undelivered.remove(term.id)) {
+            dispatch(effect.name, { it.onRevoked(term, effect.reason) }) {
+                log.warn { "Callback executor rejected onRevoked of [${effect.name}]; skipped." }
             }
         }
     }
@@ -499,7 +517,7 @@ internal class EngineShell(
             }
         }
         // A timer that runs at once (closed loop) replies before it is assigned; cancelling it then is moot.
-        timeout = timers.schedule(ticker.nanoTime() + config.renewInterval) {
+        timeout = timers.schedule(ticker.nanoTime() + effect.timeout) {
             reply(BackendResult.Failed(TimeoutException("${effect.request} timed out.")))
         }
         try {
@@ -513,7 +531,7 @@ internal class EngineShell(
         dispatchers.getOrPut(name) { Dispatcher(SequentialExecutor(callbackExecutor)) }
 
     /** Captures the listener now, on the loop, so a restart with another listener never receives older callbacks. */
-    private fun dispatch(name: LeaseName, callback: (LeadershipListener) -> Unit) {
+    private fun dispatch(name: LeaseName, callback: (LeadershipListener) -> Unit, rejected: () -> Unit) {
         val dispatcher = dispatcher(name)
         val listener = dispatcher.listener ?: return
         val run = Runnable {
@@ -526,7 +544,7 @@ internal class EngineShell(
                 dispatching.remove()
             }
         }
-        dispatcher.executor.executeOr(run) { log.warn { "Callback executor rejected a callback of [$name]; skipped." } }
+        dispatcher.executor.executeOr(run, rejected)
     }
 
     /** Runs [task] on this executor, or [rejected] on the calling thread when the delegate rejects it. */

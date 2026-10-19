@@ -83,7 +83,8 @@ sealed interface Event {
 @InternalSimbaApi
 sealed interface Effect {
     /** Runs [request] off the event loop; its outcome must come back as exactly one [Event.Reply]. */
-    data class Call(val requestId: Long, val request: BackendRequest) : Effect
+    /** [timeout] (nanoseconds) is the effective renew period: a call stuck longer leaves time for retries. */
+    data class Call(val requestId: Long, val request: BackendRequest, val timeout: Long) : Effect
 
     /** Delivers [Event.Timer] once the ticker reaches [at]. Timers are never cancelled; stale ones are ignored. */
     data class Arm(val id: Long, val at: Long) : Effect

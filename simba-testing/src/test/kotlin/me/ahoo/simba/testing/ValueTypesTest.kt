@@ -23,7 +23,12 @@ import me.ahoo.simba.event.SessionStatus
 import me.ahoo.simba.event.SimbaEvent
 import me.ahoo.simba.event.SimbaSnapshot
 import me.ahoo.simba.event.WorkOutcome
+import me.ahoo.simba.spi.AcquireResult
+import me.ahoo.simba.spi.BackendHint
+import me.ahoo.simba.spi.Capabilities
+import me.ahoo.simba.spi.KeepAliveResult
 import me.ahoo.simba.spi.LeaseName
+import me.ahoo.simba.spi.SessionGrant
 import me.ahoo.simba.spi.SessionId
 import me.ahoo.test.asserts.assert
 import org.junit.jupiter.params.ParameterizedTest
@@ -81,7 +86,11 @@ class ValueTypesTest {
                 .build()
 
         @JvmStatic
-        fun cases(): List<Arguments> = (eventCases() + otherCases() + testingCases()).map { Arguments.of(it) }
+        fun cases(): List<Arguments> = (eventCases() + otherCases() + spiCases() + testingCases()).map {
+            Arguments.of(
+                it
+            )
+        }
 
         private fun eventCases(): List<Case> =
             listOf(
@@ -183,6 +192,22 @@ class ValueTypesTest {
                 ),
             )
 
+        private fun spiCases(): List<Case> =
+            listOf(
+                Case("Capabilities", { Capabilities(it.at(0), it.at(1)) }, listOf(false, false), listOf(true, true)),
+                Case("SessionGrant", { SessionGrant(it.at(0), it.at(1)) }, listOf(s1, one), listOf(s2, two)),
+                Case(
+                    "Live",
+                    { KeepAliveResult.Live(it.at(0), it.at(1)) },
+                    listOf(one, mapOf(a to 1L)),
+                    listOf(two, emptyMap<LeaseName, Long>())
+                ),
+                Case("Granted", { AcquireResult.Granted(it.at(0)) }, listOf(1L), listOf(2L)),
+                Case("HeldBy", { AcquireResult.HeldBy(it.at(0), it.at(1)) }, listOf(s1, 1L), listOf(s2, 2L)),
+                Case("Released", { BackendHint.Released(it.at(0)) }, listOf(a), listOf(b)),
+                Case("MembersChanged", { BackendHint.MembersChanged(it.at(0)) }, listOf("g"), listOf("h")),
+            )
+
         private fun testingCases(): List<Case> =
             listOf(
                 Case("Owner", { InMemoryLeaseBackend.Owner(it.at(0), it.at(1)) }, listOf(s1, 1L), listOf(s2, 2L)),
@@ -204,7 +229,7 @@ class ValueTypesTest {
                 ),
                 Case(
                     "SimulationParams",
-                    { SimulationParams(minNodes = it.at(0), maxNodes = it.at(1), workShare = it.at(2)) },
+                    { SimulationParams.builder().minNodes(it.at(0)).maxNodes(it.at(1)).workShare(it.at(2)).build() },
                     listOf(2, 5, 0.5),
                     listOf(3, 6, 0.6),
                 ),

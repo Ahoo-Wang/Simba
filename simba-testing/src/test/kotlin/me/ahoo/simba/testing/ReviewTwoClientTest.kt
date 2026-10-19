@@ -179,5 +179,66 @@ class ReviewTwoClientTest {
         event.toString().assert().isEqualTo("Elected(name=a, token=1, kind=LOCK)")
         (event == SimbaEvent.Elected(LeaseName("a"), 2, ElectionKind.LOCK)).assert().isFalse()
         SimulationParams().assert().isEqualTo(SimulationParams())
+        val spi = listOf(
+            me.ahoo.simba.spi.Capabilities::class.java,
+            me.ahoo.simba.spi.SessionGrant::class.java,
+            me.ahoo.simba.spi.KeepAliveResult.Live::class.java,
+            me.ahoo.simba.spi.AcquireResult.Granted::class.java,
+            me.ahoo.simba.spi.AcquireResult.HeldBy::class.java,
+            me.ahoo.simba.spi.BackendHint.Released::class.java,
+            me.ahoo.simba.spi.BackendHint.MembersChanged::class.java,
+        )
+        for (type in spi) {
+            type.methods.map { it.name }.filter { it == "copy" || it.startsWith("component") }.assert().isEmpty()
+        }
+    }
+
+    @Test
+    fun `simulation params are built, never constructed positionally`() {
+        SimulationParams::class.java.constructors.filterNot { it.isSynthetic }.map { it.parameterCount }
+            .assert().isEqualTo(listOf(0))
+        val params = SimulationParams.builder().minNodes(3).clockRateSpread(0.002).build()
+        params.toBuilder().build().assert().isEqualTo(params)
+        params.maxPause.assert().isEqualTo(params.config.leaseDuration.multipliedBy(2))
+        SimulationParams().clockRateSpread.assert().isEqualTo(SimulationParams().config.drift)
+    }
+
+    @Test
+    fun `a rejected onElected steps the term down and never delivers its onRevoked`() {
+        val reject = AtomicBoolean(true)
+        val client = simba.client {
+            callbackExecutor { task -> if (reject.get()) throw RejectedExecutionException("down") else task.run() }
+        }
+        val calls = LinkedBlockingQueue<String>()
+        client.election("unheard").start(object : me.ahoo.simba.LeadershipListener {
+            override fun onElected(term: Term) {
+                calls += "elected ${term.token}"
+            }
+
+            override fun onRevoked(term: Term, reason: RevokeReason) {
+                calls += "revoked ${term.token}"
+            }
+        })
+        simba.settle()
+        simba.nextEvent<SimbaEvent.Revoked>().reason.assert().isEqualTo(RevokeReason.STEPPED_DOWN)
+        simba.backend.owner(LeaseName("unheard")).assert().isNull()
+
+        reject.set(false)
+        simba.advance(simba.config.leaseDuration)
+        calls.next().assert().isEqualTo("elected 2")
+        calls.isEmpty().assert().isTrue()
+    }
+
+    @Test
+    fun `work whose onElected was rejected never holds the lease idle`() {
+        val reject = AtomicBoolean(true)
+        val client = simba.client {
+            callbackExecutor { task -> if (reject.get()) throw RejectedExecutionException("down") else task.run() }
+        }
+        val ran = LinkedBlockingQueue<Long>()
+        client.election("idle-work").runWhileLeader { term -> ran += term.token }
+        simba.settle()
+        simba.backend.owner(LeaseName("idle-work")).assert().isNull()
+        ran.isEmpty().assert().isTrue()
     }
 }

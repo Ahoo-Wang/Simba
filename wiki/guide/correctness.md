@@ -54,7 +54,9 @@ deadline = sentAt + remaining × (1 − drift) − margin
 ```
 
 `sentAt` is when the keep-alive was **sent**, not when the reply arrived, so a slow reply only shortens the deadline.
-As long as the two clocks run at rates within `1 ± drift` of each other, the local deadline passes before the backend
+Every backend call times out after the renew period in effect (shorter when the backend grants less than the lease),
+so a stuck call never holds the only keep-alive slot past the retries left before the deadline. As long as the two
+clocks run at rates within `1 ± drift` of each other, the local deadline passes before the backend
 can expire the session and give its leases to someone else. Once the local deadline has passed, a renewal that arrives
 late never extends it: the session ends (`DEADLINE_PASSED`) and its terms stay ended.
 
@@ -265,6 +267,11 @@ it to move leadership off a node before a deploy or to drain it. `stop()` ends t
 - `start(listener)` throws `IllegalStateException` while the same name is already started on this client.
 - Blocking `close()` methods (`Simba`, `LeaderTask`, `LockTerm`, `GroupTask`) do not wait when called from a
   callback or from leader work, where waiting would wait for itself.
+- With a direct callback executor, callbacks run on the engine loop: chain on the stages the client returns there.
+  Converting a pending one with `toCompletableFuture()` throws `IllegalStateException`, since waiting for it would
+  block the loop that completes it.
+- If the callback executor rejects an `onElected`, nobody learns of the term and its work never starts: the election
+  steps down for one lease duration, and that term's `onRevoked` is not delivered either, so callbacks stay paired.
 
 ## Failure Modes
 

@@ -853,8 +853,12 @@ private class Transition(state: EngineState, private val now: Long) {
     /** Publishes `SessionLeaseShortened` once per session when [every] is below the configured renew interval. */
     private fun noteShortLease(remaining: Duration, every: Long) {
         val current = session as SessionState.Active
-        if (every < config.renewInterval && !current.leaseShortened) {
-            session = current.copy(leaseShortened = true)
+        val renewEvery = every.takeIf { it < config.renewInterval }
+        if (current.renewEvery != renewEvery) {
+            session = current.copy(renewEvery = renewEvery)
+        }
+        if (renewEvery != null && !current.leaseShortened) {
+            session = (session as SessionState.Active).copy(leaseShortened = true)
             effects += Effect.Publish(SimbaEvent.SessionLeaseShortened(current.id, remaining, Duration.ofNanos(every)))
         }
     }
@@ -867,7 +871,8 @@ private class Transition(state: EngineState, private val now: Long) {
     private fun call(request: BackendRequest): Long {
         val id = newId()
         pending[id] = Pending(request, now)
-        effects += Effect.Call(id, request)
+        val timeout = (session as? SessionState.Active)?.renewEvery ?: config.renewInterval
+        effects += Effect.Call(id, request, timeout)
         return id
     }
 

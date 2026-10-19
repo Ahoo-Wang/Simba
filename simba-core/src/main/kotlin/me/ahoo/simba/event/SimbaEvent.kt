@@ -251,7 +251,12 @@ enum class WorkOutcome {
     CANCELLED,
 }
 
-/** Receives [SimbaEvent]s; exceptions are logged and ignored. */
+/**
+ * Receives [SimbaEvent]s, in order, on one serial dispatcher over the client's callback executor, never on the engine
+ * loop: a listener may call `snapshot()`, `stop()` and the other client APIs. Blocking `close()` methods called from a
+ * listener do not wait (they would wait for the listener itself), and `close()` completes after the last event was
+ * delivered. Exceptions are logged and ignored.
+ */
 fun interface SimbaEventListener {
     fun onEvent(event: SimbaEvent)
 }

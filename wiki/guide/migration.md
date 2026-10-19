@@ -82,7 +82,7 @@ start the 5.x tokens above it (for JDBC, by inserting `simba_lease` rows with a 
 | `MicrometerContendObserver` | `MicrometerSimbaEventListener` |
 | `SimbaServiceTracker` (Actuator) | Removed: the endpoint reads `simba.snapshot()` |
 | `ScheduledWork` / `PartitionedWork` | `LeaderWork` (`run(term)`) / `PartitionWork` (`run(term, partition)`) |
-| `me.ahoo.simba.core.LeaseExpiredException` | `me.ahoo.simba.LeaseExpiredException`, thrown by `Term.ensureValid` |
+| `me.ahoo.simba.core.LeaseExpiredException` | `me.ahoo.simba.TermExpiredException`, thrown by `Term.ensureValid` |
 
 Behavior that changed:
 
