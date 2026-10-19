@@ -153,6 +153,7 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
     private class Work(val term: EngineTerm) {
         var exited = false
         var handoverUntil: Long? = null
+        var timedOut = false
     }
 
     private inner class Node(val index: Int) {
@@ -507,7 +508,10 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
                 else -> false
             }
             if (frees && now - until >= 0) {
-                handoverTimeouts++
+                if (!work.timedOut) {
+                    work.timedOut = true
+                    handoverTimeouts++
+                }
             } else if (frees) {
                 val left = Duration.ofNanos(until - now)
                 fail("I5: $node sent $request while the work of $term still runs, $left before its handover timeout")
