@@ -97,6 +97,8 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   substitute for the fencing check. Monotonic instants are compared by difference, never with `maxOf`.
 - Keep-alive replies list the leases the session owns: a term adopted before the request but missing from the reply
   is revoked (`TAKEN_OVER`); an owned lease nobody holds or is acquiring is released.
+- A hint is never dropped because its request is in flight (the reply may predate the change): a release hint makes a
+  losing in-flight attempt retry at once, a membership hint repeats an in-flight members read at once.
 - Handover (ADR 0010 contract 3): an election started with work (`runWhileLeader`, `schedule`, groups) keeps the
   lease of a stopped or stepped-down term in `ElectionState.Handover` until `Event.WorkExited` for that term or the
   session's local deadline at the stop, whichever comes first; terms without work release at once. A step-down

@@ -94,6 +94,22 @@ class GroupsAndProbesTest : EngineHarness() {
     }
 
     @Test
+    fun `a membership hint during a members read reads the members again at once`() {
+        open()
+        joined()
+        on(Event.Timer(effects.filterIsInstance<Effect.Arm>().single().id), now = SECOND)
+        val stale = call<BackendRequest.Members>()
+        on(Event.Hint(BackendHint.MembersChanged(group)), now = SECOND).assert().isEmpty()
+        on(Event.Reply(stale.requestId, BackendResult.Members(listOf(session, other))), now = SECOND)
+        val fresh = call<BackendRequest.Members>()
+        effects.filterIsInstance<Effect.Arm>().assert().isEmpty()
+
+        on(Event.Reply(fresh.requestId, BackendResult.Members(listOf(session))), now = SECOND)
+        effects.filterIsInstance<Effect.Members>().single().members.assert().isEqualTo(listOf(session))
+        effects.filterIsInstance<Effect.Arm>().single().at.assert().isEqualTo(SECOND + config.renewInterval)
+    }
+
+    @Test
     fun `failed joins and refreshes retry later`() {
         open()
         on(Event.Join(group))
