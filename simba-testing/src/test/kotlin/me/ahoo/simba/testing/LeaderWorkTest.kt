@@ -147,6 +147,8 @@ class LeaderWorkTest {
         val second = simba.client()
         val terms = LinkedBlockingQueue<Term>()
         val task = first.election("shared").runWhileLeader(executor) { term -> terms += term }
+        // Each client has its own loop thread: let the first one win before the second contends.
+        simba.settle()
         second.election("shared").runWhileLeader { term -> terms += term }
         val one = terms.next()
         // Let the second client's first attempt answer, so the release hint finds it idle.
