@@ -15,6 +15,7 @@ package me.ahoo.simba
 
 import me.ahoo.simba.spi.LeaseName
 import java.time.Duration
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 
 /**
@@ -24,6 +25,10 @@ import java.util.concurrent.CompletionStage
  *
  * A held lock ends early when its term is revoked (session expired, deadline passed, taken over); it is then
  * released for good rather than re-acquired, so check [Term.isValid] or pass [Term.token] to the protected resource.
+ *
+ * [acquireAsync] and [tryAcquireAsync] wait without a thread. Cancelling the returned future
+ * (`toCompletableFuture().cancel(...)`) abandons the attempt and releases a term it already won, so a cancelled
+ * acquisition never leaves a lock held.
  */
 interface DistributedLock {
     val name: LeaseName
@@ -39,6 +44,43 @@ interface DistributedLock {
      * client holds the lease, or when no attempt is answered within one lease duration (backend unreachable).
      */
     fun tryAcquire(): LockTerm?
+
+    /**
+     * [acquire] without blocking: completes with the term, or exceptionally with [LockTimeoutException] when none was
+     * won within [timeout] and with [IllegalStateException] when the client closes first. The client's own locks
+     * wait without a thread and complete on its callback executor; this default runs [acquire] on a virtual thread
+     * and interrupts it on cancellation.
+     */
+    fun acquireAsync(timeout: Duration): CompletionStage<LockTerm> = acquireOnVirtualThread { acquire(timeout) }
+
+    /** [tryAcquire] without blocking: completes with the term, or with `null` when this attempt won none. */
+    fun tryAcquireAsync(): CompletionStage<LockTerm?> = acquireOnVirtualThread { tryAcquire() }
+}
+
+/**
+ * Runs a blocking [acquire] on a new virtual thread; cancelling the result interrupts it, and a term it returns
+ * after the result was cancelled is released.
+ */
+internal fun <T : LockTerm?> acquireOnVirtualThread(acquire: () -> T): CompletableFuture<T> {
+    val result = CompletableFuture<T>()
+    val thread = Thread.ofVirtual().name("simba-lock-acquire").unstarted {
+        @Suppress("TooGenericExceptionCaught")
+        try {
+            val term = acquire()
+            if (!result.complete(term)) {
+                term?.releaseAsync()
+            }
+        } catch (error: Throwable) {
+            result.completeExceptionally(error)
+        }
+    }
+    result.whenComplete { _, _ ->
+        if (result.isCancelled) {
+            thread.interrupt()
+        }
+    }
+    thread.start()
+    return result
 }
 
 /** A held [DistributedLock]: a [Term] that releases its lease when closed. */
