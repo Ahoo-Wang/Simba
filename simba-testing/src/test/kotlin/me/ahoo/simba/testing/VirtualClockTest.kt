@@ -31,6 +31,19 @@ class VirtualClockTest {
     }
 
     @Test
+    fun `a virtual scheduler fires due tasks in time order and only moves forward`() {
+        val scheduler = VirtualScheduler()
+        val fired = ArrayList<Long>()
+        scheduler.schedule(2) { fired += scheduler.nanoTime() }
+        scheduler.schedule(1) { fired += scheduler.nanoTime() }
+        scheduler.pending.assert().isEqualTo(2)
+        scheduler.advance(Duration.ofNanos(3))
+        fired.assert().isEqualTo(listOf(1L, 2L))
+        scheduler.pending.assert().isEqualTo(0)
+        assertThrows<IllegalArgumentException> { scheduler.advance(Duration.ofNanos(-1)) }
+    }
+
+    @Test
     fun `a drifting ticker maps local deadlines back to base time`() {
         val clock = VirtualClock()
         listOf(0.99, 1.0, 1.01, 1.3).forEach { rate ->

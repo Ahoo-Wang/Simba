@@ -38,6 +38,9 @@ class ScheduleSpecTest {
     @Test
     fun `schedules validate their durations and compare by value`() {
         assertThrows<IllegalArgumentException> { Schedule.fixedDelay(Duration.ZERO) }
+        assertThrows<IllegalArgumentException> { Schedule.fixedDelay(Duration.ofSeconds(-1)) }
+        (Schedule.fixedDelay(Duration.ofSeconds(1)) == Schedule.fixedRate(Duration.ofSeconds(1))).assert().isFalse()
+        (Schedule.fixedDelay(Duration.ofSeconds(1)).equals("schedule")).assert().isFalse()
         assertThrows<IllegalArgumentException> { Schedule.fixedRate(Duration.ofSeconds(1), Duration.ofSeconds(-1)) }
         val schedule = Schedule.fixedRate(Duration.ofSeconds(1)).withInitialDelay(Duration.ofSeconds(2))
         schedule.assert().isEqualTo(Schedule.fixedRate(Duration.ofSeconds(1), Duration.ofSeconds(2)))

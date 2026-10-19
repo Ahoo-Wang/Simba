@@ -50,7 +50,7 @@ class VirtualSimba : AutoCloseable {
     val events = LinkedBlockingQueue<SimbaEvent>()
     private val clients = ArrayList<SimbaClient>()
 
-    fun client(): SimbaClient =
+    fun client(configure: SimbaClient.Builder.() -> Unit = {}): SimbaClient =
         SimbaClient.builder()
             .backend(recording)
             .config(config)
@@ -59,6 +59,7 @@ class VirtualSimba : AutoCloseable {
             .callbackExecutor(Runnable::run)
             .listener { events += it }
             .seed(clients.size.toLong())
+            .apply(configure)
             .build()
             .also {
                 clients += it
