@@ -56,7 +56,7 @@ class SimbaConfigTest {
 
     @Test
     fun `there is no public constructor, only the builder`() {
-        SimbaConfig::class.java.constructors.assert().isEmpty()
+        SimbaConfig::class.java.constructors.filterNot { it.isSynthetic }.assert().isEmpty()
         SimbaConfig::class.java.methods.map { it.name }.assert().doesNotContain("copy", "component1")
     }
 

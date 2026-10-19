@@ -98,6 +98,12 @@ class JavaInteropTest {
             term.ensureValid();
             term.ensureValid(Duration.ZERO);
             election.stop().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            // Catching InterruptedException compiles only because acquire declares it (@Throws).
+            try (LockTerm lock = simba.lock("java-lock").acquire(Duration.ofSeconds(1))) {
+                assertEquals(1L, lock.getToken());
+            } catch (InterruptedException interrupted) {
+                throw new AssertionError(interrupted);
+            }
             assertThrows(TermExpiredException.class, term::ensureValid);
         }
         assertEquals("a", new SessionId("a").getValue());

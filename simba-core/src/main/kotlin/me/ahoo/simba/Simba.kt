@@ -374,17 +374,6 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
         override fun toString(): String = "LockTerm($term)"
     }
 
-    /**
-     * Waits until one of [futures] completes. Only the client's close future can complete exceptionally; that ends
-     * the wait as a closed client ([IllegalStateException]), never as a leaked [ExecutionException].
-     */
-    private fun awaitAny(vararg futures: CompletableFuture<*>?) {
-        try {
-            CompletableFuture.anyOf(*futures.filterNotNull().toTypedArray()).get()
-        } catch (error: ExecutionException) {
-            throw IllegalStateException("Simba is closed.", error.cause ?: error)
-        }
-    }
 
     // endregion
 
@@ -514,5 +503,18 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
 
         @JvmStatic
         fun builder(): Builder = Builder()
+    }
+}
+
+/**
+ * Waits until one of [futures] completes. Only the client's close future can complete exceptionally; that ends the
+ * wait as a closed client ([IllegalStateException]), never as a leaked [ExecutionException].
+ */
+@Throws(InterruptedException::class)
+internal fun awaitAny(vararg futures: CompletableFuture<*>?) {
+    try {
+        CompletableFuture.anyOf(*futures.filterNotNull().toTypedArray()).get()
+    } catch (error: ExecutionException) {
+        throw IllegalStateException("Simba is closed.", error.cause ?: error)
     }
 }
