@@ -10,6 +10,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter.redis
 
 import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaBackend
@@ -17,11 +18,7 @@ import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled
 import me.ahoo.simba.spring.boot.starter.EnabledSuffix
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 
-/**
- * Conditional On Simba Redis Enabled.
- *
- * @author ahoo wang
- */
+/** Matches unless Simba or its Redis backend is disabled, or `simba.backend` selects another backend. */
 @ConditionalOnSimbaEnabled
 @ConditionalOnSimbaBackend("redis")
 @ConditionalOnProperty(

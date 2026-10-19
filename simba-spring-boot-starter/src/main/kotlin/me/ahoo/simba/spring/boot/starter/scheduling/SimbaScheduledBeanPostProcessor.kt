@@ -10,14 +10,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter.scheduling
 
 import io.github.oshai.kotlinlogging.KotlinLogging
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.schedule.ScheduleConfig
-import me.ahoo.simba.schedule.ScheduleContext
-import me.ahoo.simba.schedule.ScheduledWork
-import me.ahoo.simba.schedule.SimbaScheduler
+import me.ahoo.simba.Schedule
+import me.ahoo.simba.Simba
+import me.ahoo.simba.Term
 import org.springframework.aop.framework.AopInfrastructureBean
 import org.springframework.aop.framework.AopProxyUtils
 import org.springframework.aop.support.AopUtils
@@ -36,14 +35,14 @@ import org.springframework.util.StringValueResolver
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.time.Duration
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionStage
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Turns [SimbaScheduled] methods into [SimbaScheduler]s and runs them, together with `SimbaScheduler` beans, with
- * the application context: started after refresh, stopped on shutdown (before the backend executors close).
- * Schedulers registered later (lazy beans) start immediately while the context runs.
- *
- * @author ahoo wang
+ * Runs [SimbaScheduled] and [SimbaPartitioned] methods on the [Simba] bean with the application context: started
+ * after refresh, stopped on shutdown before the client closes ([me.ahoo.simba.spring.boot.starter.SimbaLifecycle]
+ * runs in a lower phase). Methods of beans created later (lazy beans) start at once while the context runs.
  */
 class SimbaScheduledBeanPostProcessor :
     BeanPostProcessor,
@@ -60,12 +59,12 @@ class SimbaScheduledBeanPostProcessor :
     private val nonAnnotatedClasses: MutableSet<Class<*>> = ConcurrentHashMap.newKeySet()
 
     private val lock = Any()
-    private val pendingMethods = mutableListOf<ScheduledMethod>()
-    private val annotatedMutexes = mutableSetOf<String>()
-    private val schedulers = mutableListOf<SimbaScheduler>()
+    private val pending = mutableListOf<ScheduledMethod>()
+    private val names = mutableSetOf<String>()
+    private val running = mutableListOf<RunningMethod>()
 
     @Volatile
-    private var running = false
+    private var started = false
 
     override fun setBeanFactory(beanFactory: BeanFactory) {
         this.beanFactory = beanFactory
@@ -79,70 +78,98 @@ class SimbaScheduledBeanPostProcessor :
         if (bean is AopInfrastructureBean) {
             return bean
         }
-        if (bean is SimbaScheduler) {
-            manage(bean)
-            return bean
-        }
         val targetClass = AopProxyUtils.ultimateTargetClass(bean)
-        if (targetClass in nonAnnotatedClasses ||
-            !AnnotationUtils.isCandidateClass(targetClass, SimbaScheduled::class.java)
-        ) {
+        if (targetClass in nonAnnotatedClasses) {
             return bean
         }
-        val annotated = MethodIntrospector.selectMethods(
-            targetClass,
-            MethodIntrospector.MetadataLookup { method ->
-                AnnotatedElementUtils.findMergedAnnotation(method, SimbaScheduled::class.java)
-            }
-        )
-        if (annotated.isEmpty()) {
+        val scheduled = annotated(targetClass, SimbaScheduled::class.java)
+        val partitioned = annotated(targetClass, SimbaPartitioned::class.java)
+        if (scheduled.isEmpty() && partitioned.isEmpty()) {
             nonAnnotatedClasses.add(targetClass)
             return bean
         }
-        annotated.forEach { (method, annotation) ->
-            register(scheduledMethod(bean, beanName, method, annotation))
-        }
+        scheduled.forEach { (method, annotation) -> register(scheduledMethod(bean, beanName, method, annotation)) }
+        partitioned.forEach { (method, annotation) -> register(partitionedMethod(bean, beanName, method, annotation)) }
         return bean
     }
 
-    private fun scheduledMethod(
+    private fun <A : Annotation> annotated(targetClass: Class<*>, type: Class<A>): Map<Method, A> {
+        if (!AnnotationUtils.isCandidateClass(targetClass, type)) {
+            return emptyMap()
+        }
+        return MethodIntrospector.selectMethods(
+            targetClass,
+            MethodIntrospector.MetadataLookup { method -> AnnotatedElementUtils.findMergedAnnotation(method, type) }
+        )
+    }
+
+    private fun scheduledMethod(bean: Any, beanName: String, method: Method, annotation: SimbaScheduled): ScheduledMethod {
+        val where = "@SimbaScheduled method [$beanName.${method.name}]"
+        val takesTerm = when {
+            method.parameterCount == 0 -> false
+            method.parameterCount == 1 && method.parameterTypes[0].isAssignableFrom(Term::class.java) -> true
+            else -> throw IllegalStateException("$where must take no parameter or a single Term.")
+        }
+        val name = resolve(annotation.name)
+        check(name.isNotBlank()) { "$where must set a name." }
+        val schedule = schedule(where, annotation.fixedDelay, annotation.fixedRate, annotation.initialDelay)
+        val invoke = invoker(bean, method)
+        return ScheduledMethod(where, "election [$name]") { simba ->
+            val task = simba.election(name).schedule(schedule) { term ->
+                if (takesTerm) invoke(arrayOf(term)) else invoke(emptyArray())
+            }
+            task::stop
+        }
+    }
+
+    private fun partitionedMethod(
         bean: Any,
         beanName: String,
         method: Method,
-        annotation: SimbaScheduled
+        annotation: SimbaPartitioned,
     ): ScheduledMethod {
-        val where = "@SimbaScheduled method [$beanName.${method.name}]"
-        val takesContext = when {
-            method.parameterCount == 0 -> false
-            method.parameterCount == 1 && method.parameterTypes[0].isAssignableFrom(ScheduleContext::class.java) ->
-                true
+        val where = "@SimbaPartitioned method [$beanName.${method.name}]"
+        val types = method.parameterTypes
+        check(
+            types.size == 2 && types[0].isAssignableFrom(Term::class.java) &&
+                (types[1] == Int::class.javaPrimitiveType || types[1] == Int::class.javaObjectType)
+        ) { "$where must take (Term, Int)." }
+        val group = resolve(annotation.group)
+        check(group.isNotBlank()) { "$where must set a group." }
+        check(annotation.partitions > 0) { "$where partitions must be positive." }
+        val schedule = schedule(where, annotation.fixedDelay, annotation.fixedRate, annotation.initialDelay)
+        val invoke = invoker(bean, method)
+        return ScheduledMethod(where, "group [$group]") { simba ->
+            val task = simba.group(group, annotation.partitions).schedule(schedule) { term, partition ->
+                invoke(arrayOf(term, partition))
+            }
+            task::stop
+        }
+    }
 
-            else -> throw IllegalStateException("$where must take no parameter or a single ScheduleContext.")
-        }
-        val mutex = resolve(annotation.mutex)
-        check(mutex.isNotBlank()) { "$where must set a mutex." }
-        val fixedDelay = resolve(annotation.fixedDelay)
-        val fixedRate = resolve(annotation.fixedRate)
-        check(fixedDelay.isEmpty() != fixedRate.isEmpty()) {
-            "$where must set exactly one of fixedDelay and fixedRate."
-        }
-        val initialDelay = duration(where, "initialDelay", annotation.initialDelay)
-        check(!initialDelay.isNegative) { "$where initialDelay must not be negative." }
-        val config = if (fixedDelay.isNotEmpty()) {
-            ScheduleConfig.delay(initialDelay, period(where, "fixedDelay", fixedDelay))
+    private fun schedule(where: String, fixedDelay: String, fixedRate: String, initialDelay: String): Schedule {
+        val delay = resolve(fixedDelay)
+        val rate = resolve(fixedRate)
+        check(delay.isEmpty() != rate.isEmpty()) { "$where must set exactly one of fixedDelay and fixedRate." }
+        val initial = duration(where, "initialDelay", initialDelay)
+        check(!initial.isNegative) { "$where initialDelay must not be negative." }
+        return if (delay.isNotEmpty()) {
+            Schedule.fixedDelay(period(where, "fixedDelay", delay), initial)
         } else {
-            ScheduleConfig.rate(initialDelay, period(where, "fixedRate", fixedRate))
+            Schedule.fixedRate(period(where, "fixedRate", rate), initial)
         }
+    }
+
+    private fun invoker(bean: Any, method: Method): (Array<Any>) -> Unit {
         val invocable = AopUtils.selectInvocableMethod(method, bean.javaClass)
         ReflectionUtils.makeAccessible(invocable)
-        val work = ScheduledWork { context ->
+        return { args ->
             try {
-                if (takesContext) invocable.invoke(bean, context) else invocable.invoke(bean)
+                invocable.invoke(bean, *args)
             } catch (e: InvocationTargetException) {
                 throw e.targetException
             }
         }
-        return ScheduledMethod(where, mutex, config, resolve(annotation.worker).ifBlank { mutex }, work)
     }
 
     private fun resolve(value: String): String = valueResolver?.resolveStringValue(value) ?: value
@@ -164,90 +191,71 @@ class SimbaScheduledBeanPostProcessor :
 
     private fun register(method: ScheduledMethod) {
         synchronized(lock) {
-            check(annotatedMutexes.add(method.mutex)) {
-                "${method.where}: mutex [${method.mutex}] is already used by another @SimbaScheduled method."
-            }
-            if (running) {
-                start(materialize(method, contendServiceFactory()))
+            check(names.add(method.key)) { "${method.where}: ${method.key} is already used by another method." }
+            if (started) {
+                running += method.start(simba())
             } else {
-                pendingMethods.add(method)
+                pending += method
             }
         }
     }
 
-    private fun manage(scheduler: SimbaScheduler) {
-        synchronized(lock) {
-            schedulers.add(scheduler)
-            if (running) {
-                start(scheduler)
-            }
+    private fun simba(): Simba =
+        checkNotNull(beanFactory.getBeanProvider(Simba::class.java).ifAvailable) {
+            "@SimbaScheduled and @SimbaPartitioned need a Simba bean: add a Simba backend (jdbc, redis or zookeeper)."
         }
-    }
-
-    private fun materialize(method: ScheduledMethod, factory: MutexContendServiceFactory): SimbaScheduler {
-        return SimbaScheduler(method.mutex, factory, method.config, method.worker, method.work).also {
-            schedulers.add(it)
-        }
-    }
-
-    private fun contendServiceFactory(): MutexContendServiceFactory {
-        return checkNotNull(beanFactory.getBeanProvider(MutexContendServiceFactory::class.java).ifAvailable) {
-            "@SimbaScheduled needs a MutexContendServiceFactory: add a Simba backend (jdbc, redis or zookeeper)."
-        }
-    }
-
-    private fun start(scheduler: SimbaScheduler) {
-        if (!scheduler.running) {
-            scheduler.start()
-        }
-    }
 
     override fun start() {
         synchronized(lock) {
-            if (running) {
+            if (started) {
                 return
             }
-            if (pendingMethods.isNotEmpty()) {
-                val factory = contendServiceFactory()
-                pendingMethods.forEach { materialize(it, factory) }
-                pendingMethods.clear()
+            if (pending.isNotEmpty()) {
+                val simba = simba()
+                pending.forEach { running += it.start(simba) }
+                pending.clear()
             }
-            schedulers.forEach(::start)
-            running = true
+            started = true
         }
     }
 
-    @Suppress("TooGenericExceptionCaught")
+    /** Stops every method's election or group and waits until its work exited and its leases were released. */
     override fun stop() {
-        synchronized(lock) {
-            running = false
-            schedulers.forEach { scheduler ->
-                try {
-                    if (scheduler.running) {
-                        scheduler.stop()
-                    }
-                } catch (e: RuntimeException) {
-                    log.warn(e) { "stop - mutex:[${scheduler.mutex}] - failed:[${e.message}]." }
-                }
+        val stops = synchronized(lock) {
+            started = false
+            running.map { it.stop() }.also { running.clear() }
+        }
+        stops.forEach { (where, stop) ->
+            try {
+                stop.toCompletableFuture().join()
+            } catch (e: RuntimeException) {
+                log.warn(e) { "stop - $where - failed:[${e.message}]." }
             }
         }
     }
 
-    override fun isRunning(): Boolean = running
+    override fun isRunning(): Boolean = started
 
-    /**
-     * Stops schedulers left running when the context fails before the lifecycle stop phase; a stopped scheduler
-     * holds no threads.
-     */
+    /** Stops methods left running when the context fails before the lifecycle stop phase. */
     override fun destroy() {
         stop()
     }
 
+    /** One annotated method; [key] (the election or group) is unique per application. */
     private class ScheduledMethod(
         val where: String,
-        val mutex: String,
-        val config: ScheduleConfig,
-        val worker: String,
-        val work: ScheduledWork
-    )
+        val key: String,
+        private val run: (Simba) -> () -> CompletionStage<Void>,
+    ) {
+        fun start(simba: Simba): RunningMethod = RunningMethod(where, run(simba))
+    }
+
+    private class RunningMethod(val where: String, private val stopTask: () -> CompletionStage<Void>) {
+        fun stop(): Pair<String, CompletionStage<Void>> =
+            try {
+                where to stopTask()
+            } catch (e: IllegalStateException) {
+                where to CompletableFuture.failedFuture(e)
+            }
+    }
 }

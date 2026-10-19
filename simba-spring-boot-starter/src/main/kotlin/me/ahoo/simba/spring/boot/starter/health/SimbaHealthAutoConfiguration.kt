@@ -10,10 +10,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter.health
 
+import me.ahoo.simba.Simba
 import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled
+import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
 import org.springframework.boot.autoconfigure.AutoConfiguration
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.health.autoconfigure.contributor.ConditionalOnEnabledHealthIndicator
@@ -23,17 +27,14 @@ import org.springframework.context.annotation.Bean
 /**
  * Registers the `simba` health indicator when Spring Boot health support is present
  * (`management.health.simba.enabled`, default `true`). It is not added to the liveness or readiness groups.
- *
- * @author ahoo wang
  */
-@AutoConfiguration
+@AutoConfiguration(after = [SimbaAutoConfiguration::class])
 @ConditionalOnSimbaEnabled
 @ConditionalOnClass(HealthIndicator::class)
+@ConditionalOnBean(Simba::class)
 @ConditionalOnEnabledHealthIndicator("simba")
 class SimbaHealthAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
-    fun simbaHealthIndicator(): SimbaHealthIndicator {
-        return SimbaHealthIndicator()
-    }
+    fun simbaHealthIndicator(simba: Simba): SimbaHealthIndicator = SimbaHealthIndicator(simba)
 }

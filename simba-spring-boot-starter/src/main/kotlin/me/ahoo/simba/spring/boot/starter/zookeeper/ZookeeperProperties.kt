@@ -10,20 +10,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter.zookeeper
 
-import me.ahoo.simba.Simba
+import me.ahoo.simba.spring.boot.starter.SimbaProperties
+import me.ahoo.simba.zookeeper.ZookeeperLeaseBackend
 import org.springframework.boot.context.properties.ConfigurationProperties
+import java.time.Duration
 
 /**
- * Zookeeper Properties.
+ * `simba.zookeeper.*`: the ensemble that [ZookeeperLeaseBackend] opens one ZooKeeper session per Simba session on.
  *
- * @author ahoo wang
+ * @param root parent path of the lease and group nodes.
  */
 @ConfigurationProperties(prefix = ZookeeperProperties.PREFIX)
-data class ZookeeperProperties(val enabled: Boolean = true) {
-
+data class ZookeeperProperties(
+    val enabled: Boolean = true,
+    val connectString: String = "localhost:2181",
+    val root: String = ZookeeperLeaseBackend.DEFAULT_ROOT,
+    val connectionTimeout: Duration = Duration.ofSeconds(DEFAULT_CONNECTION_TIMEOUT_SECONDS),
+) {
     companion object {
-        const val PREFIX = Simba.SIMBA_PREFIX + "zookeeper"
+        const val PREFIX = SimbaProperties.PREFIX + ".zookeeper"
+        private const val DEFAULT_CONNECTION_TIMEOUT_SECONDS = 15L
     }
 }

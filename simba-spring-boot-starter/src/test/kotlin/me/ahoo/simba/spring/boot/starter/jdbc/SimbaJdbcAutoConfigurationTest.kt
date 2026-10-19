@@ -10,127 +10,75 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter.jdbc
 
+import io.mockk.every
 import io.mockk.mockk
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.jdbc.MutexOwnerRepository
-import me.ahoo.simba.partition.MemberRegistry
-import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
-import org.assertj.core.api.AssertionsForInterfaceTypes.assertThat
+import me.ahoo.simba.jdbc.Dialect
+import me.ahoo.simba.jdbc.JdbcLeaseBackend
+import me.ahoo.simba.spi.LeaseBackend
+import me.ahoo.test.asserts.assert
+import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.springframework.boot.autoconfigure.AutoConfigurations
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
-import java.time.Duration
+import java.sql.Connection
 import javax.sql.DataSource
 
-/**
- * SimbaJdbcAutoConfigurationTest .
- *
- * @author ahoo wang
- */
-internal class SimbaJdbcAutoConfigurationTest {
+class SimbaJdbcAutoConfigurationTest {
     private val contextRunner = ApplicationContextRunner()
+        .withConfiguration(AutoConfigurations.of(SimbaJdbcAutoConfiguration::class.java))
         .withPropertyValues("simba.backend=jdbc")
 
+    private fun dataSource(product: String): DataSource {
+        val connection = mockk<Connection>(relaxed = true)
+        every { connection.metaData.databaseProductName } returns product
+        return mockk { every { this@mockk.connection } returns connection }
+    }
+
     @Test
-    fun contextLoads() {
+    fun `the dialect property selects the dialect`() {
         contextRunner
             .withBean(DataSource::class.java, { mockk() })
-            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
+            .withPropertyValues("simba.jdbc.dialect=postgresql")
             .run {
-                assertThat(it)
-                    .hasSingleBean(SimbaJdbcAutoConfiguration::class.java)
-                    .hasSingleBean(JdbcProperties::class.java)
-                    .hasSingleBean(MutexOwnerRepository::class.java)
-                    .hasSingleBean(MutexContendServiceFactory::class.java)
-                    .hasSingleBean(MemberRegistry::class.java)
+                it.getBean(JdbcLeaseBackend::class.java).dialect.assert().isEqualTo(Dialect.POSTGRESQL)
             }
     }
 
     @Test
-    fun contextLoadsWithCustomProperties() {
+    fun `the dialect is detected from the data source`() {
+        contextRunner.withBean(DataSource::class.java, { dataSource("MySQL") }).run {
+            it.getBean(JdbcLeaseBackend::class.java).dialect.assert().isEqualTo(Dialect.MYSQL)
+        }
+        contextRunner.withBean(DataSource::class.java, { dataSource("PostgreSQL") }).run {
+            it.getBean(JdbcLeaseBackend::class.java).dialect.assert().isEqualTo(Dialect.POSTGRESQL)
+        }
+    }
+
+    @Test
+    fun `an unknown database fails startup`() {
+        contextRunner.withBean(DataSource::class.java, { dataSource("Oracle") }).run {
+            assertThat(it).hasFailed()
+            assertThat(it.startupFailure).rootCause().hasMessageContaining("simba.jdbc.dialect")
+        }
+    }
+
+    @Test
+    fun `no data source, or an application lease backend, means no jdbc backend`() {
+        contextRunner.run { assertThat(it).doesNotHaveBean(LeaseBackend::class.java) }
+        val own = mockk<LeaseBackend>(relaxed = true)
+        contextRunner.withBean(DataSource::class.java, { mockk() }).withBean(LeaseBackend::class.java, { own }).run {
+            assertThat(it).doesNotHaveBean(JdbcLeaseBackend::class.java)
+        }
+    }
+
+    @Test
+    fun `disabled jdbc backend stays off`() {
         contextRunner
             .withBean(DataSource::class.java, { mockk() })
-            .withPropertyValues("simba.jdbc.initial-delay=10S", "simba.jdbc.ttl=20S", "simba.jdbc.transition=30S")
-            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
-            .run {
-                assertThat(it)
-                    .hasSingleBean(JdbcProperties::class.java)
-                    .hasSingleBean(SimbaJdbcAutoConfiguration::class.java)
-                    .hasSingleBean(MutexOwnerRepository::class.java)
-                    .hasSingleBean(MutexContendServiceFactory::class.java)
-                    .getBean(JdbcProperties::class.java)
-                    .extracting { properties ->
-                        val jdbcProperties = requireNotNull(properties)
-                        assertThat(jdbcProperties.initialDelay).isEqualTo(Duration.ofSeconds(10))
-                        assertThat(jdbcProperties.ttl).isEqualTo(Duration.ofSeconds(20))
-                        assertThat(jdbcProperties.transition).isEqualTo(Duration.ofSeconds(30))
-                    }
-            }
-    }
-
-    @Test
-    fun contextFailsFastWithInvalidTtl() {
-        contextRunner
-            .withBean(DataSource::class.java, { mockk() })
-            .withPropertyValues("simba.jdbc.ttl=0ms")
-            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
-            .run {
-                assertThat(it).hasFailed()
-            }
-    }
-
-    @Test
-    fun contextLoadsWithDisable() {
-        contextRunner
-            .withBean(DataSource::class.java, { mockk() })
-            .withPropertyValues("simba.jdbc.enabled=false", "simba.backend=redis")
-            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
-            .run {
-                assertThat(it)
-                    .doesNotHaveBean(JdbcProperties::class.java)
-                    .doesNotHaveBean(SimbaJdbcAutoConfiguration::class.java)
-                    .doesNotHaveBean(MutexOwnerRepository::class.java)
-                    .doesNotHaveBean(MutexContendServiceFactory::class.java)
-            }
-    }
-
-    @Test
-    fun contextBacksOffWithoutDataSource() {
-        contextRunner
-            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
-            .run {
-                assertThat(it)
-                    .hasNotFailed()
-                    .doesNotHaveBean(MutexOwnerRepository::class.java)
-                    .doesNotHaveBean(MutexContendServiceFactory::class.java)
-            }
-    }
-
-    @Test
-    fun contextLoadsWithCustomRepositoryWithoutDataSource() {
-        contextRunner
-            .withBean(MutexOwnerRepository::class.java, { mockk() })
-            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
-            .run {
-                assertThat(it)
-                    .hasNotFailed()
-                    .hasSingleBean(MutexOwnerRepository::class.java)
-                    .hasSingleBean(MutexContendServiceFactory::class.java)
-            }
-    }
-
-    @Test
-    fun contextBacksOffWithMultipleDataSources() {
-        contextRunner
-            .withBean("firstDataSource", DataSource::class.java, { mockk() })
-            .withBean("secondDataSource", DataSource::class.java, { mockk() })
-            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaJdbcAutoConfiguration::class.java)
-            .run {
-                assertThat(it)
-                    .hasNotFailed()
-                    .doesNotHaveBean(MutexOwnerRepository::class.java)
-                    .doesNotHaveBean(MutexContendServiceFactory::class.java)
-            }
+            .withPropertyValues("simba.jdbc.enabled=false", "simba.jdbc.dialect=mysql")
+            .run { assertThat(it).doesNotHaveBean(LeaseBackend::class.java) }
     }
 }

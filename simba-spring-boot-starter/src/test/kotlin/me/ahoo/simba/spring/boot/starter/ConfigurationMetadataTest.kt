@@ -10,12 +10,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter
 
-import org.hamcrest.MatcherAssert.assertThat
-import org.hamcrest.Matchers.containsInAnyOrder
-import org.hamcrest.Matchers.containsString
-import org.hamcrest.Matchers.not
+import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.Test
 
 class ConfigurationMetadataTest {
@@ -25,39 +23,50 @@ class ConfigurationMetadataTest {
             javaClass.classLoader.getResourceAsStream("META-INF/spring-configuration-metadata.json")
         ).bufferedReader().use { it.readText() }
         val properties = metadata.substringAfter("\"properties\": [").substringBefore("\"hints\"")
-        val propertyItems = PROPERTY.findAll(properties).associate { it.groupValues[1] to it.value }
+        val items = PROPERTY.findAll(properties).associate { it.groupValues[1] to it.value }
+            .filterKeys { it.startsWith("simba.") }
 
-        assertThat(
-            propertyItems.keys,
-            containsInAnyOrder(*EXPECTED_PROPERTIES.map { it.first }.toTypedArray())
-        )
-        EXPECTED_PROPERTIES.forEach { (name, type, defaultValue) ->
-            val item = propertyItems.getValue(name)
-            assertThat(item, containsString("\"type\": \"$type\""))
+        items.keys.assert().containsExactlyInAnyOrderElementsOf(EXPECTED.map { it.first })
+        EXPECTED.forEach { (name, type, defaultValue) ->
+            val item = items.getValue(name)
+            item.assert().contains("\"type\": \"$type\"")
             if (defaultValue == null) {
-                assertThat(item, not(containsString("\"defaultValue\"")))
+                item.assert().doesNotContain("\"defaultValue\"")
             } else {
-                assertThat(item, containsString("\"defaultValue\": $defaultValue"))
+                item.assert().contains("\"defaultValue\": $defaultValue")
             }
         }
     }
 
     companion object {
         private val PROPERTY = Regex("""\{[^{}]*"name"\s*:\s*"([^"]+)"[^{}]*}""")
-        private val EXPECTED_PROPERTIES: List<Triple<String, String, String?>> = listOf(
-            Triple("simba.enabled", "java.lang.Boolean", "true"),
-            Triple<String, String, String?>("simba.backend", "java.lang.String", null),
-            Triple("simba.jdbc.enabled", "java.lang.Boolean", "true"),
-            Triple("simba.jdbc.initial-delay", "java.time.Duration", "\"0s\""),
-            Triple("simba.jdbc.ttl", "java.time.Duration", "\"10s\""),
-            Triple("simba.jdbc.transition", "java.time.Duration", "\"6s\""),
-            Triple("simba.jdbc.fencing", "java.lang.Boolean", "true"),
-            Triple("simba.redis.enabled", "java.lang.Boolean", "true"),
-            Triple("simba.redis.ttl", "java.time.Duration", "\"10s\""),
-            Triple("simba.redis.transition", "java.time.Duration", "\"6s\""),
-            Triple("simba.zookeeper.enabled", "java.lang.Boolean", "true"),
-            Triple("simba.scheduling.enabled", "java.lang.Boolean", "true"),
-            Triple("simba.metrics.enabled", "java.lang.Boolean", "true")
+        private const val BOOLEAN = "java.lang.Boolean"
+        private const val DURATION = "java.time.Duration"
+        private val EXPECTED: List<Triple<String, String, String?>> = listOf(
+            Triple("simba.enabled", BOOLEAN, "true"),
+            Triple("simba.backend", "java.lang.String", null),
+            Triple("simba.session.lease-duration", DURATION, "\"15s\""),
+            Triple("simba.session.renew-interval", DURATION, null),
+            Triple("simba.session.drift", "java.lang.Double", "0.01"),
+            Triple("simba.session.margin", DURATION, "\"50ms\""),
+            Triple("simba.jdbc.enabled", BOOLEAN, "true"),
+            Triple(
+                "simba.jdbc.dialect",
+                "me.ahoo.simba.spring.boot.starter.jdbc.JdbcProperties\$JdbcDialect",
+                null
+            ),
+            Triple("simba.jdbc.query-timeout", DURATION, null),
+            Triple("simba.redis.enabled", BOOLEAN, "true"),
+            Triple("simba.redis.wait-replicas", "java.lang.Integer", "0"),
+            Triple("simba.redis.wait-timeout", DURATION, "\"1s\""),
+            Triple("simba.redis.route-by-slot", BOOLEAN, null),
+            Triple("simba.zookeeper.enabled", BOOLEAN, "true"),
+            Triple("simba.zookeeper.connect-string", "java.lang.String", "\"localhost:2181\""),
+            // The processor escapes the slash.
+            Triple("simba.zookeeper.root", "java.lang.String", "\"\\/simba\""),
+            Triple("simba.zookeeper.connection-timeout", DURATION, "\"15s\""),
+            Triple("simba.scheduling.enabled", BOOLEAN, "true"),
+            Triple("simba.metrics.enabled", BOOLEAN, "true"),
         )
     }
 }
