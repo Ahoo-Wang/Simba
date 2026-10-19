@@ -162,6 +162,28 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 - 写入经法定人数提交，因此 leader 切换不会丢失 token；只有集群数据丢失或从更早的快照恢复时，token 才可能回退。
   会话超时按服务器的流逝时间计算，因此集群主机的墙钟跳变不会缩短它们。
 - `simba.zookeeper.connection-timeout` 限制打开会话所需的最长时间。
+- 组名遵循 `LeaseName` 的规则（1–128 个 `[A-Za-z0-9._:-]` 字符，且不能是 `.` 或 `..`），与所有后端一致。`members` 先对组路径执行
+  sync，因此刚刚返回的 join 一定出现在视图中。
+
+### 安全 {#security}
+
+默认情况下节点使用 `OPEN_ACL_UNSAFE`：能连到该集群的任何客户端都可以删除或抢先创建租约节点，也可以伪造组成员。在共享的集群上，请启用认证并收紧 ACL：
+
+```kotlin
+val backend = ZookeeperLeaseBackend(
+    "zk1:2181,zk2:2181,zk3:2181",
+    authInfo = listOf(AuthInfo("digest", "simba:secret".toByteArray())),
+    aclProvider = myAclProvider, // 例如对所有路径返回 ZooDefs.Ids.CREATOR_ALL_ACL
+    clientConfig = ZKClientConfig(), // TLS 或 SASL 设置，可选
+)
+```
+
+- 每个客户端（每个会话的客户端，以及 `members` 读取所用的客户端）都会添加 `authInfo`，并用 `clientConfig` 构建。
+- 后端创建的每个节点（包括它创建的父节点）都使用 `aclProvider` 给出的 ACL。已经存在的父节点保留原有 ACL；`{root}/leases` 和
+  `{root}/groups/{group}` 的 ACL 决定谁能创建或删除租约和成员：请用后端的身份创建它们，或自行设置其 ACL。
+- Spring Boot：`simba.zookeeper.auth.scheme` / `simba.zookeeper.auth.credentials` 和 `simba.zookeeper.acl`
+  （`auto` 在配置了凭据后使节点仅创建者可用）；`ACLProvider` bean 会替换 ACL，`ZKClientConfig` bean 用于配置所有客户端
+  （见[配置](./configuration.md)）。
 
 ## 在 Spring Boot 中选择后端 {#selecting-a-backend-in-spring-boot}
 

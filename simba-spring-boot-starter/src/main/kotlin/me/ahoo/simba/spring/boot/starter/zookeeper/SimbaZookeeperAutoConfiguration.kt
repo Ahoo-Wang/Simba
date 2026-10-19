@@ -15,13 +15,19 @@ package me.ahoo.simba.spring.boot.starter.zookeeper
 
 import me.ahoo.simba.spi.LeaseBackend
 import me.ahoo.simba.zookeeper.ZookeeperLeaseBackend
+import org.apache.curator.framework.api.ACLProvider
+import org.apache.zookeeper.client.ZKClientConfig
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 
-/** A [ZookeeperLeaseBackend] on `simba.zookeeper.connect-string`. */
+/**
+ * A [ZookeeperLeaseBackend] on `simba.zookeeper.connect-string`, authenticated with `simba.zookeeper.auth.*`. An
+ * `ACLProvider` bean replaces `simba.zookeeper.acl`; a `ZKClientConfig` bean configures every client (TLS, SASL).
+ */
 @AutoConfiguration
 @ConditionalOnSimbaZookeeperEnabled
 @ConditionalOnClass(ZookeeperLeaseBackend::class)
@@ -29,6 +35,16 @@ import org.springframework.context.annotation.Bean
 class SimbaZookeeperAutoConfiguration {
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean(LeaseBackend::class)
-    fun zookeeperLeaseBackend(properties: ZookeeperProperties): ZookeeperLeaseBackend =
-        ZookeeperLeaseBackend(properties.connectString, properties.root, properties.connectionTimeout)
+    fun zookeeperLeaseBackend(
+        properties: ZookeeperProperties,
+        aclProvider: ObjectProvider<ACLProvider>,
+        clientConfig: ObjectProvider<ZKClientConfig>,
+    ): ZookeeperLeaseBackend = ZookeeperLeaseBackend(
+        connectString = properties.connectString,
+        root = properties.root,
+        connectionTimeout = properties.connectionTimeout,
+        authInfo = properties.authInfo(),
+        aclProvider = aclProvider.getIfAvailable(properties::aclProvider),
+        clientConfig = clientConfig.ifAvailable,
+    )
 }

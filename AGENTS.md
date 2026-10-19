@@ -189,13 +189,15 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   A name is a keep-alive candidate from before its create is sent (under the session's send lock, so a keep-alive read
   sent earlier cannot drop it); keep-alive reports candidates the session owns and forgets the others. Releases of a
   session are serialized (the czxid check and the delete are not atomic). Lease paths of a batch are validated before
-  any request; `members` on a missing group leaves an exists watch. A closed backend opens no session.
+  any request; `members` syncs the group path, then leaves a children watch (an exists watch on a missing group). A
+  closed backend opens no session. Group names follow the `LeaseName` rules. Every client adds `authInfo` and uses
+  `clientConfig`; every node the backend creates gets `aclProvider`'s ACL (default open; existing parents keep theirs).
 
 ### Starter
 - Properties: `simba.enabled`, `simba.backend`, `simba.session.{lease-duration,renew-interval,drift,margin}`,
   `simba.jdbc.{enabled,dialect,query-timeout}`, `simba.redis.{enabled,wait-replicas,wait-timeout,route-by-slot}`,
-  `simba.zookeeper.{enabled,connect-string,root,connection-timeout}`, `simba.scheduling.enabled`,
-  `simba.metrics.enabled`.
+  `simba.zookeeper.{enabled,connect-string,root,connection-timeout,auth.scheme,auth.credentials,acl}`,
+  `simba.scheduling.enabled`, `simba.metrics.enabled`.
 - Each backend auto-configuration activates on `simba.enabled`, `simba.<backend>.enabled` (both default `true`) and
   `simba.backend` (unset, or naming it), and defines the `LeaseBackend` bean unless the application has one.
   `SimbaAutoConfiguration` fails startup when several backends are active without `simba.backend`, and builds the one

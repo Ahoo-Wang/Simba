@@ -65,6 +65,13 @@ class ConfigurationMetadataTest {
             // The processor escapes the slash.
             Triple("simba.zookeeper.root", "java.lang.String", "\"\\/simba\""),
             Triple("simba.zookeeper.connection-timeout", DURATION, "\"15s\""),
+            Triple("simba.zookeeper.auth.scheme", "java.lang.String", "\"digest\""),
+            Triple("simba.zookeeper.auth.credentials", "java.lang.String", null),
+            Triple(
+                "simba.zookeeper.acl",
+                "me.ahoo.simba.spring.boot.starter.zookeeper.ZookeeperProperties\$Acl",
+                "\"auto\""
+            ),
             Triple("simba.scheduling.enabled", BOOLEAN, "true"),
             Triple("simba.metrics.enabled", BOOLEAN, "true"),
         )

@@ -30,6 +30,9 @@ indicator.
 | `simba.zookeeper.connect-string` | `localhost:2181` | Ensemble the backend opens its sessions on |
 | `simba.zookeeper.root` | `/simba` | Parent path of the lease and group nodes |
 | `simba.zookeeper.connection-timeout` | `15s` | How long opening a session may take |
+| `simba.zookeeper.auth.scheme` | `digest` | Authentication scheme every Zookeeper client adds |
+| `simba.zookeeper.auth.credentials` | — | Auth data of the scheme (UTF-8), e.g. `user:password` for `digest`; unset: no authentication |
+| `simba.zookeeper.acl` | `auto` | ACL of the nodes the backend creates: `open` (`OPEN_ACL_UNSAFE`), `creator` (`CREATOR_ALL_ACL`, needs credentials) or `auto` (`creator` with credentials, else `open`); an `ACLProvider` bean takes precedence |
 | `simba.scheduling.enabled` | `true` | Runs `@SimbaScheduled` and `@SimbaPartitioned` methods |
 | `simba.metrics.enabled` | `true` | Records Micrometer metrics when a `MeterRegistry` bean exists |
 | `management.health.simba.enabled` | `true` | The `simba` health indicator |
@@ -53,7 +56,7 @@ management:
 
 | Bean | Condition |
 |---|---|
-| `LeaseBackend` (`JdbcLeaseBackend`, `RedisLeaseBackend` or `ZookeeperLeaseBackend`) | The backend is active and the application defines no `LeaseBackend`; JDBC needs a single `DataSource`, Redis a single `RedisConnectionFactory` |
+| `LeaseBackend` (`JdbcLeaseBackend`, `RedisLeaseBackend` or `ZookeeperLeaseBackend`) | The backend is active and the application defines no `LeaseBackend`; JDBC needs a single `DataSource`, Redis a single `RedisConnectionFactory`; Zookeeper uses an `ACLProvider` and a `ZKClientConfig` bean when present |
 | `Simba` | A `LeaseBackend` bean exists; built with `simba.session.*` and every `SimbaEventListener` bean |
 | `SimbaLifecycle` | Closes the client on shutdown |
 | `SimbaScheduledBeanPostProcessor` | `simba.scheduling.enabled` |
