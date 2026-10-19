@@ -24,7 +24,7 @@ This file records what is not obvious from the code. Describe the code as it is;
 
 | Module check | Needs |
 |---|---|
-| `simba-core`, `simba-zookeeper`, `simba-spring-boot-starter` | Nothing (Zookeeper tests use embedded Curator `TestingServer`) |
+| `simba-core`, `simba-testing`, `simba-zookeeper`, `simba-spring-boot-starter` | Nothing (Zookeeper tests use embedded Curator `TestingServer`) |
 | `simba-spring-redis` | Docker: Testcontainers `redis:7.4-alpine` (`RedisFixture`) |
 | `simba-jdbc` | Docker: Testcontainers `mysql:8.4` (`MySqlFixture`, schema from `simba-jdbc/src/init-script/init-simba-mysql.sql`) |
 
@@ -141,6 +141,20 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
   `simba_mutex(mutex, acquired_at, ttl_at, transition_at, owner_id varchar(128), version, fencing_token)`.
   Existing tables get `fencing_token` from `upgrade-simba-mysql-fencing-token.sql`.
 
+### Simba 5 engine (ADR 0010, phase 1; lives beside 4.x until phase 5)
+
+- Packages `me.ahoo.simba.spi` (`LeaseBackend`), `me.ahoo.simba.event`, `me.ahoo.simba.engine`; public API `SimbaClient`,
+  `Election`, `Term` in `me.ahoo.simba`. `simba-testing`: `InMemoryLeaseBackend`, `VirtualClock`, `Simulation`.
+- `engine.step(state, event, now)` is pure: no threads, clock or I/O. `EngineShell` runs it on one loop thread;
+  `Simulation` runs it in virtual time. Engine types are `@InternalSimbaApi` (opt-in), not public API.
+- A term is adopted only from the reply to the election's current attempt, before the session's local deadline
+  (`sentAt + remaining × (1 − drift) − margin`), and only with a token above every token the session released.
+  A term is revoked before its lease is released; releases carry the token, so a late one is a no-op.
+- Keep-alive replies list the leases the session owns: a term adopted before the request but missing from the reply is
+  revoked (`TAKEN_OVER`); an owned lease nobody holds or is acquiring is released.
+- Engine changes must keep `SimulationSpec` (I1–I4 over 10⁴ seeds) green; replay a failure with
+  `./gradlew simba-testing:test -Psimba.simulation.seed=N`.
+
 ## Change Playbooks
 
 - **Contention loop:** change `LeaseContendService` and cover the race deterministically in `LeaseContendServiceTest`
@@ -187,6 +201,6 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
 |---|---|
 | `README.md`, `README.zh-CN.md`, `llms.txt` | Entry points: what Simba is, install, one example per API (`llms.txt` mirrors `wiki/llms.txt`) |
 | `wiki/` | VitePress site, the authoritative docs; page ownership and rules in `wiki/AGENTS.md` |
-| `docs/adr/` | ADRs: 0001 lease engine, 0002 fencing token, 0003 Simba 4, 0004 leader scheduling, 0005 observability, 0006 Actuator endpoint, 0007 lease validity and health, 0008 relinquish and handover, 0009 partitioned leadership |
+| `docs/adr/` | ADRs: 0001 lease engine, 0002 fencing token, 0003 Simba 4, 0004 leader scheduling, 0005 observability, 0006 Actuator endpoint, 0007 lease validity and health, 0008 relinquish and handover, 0009 partitioned leadership, 0010 Simba 5 target architecture |
 | `CONTRIBUTING.md`, `SECURITY.md`, `.github/` | Contribution workflow, quality gates, SemVer and releases; vulnerability reporting; templates, labeler, CODEOWNERS |
 | `skills/simba/`, `skills/simba-testing/` | Source skill docs; do not generate marketplace artifacts here |
