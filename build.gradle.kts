@@ -39,7 +39,8 @@ val KOTLIN_BASELINE = "2.2.21"
 
 val codeCoverageReportProject = project(":code-coverage-report")
 val testJavaVersion: Provider<Int> = providers.gradleProperty("testJavaVersion").map { it.toInt() }.orElse(21)
-val publishProjects = subprojects - exampleProjects - codeCoverageReportProject
+// simba-dependencies is a build-time platform only (see versionPlatform below): never published.
+val publishProjects = subprojects - exampleProjects - codeCoverageReportProject - dependenciesProject
 val libraryProjects = publishProjects - bomProjects
 
 ext.set("libraryProjects", libraryProjects)
@@ -84,7 +85,8 @@ configure(libraryProjects) {
             languageVersion.set(JavaLanguageVersion.of(21))
         }
         // Consumers compile against Kotlin 2.2 metadata and stdlib (the Spring Boot 4 baseline), whatever compiler
-        // builds Simba.
+        // builds Simba: the versionPlatform below pins kotlin-stdlib / kotlin-reflect strictly to KOTLIN_BASELINE, so
+        // the published POM and module metadata ask for 2.2 even though the Spring Boot BOM manages a newer one.
         coreLibrariesVersion = KOTLIN_BASELINE
         compilerOptions {
             apiVersion.set(KotlinVersion.KOTLIN_2_2)
@@ -148,6 +150,14 @@ configure(libraryProjects) {
     }
     dependencies {
         versionPlatform(platform(dependenciesProject))
+        constraints {
+            listOf("kotlin-stdlib", "kotlin-reflect").forEach { artifact ->
+                versionPlatform("org.jetbrains.kotlin:$artifact") {
+                    version { strictly(KOTLIN_BASELINE) }
+                    because("Simba is compiled for Kotlin $KOTLIN_BASELINE; consumers may use any newer stdlib")
+                }
+            }
+        }
         testImplementation(platform(rootProject.libs.junit.bom))
         testImplementation(platform(rootProject.libs.fluent.assert.bom))
         testImplementation(platform(rootProject.libs.testcontainers.bom))

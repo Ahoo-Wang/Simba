@@ -743,6 +743,30 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 - Writes commit through a quorum, so a leader change keeps every token; tokens can only go back if the ensemble's data
   is lost or restored from an older snapshot. Session timeouts are tracked with the servers' elapsed time, so a wall
   clock step on an ensemble host does not shorten them.
+- Group names follow the `LeaseName` rules (1–128 characters of `[A-Za-z0-9._:-]`, not `.` or `..`), as on every
+  backend. `members` syncs the group path first, so a join that just returned is always in the view.
+
+### Security
+
+By default the nodes get `OPEN_ACL_UNSAFE`: any client of the ensemble can delete or pre-create lease nodes and forge
+group members. On a shared ensemble, authenticate and restrict the ACL:
+
+```kotlin
+val backend = ZookeeperLeaseBackend(
+    "zk1:2181,zk2:2181,zk3:2181",
+    authInfo = listOf(AuthInfo("digest", "simba:secret".toByteArray())),
+    aclProvider = myAclProvider, // e.g. ZooDefs.Ids.CREATOR_ALL_ACL for every path
+    clientConfig = ZKClientConfig(), // TLS or SASL settings, optional
+)
+```
+
+- Every client (each session's and the one `members` reads with) adds `authInfo` and is built with `clientConfig`.
+- Every node the backend creates gets the ACL of `aclProvider`, including the parents it creates. Parents that already
+  exist keep their ACL, and the ACL of `{root}/leases` and `{root}/groups/{group}` decides who may create or delete
+  leases and members: create them with the backend's identity, or set their ACL yourself.
+- Spring Boot: `simba.zookeeper.auth.scheme` / `simba.zookeeper.auth.credentials` and `simba.zookeeper.acl`
+  (`auto` gives creator-only nodes once credentials are set); an `ACLProvider` bean replaces the ACL and a
+  `ZKClientConfig` bean configures every client (see [Configuration](./configuration.md)).
 
 ## Selecting a Backend in Spring Boot
 
@@ -783,6 +807,9 @@ indicator.
 | `simba.zookeeper.connect-string` | `localhost:2181` | Ensemble the backend opens its sessions on |
 | `simba.zookeeper.root` | `/simba` | Parent path of the lease and group nodes |
 | `simba.zookeeper.connection-timeout` | `15s` | How long opening a session may take |
+| `simba.zookeeper.auth.scheme` | `digest` | Authentication scheme every Zookeeper client adds |
+| `simba.zookeeper.auth.credentials` | — | Auth data of the scheme (UTF-8), e.g. `user:password` for `digest`; unset: no authentication |
+| `simba.zookeeper.acl` | `auto` | ACL of the nodes the backend creates: `open` (`OPEN_ACL_UNSAFE`), `creator` (`CREATOR_ALL_ACL`, needs credentials) or `auto` (`creator` with credentials, else `open`); an `ACLProvider` bean takes precedence |
 | `simba.scheduling.enabled` | `true` | Runs `@SimbaScheduled` and `@SimbaPartitioned` methods |
 | `simba.metrics.enabled` | `true` | Records Micrometer metrics when a `MeterRegistry` bean exists |
 | `management.health.simba.enabled` | `true` | The `simba` health indicator |
@@ -806,7 +833,7 @@ management:
 
 | Bean | Condition |
 |---|---|
-| `LeaseBackend` (`JdbcLeaseBackend`, `RedisLeaseBackend` or `ZookeeperLeaseBackend`) | The backend is active and the application defines no `LeaseBackend`; JDBC needs a single `DataSource`, Redis a single `RedisConnectionFactory` |
+| `LeaseBackend` (`JdbcLeaseBackend`, `RedisLeaseBackend` or `ZookeeperLeaseBackend`) | The backend is active and the application defines no `LeaseBackend`; JDBC needs a single `DataSource`, Redis a single `RedisConnectionFactory`; Zookeeper uses an `ACLProvider` and a `ZKClientConfig` bean when present |
 | `Simba` | A `LeaseBackend` bean exists; built with `simba.session.*` and every `SimbaEventListener` bean |
 | `SimbaLifecycle` | Closes the client on shutdown |
 | `SimbaScheduledBeanPostProcessor` | `simba.scheduling.enabled` |
@@ -1457,7 +1484,10 @@ all three backends. It is **not compatible** with 4.x in source, in binary, or o
 - the JDBC tables, Redis keys and Zookeeper paths are different, so a 4.x node and a 5.x node do not see each other's
   leases and would both lead;
 - the configuration properties and the Spring beans are different;
-- Java 21 is required.
+- Java 21 is required, and the starter needs Spring Boot 4.1 or later;
+- the Redis backend is split: `simba-redis` alone only defines the `RedisScripting` port and cannot run. Depend on
+  `simba-spring-redis` (Spring Data Redis with Lettuce, which brings `simba-redis`), or implement `RedisScripting` for
+  another client.
 
 You therefore cannot roll the upgrade node by node. **Stop every node that contends for the same names, then start
 them on 5.0.** If a short double run would be harmful, make sure no 4.x node is running before the first 5.0 node
@@ -1539,6 +1569,20 @@ Behavior that changed:
 - **Zookeeper leases are bounded** like the others: `remaining()` has the same meaning on all three backends, and
   FIFO fairness of `LeaderLatch` is gone.
 - **Leader work runs on virtual threads**, one per term; there is no thread pool per scheduler.
+
+### Removed Internals
+
+These 4.x public types were implementation details; 5.0 has no replacement to code against. Configure a backend
+(`JdbcLeaseBackend`, `RedisLeaseBackend`, `ZookeeperLeaseBackend`) and use `Simba` instead:
+
+| Module | 4.x types | 5.0 |
+|---|---|---|
+| `simba-core` | `AbstractMutexContendService`, `LeaseContendService`, `ContendPeriod`, `ContendExecutors`, `ContendOutcome` | The engine (internal); executors are set on `Simba.builder()`, outcomes are `SimbaEvent`s |
+| `simba-core` | `UUIDContenderIdGenerator`, `HostContenderIdGenerator` | None: the backend issues a `SessionId` per session |
+| `simba-jdbc` | `JdbcMutexContendService`, `JdbcMutexOwnerRepository`, `JdbcMemberRegistry`, `NotFoundMutexOwnerException` | `JdbcLeaseBackend` |
+| `simba-spring-redis` | `SpringRedisMutexContendService`, `SpringRedisMemberRegistry`, `OwnerEvent` | `RedisLeaseBackend` over `SpringRedisScripting`; release hints replace the owner events |
+| `simba-zookeeper` | `ZookeeperMutexContendService`, `ZookeeperMemberRegistry` | `ZookeeperLeaseBackend` |
+| `simba-spring-boot-starter` | `SimbaSpringRedisAutoConfiguration` | `SimbaRedisAutoConfiguration` |
 
 ## Property Mapping
 
