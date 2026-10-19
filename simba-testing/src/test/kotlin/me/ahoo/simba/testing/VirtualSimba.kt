@@ -34,8 +34,8 @@ class VirtualSimba : AutoCloseable {
     val scheduler = VirtualScheduler()
     private val sessions = AtomicInteger()
 
-    /** Session ids `s1`, `s2`, … in the order sessions open, so partition assignments are the same every run. */
-    val backend = InMemoryLeaseBackend(scheduler) { SessionId("s${sessions.incrementAndGet()}") }
+    /** Session ids are numbered so that partition assignments, which hash them, are the same on every run. */
+    val backend = InMemoryLeaseBackend(scheduler) { SessionId("session-${sessions.incrementAndGet()}") }
 
     /** Names of every acquire call that reached the backend, in order. */
     val acquires = LinkedBlockingQueue<Set<LeaseName>>()

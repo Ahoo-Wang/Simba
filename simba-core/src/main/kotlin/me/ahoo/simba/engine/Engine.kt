@@ -546,7 +546,7 @@ private class Transition(state: EngineState, private val now: Long) {
             when (outcome) {
                 is AcquireResult.Granted -> onGranted(requestId, name, outcome.token)
                 is AcquireResult.HeldBy -> if (isAttempt(name, requestId)) {
-                    lost(name)
+                    lost(name, again = (elections[name] as ElectionState.Candidate).released)
                 }
 
                 null -> if (isAttempt(name, requestId)) {
@@ -579,10 +579,18 @@ private class Transition(state: EngineState, private val now: Long) {
         }
     }
 
-    /** The current attempt of [name] did not elect this node: reports the probe once and retries later. */
-    private fun lost(name: LeaseName) {
+    /**
+     * The current attempt of [name] did not elect this node: reports the probe once and retries later, or [again] at
+     * once.
+     */
+    private fun lost(name: LeaseName, again: Boolean = false) {
         (elections[name] as? ElectionState.Candidate)?.probe?.let { effects += Effect.Complete(name, it) }
-        retryLater(name)
+        if (again) {
+            elections[name] = ElectionState.Candidate(attempt = null, retryTimer = null)
+            tryAcquire(name)
+        } else {
+            retryLater(name)
+        }
     }
 
     private fun isAttempt(name: LeaseName, requestId: Long): Boolean =
@@ -668,7 +676,8 @@ private class Transition(state: EngineState, private val now: Long) {
     private fun refreshMembers(group: String) {
         val state = groups[group] ?: return
         if (state.request == null) {
-            groups[group] = state.copy(request = call(BackendRequest.Members(group)), refreshTimer = null)
+            groups[group] =
+                state.copy(request = call(BackendRequest.Members(group)), refreshTimer = null, stale = false)
         }
     }
 
@@ -696,7 +705,10 @@ private class Transition(state: EngineState, private val now: Long) {
         refreshMembers(request.group)
     }
 
-    /** Publishes the view when it changed, then refreshes again after one renew interval. */
+    /**
+     * Publishes the view when it changed, then refreshes again after one renew interval, or at once when a hint made
+     * the reply [GroupState.stale].
+     */
     private fun onMembers(requestId: Long, request: BackendRequest.Members, result: BackendResult) {
         val state = groups[request.group]?.takeIf { it.request == requestId } ?: return
         if (result !is BackendResult.Members) {
@@ -704,6 +716,11 @@ private class Transition(state: EngineState, private val now: Long) {
             return
         }
         val viewer = state.joined
+        if (state.stale) {
+            groups[request.group] = publishView(request.group, state.copy(request = null), viewer, result.members)
+            refreshMembers(request.group)
+            return
+        }
         val next = state.copy(request = null, refreshTimer = arm(now + config.renewInterval))
         groups[request.group] = publishView(request.group, next, viewer, result.members)
     }
@@ -719,7 +736,11 @@ private class Transition(state: EngineState, private val now: Long) {
     private fun groupHint(group: String) {
         val state = groups[group] ?: return
         if (!state.leaving && state.joined != null && state.joined == (session as? SessionState.Active)?.id) {
-            refreshMembers(group)
+            if (state.request == null) {
+                refreshMembers(group)
+            } else {
+                groups[group] = state.copy(stale = true)
+            }
         }
     }
 
@@ -737,6 +758,8 @@ private class Transition(state: EngineState, private val now: Long) {
         if (election.attempt == null) {
             elections[hint.name] = election.copy(retryTimer = null)
             tryAcquire(hint.name)
+        } else {
+            elections[hint.name] = election.copy(released = true)
         }
     }
 
@@ -782,7 +805,7 @@ private class Transition(state: EngineState, private val now: Long) {
             return
         }
         val request = call(BackendRequest.Acquire(current.id, setOf(name)))
-        elections[name] = election.copy(attempt = request, retryTimer = null)
+        elections[name] = election.copy(attempt = request, retryTimer = null, released = false)
     }
 
     /** Retries later; a reported probe is not reported again. */
