@@ -14,6 +14,7 @@ description = "Simba testing kit: in-memory backend, virtual time and the determ
 
 dependencies {
     api(project(":simba-core"))
+    testImplementation(project(":simba-tck"))
 }
 
 kotlin {

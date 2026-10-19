@@ -22,6 +22,7 @@ include(":simba-zookeeper")
 include(":simba-spring-boot-starter")
 include(":simba-test")
 include(":simba-testing")
+include(":simba-tck")
 include(":simba-example")
 
 include(":code-coverage-report")
