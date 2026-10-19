@@ -1,27 +1,76 @@
 ---
 title: Observability
-description: Micrometer metrics, the read-only simba Actuator endpoint, alert rules and custom ContendObserver hooks.
+description: Read the client's state with snapshot(), receive SimbaEvents, use the Micrometer metrics and alert rules, the simba Actuator endpoint and the simba health indicator.
 ---
 
 # Observability
 
-Simba reports what happens to each mutex through a `ContendObserver`. With Spring Boot, the starter records these events as Micrometer metrics and serves the current state through an Actuator endpoint.
+Simba reports what it does in two ways: a point-in-time `snapshot()` of the session and every election, and a stream
+of `SimbaEvent`s. The Spring Boot starter builds the Actuator endpoint and the health indicator on the snapshot, and
+the Micrometer metrics on the events.
+
+## Snapshot
+
+`simba.snapshot()` returns a `SimbaSnapshot` read on the engine's loop; it never calls the backend.
+
+| Field | Meaning |
+|---|---|
+| `session.id` | The current `SessionId`, `null` while none is open |
+| `session.status` | `OPENING`, `LIVE`, `SUSPENDED` or `CLOSED` |
+| `session.validFor` | Time left before the session's local deadline |
+| `session.notLiveFor` | How long the session has not been `LIVE` (since start, or since it was last live); zero while live |
+| `elections[]` | Every started election (locks, schedules and partitions included): `name`, `status`, `token`, `remaining` |
+| `leaseDuration` | The configured session lease |
+| `healthy` | `notLiveFor ≤ leaseDuration` |
+
+An election's `status` is `CANDIDATE` (contending), `LEADER` (holding a valid term), `COOLDOWN` (stepped down, waiting
+for the cooldown to end) or `HANDOVER` (stopped or stepped down, waiting for its work to exit before releasing the
+lease). `token` and `remaining` are `0` without a term.
+
+## Events
+
+Register a `SimbaEventListener` with `Simba.builder().listener(...)`, or as a bean with the starter. Events are
+published from the engine's loop: keep listeners fast and thread-safe; exceptions are logged and ignored.
+
+| `SimbaEvent` | When |
+|---|---|
+| `SessionOpened(session)` | A new session was opened |
+| `SessionRenewed(session, latency)` | A keep-alive succeeded |
+| `SessionSuspended(session, cause)` | A keep-alive failed before the local deadline |
+| `SessionExpired(session, reason)` | The session ended: deadline passed or the backend reported it expired |
+| `Elected(name, token)` | This node got a term |
+| `Revoked(name, token, reason)` | A term ended |
+| `AcquireFailed(name, cause)` | An acquire call failed (not "held by someone else", which is normal) |
+| `WorkCompleted(name, token, outcome, duration, cause)` | One run of leader work ended: `COMPLETED`, `FAILED` or `CANCELLED` |
+
+```kotlin
+@Component
+class AuditListener(private val audit: Audit) : SimbaEventListener {
+    override fun onEvent(event: SimbaEvent) {
+        when (event) {
+            is SimbaEvent.Elected -> audit.record("leader", event.name.value, event.token)
+            is SimbaEvent.Revoked -> audit.record("revoked", event.name.value, event.reason)
+            else -> Unit
+        }
+    }
+}
+```
 
 ## Micrometer Metrics
 
-The metrics are on when the application has a `MeterRegistry` bean, for example through `spring-boot-starter-actuator`. Set `simba.metrics.enabled=false` to turn them off.
+With Micrometer on the classpath and a `MeterRegistry` bean, the starter registers `MicrometerSimbaEventListener`
+(disable with `simba.metrics.enabled=false`):
 
 | Meter | Type | Tags | Meaning |
 |---|---|---|---|
-| `simba.mutex.owner` | Gauge | `mutex` | Local contenders owning the mutex: `1` on the leader, `0` elsewhere. |
-| `simba.mutex.ownership.changes` | Counter | `mutex`, `change` = `acquired` / `released` | How often this node gains or loses leadership. |
-| `simba.mutex.contend` | Timer | `mutex`, `operation` = `acquire` / `renew`, `outcome` = `owner` / `other` / `failed` | Backend round trips: latency and failure rate. |
-| `simba.mutex.lease.expired` | Counter | `mutex` | Ownership revoked because the lease ended without a successful renewal. |
-| `simba.scheduler.work` | Timer | `mutex`, `outcome` = `success` / `failed` / `interrupted` | Runs of `@SimbaScheduled` / `SimbaScheduler` work. |
+| `simba.session.renew` | Timer | — | Latency of successful keep-alives |
+| `simba.session.state` | Gauge | `state` (`opening`, `live`, `suspended`, `closed`) | `1` for the current session status |
+| `simba.leadership` | Gauge | `name` | `1` while this node holds a term of the name |
+| `simba.revocations` | Counter | `name`, `reason` | Ended terms, by `RevokeReason` (lowercase) |
+| `simba.work` | Timer | `name`, `outcome` | Leader work runs (`completed`, `failed`, `cancelled`) |
 
-Meters are tagged by mutex only, never by contender id, so their number stays bounded by the mutexes the application uses.
-
-The Zookeeper backend elects through Curator's `LeaderLatch`, so it reports `owner`, `ownership.changes` and `scheduler.work` only. On Zookeeper the `owner` gauge appears once the node first becomes leader; lease backends register it on their first contention.
+Partition elections appear as names too (`{group}.{partition}`). Without Spring, add
+`MicrometerSimbaEventListener(registry)` to the builder yourself.
 
 ## Alert Rules
 
@@ -32,30 +81,38 @@ groups:
   - name: simba
     rules:
       - alert: SimbaNoLeader
-        expr: sum by (mutex) (simba_mutex_owner) < 1
+        expr: sum by (name) (simba_leadership) < 1
         for: 1m
         annotations:
-          summary: "No node leads mutex {{ $labels.mutex }}"
-      - alert: SimbaSplitLeadership
-        expr: sum by (mutex) (simba_mutex_owner) > 1
+          summary: "No node leads {{ $labels.name }}"
+      - alert: SimbaSessionNotLive
+        expr: simba_session_state{state="live"} == 0
         for: 1m
         annotations:
-          summary: "More than one node claims mutex {{ $labels.mutex }}"
-      - alert: SimbaLeaseExpired
-        expr: increase(simba_mutex_lease_expired_total[10m]) > 0
+          summary: "The Simba session of {{ $labels.instance }} is not live"
+      - alert: SimbaTermsLost
+        expr: increase(simba_revocations_total{reason=~"deadline_passed|session_expired|taken_over"}[10m]) > 0
         annotations:
-          summary: "A lease of {{ $labels.mutex }} ended without renewal; protect writes with fencing tokens"
+          summary: "{{ $labels.name }} lost a term ({{ $labels.reason }}); protect writes with fencing tokens"
       - alert: SimbaLeadershipFlapping
-        expr: increase(simba_mutex_ownership_changes_total{change="acquired"}[10m]) > 3
+        expr: increase(simba_revocations_total[10m]) > 3
         annotations:
-          summary: "Leadership of {{ $labels.mutex }} moves too often"
+          summary: "Leadership of {{ $labels.name }} moves too often"
+      - alert: SimbaWorkFailing
+        expr: increase(simba_work_seconds_count{outcome="failed"}[10m]) > 0
+        annotations:
+          summary: "Leader work of {{ $labels.name }} failed"
 ```
 
-Nodes are scraped at different moments, so a handover can briefly look like zero or two owners; the `for: 1m` clause filters that out. A node revokes its ownership locally when its lease ends, so a lasting `SimbaSplitLeadership` points at the backend (for example a Redis failover). Writes that may outlive a lease should carry a [fencing token](/guide/correctness#fencing-tokens).
+Nodes are scraped at different moments, so a handover can briefly look like zero or two leaders; the `for: 1m`
+clause filters that out. `simba_leadership` is each node's local view: two nodes reporting `1` for longer than a lease
+point at a paused node or a backend that lost writes (for example a Redis failover), which is exactly what
+[fencing tokens](/guide/correctness#fencing-tokens) protect against.
 
 ## Actuator Endpoint
 
-With Spring Boot Actuator, the read-only `simba` endpoint shows what this node contends for. Like every Actuator endpoint it is not exposed over HTTP by default:
+With Spring Boot Actuator, the read-only `simba` endpoint shows the snapshot. Like every Actuator endpoint it is not
+exposed over HTTP by default:
 
 ```yaml
 management:
@@ -65,97 +122,51 @@ management:
         include: health,simba
 ```
 
-`GET /actuator/simba` lists the running contend services; `GET /actuator/simba/{mutex}` returns one mutex (404 when this node does not contend for it):
+`GET /actuator/simba`:
 
 ```json
 {
-  "mutexes": [
-    {
-      "mutex": "report",
-      "contenderId": "0:4242@host-a",
-      "status": "RUNNING",
-      "owner": true,
-      "currentOwner": {
-        "ownerId": "0:4242@host-a",
-        "fencingToken": 7,
-        "acquiredAt": "2026-10-10T08:00:00Z",
-        "ttlAt": "2026-10-10T08:00:10Z",
-        "transitionAt": "2026-10-10T08:00:16Z"
-      }
-    }
+  "session": {
+    "id": "5f0c8e9d2b7a4c1e9f3a6b8d0e2c4a71",
+    "status": "LIVE",
+    "validForMillis": 13870,
+    "notLiveForMillis": 0
+  },
+  "elections": [
+    { "name": "report", "status": "LEADER", "token": 42, "remainingMillis": 13870 },
+    { "name": "billing.3", "status": "CANDIDATE", "token": 0, "remainingMillis": 0 }
   ]
 }
 ```
 
-`currentOwner` is the owner this node last observed, so non-leaders on JDBC and Redis show who leads; Zookeeper nodes only know about themselves. `ttlAt` and `transitionAt` are `null` for unbounded leases. The endpoint has no write operations. Services from factories built outside the starter appear only if the factory is given the `SimbaServiceTracker` observer.
+`GET /actuator/simba/{name}` returns one election, or `404` when it is not started on this node. The endpoint shows
+only this node's view; it does not query who leads elsewhere.
 
 ## Health Indicator
 
-With Spring Boot health support (part of Actuator), the starter registers the `simba` health indicator. It is `DOWN`
-when a running JDBC or Redis contend service had no successful backend round trip for more than twice its
-`ttl + transition`: the node can neither acquire nor keep a lease, whether its calls fail or hang. Not owning a mutex
-is healthy. Zookeeper services add details but never `DOWN`; Curator's connection is the Curator client's concern.
+The `simba` health indicator is `DOWN` once the session has not been live for longer than `leaseDuration`: this node
+can then neither keep nor win a term on any backend. Not leading is healthy.
 
 ```json
 {
-  "status": "DOWN",
+  "status": "UP",
   "details": {
-    "mutexes": [
-      {
-        "mutex": "report",
-        "contenderId": "0:4242@host-a",
-        "owner": false,
-        "fencingToken": 0,
-        "sinceLastSuccess": "33012ms",
-        "failingFor": "33012ms",
-        "stale": true
-      }
-    ]
+    "session": "5f0c8e9d2b7a4c1e9f3a6b8d0e2c4a71",
+    "status": "LIVE",
+    "validFor": "13870ms",
+    "notLiveFor": "0ms",
+    "leaseDuration": "15000ms",
+    "leading": ["report"]
   }
 }
 ```
-
-An owner also shows `leaseRemaining`, and `leaseExpiredAgo` appears when the lease watchdog revoked ownership within the
-last `ttl + transition`.
 
 The indicator is **not** part of the liveness or readiness groups. A backend outage hits every node at once;
 restarting or unrouting all of them would turn a coordination outage into an application outage. Add it to a group
 yourself (`management.endpoint.health.group.<name>.include=simba`) only if that is what you want, and disable it with
 `management.health.simba.enabled=false`.
 
-## Custom Observers
-
-Implement `ContendObserver` to forward events elsewhere. Every method defaults to a no-op; implementations must be fast and thread-safe, and exceptions are logged and ignored.
-
-```kotlin
-@Component
-class AuditObserver : ContendObserver {
-    override fun onAcquired(mutex: String) = audit.record("leader", mutex)
-    override fun onLeaseExpired(mutex: String) = audit.record("lease-expired", mutex)
-}
-```
-
-The starter passes every `ContendObserver` bean, together with the Micrometer observer, to the backend factory. Without Spring, pass an observer to the factory:
-
-```kotlin
-val factory = SpringRedisMutexContendServiceFactory(
-    ttl = Duration.ofSeconds(10),
-    transition = Duration.ofSeconds(6),
-    redisTemplate = redisTemplate,
-    listenerContainer = listenerContainer,
-    observer = myObserver
-)
-```
-
-| Event | When |
-|---|---|
-| `onContend(mutex, renew, durationNanos, outcome)` | A backend round trip finished (JDBC, Redis). |
-| `onAcquired(mutex)` / `onReleased(mutex)` | This contender gained or lost ownership (all backends). |
-| `onLeaseExpired(mutex)` | The lease watchdog revoked ownership (JDBC, Redis); `onReleased` follows. |
-| `onWork(mutex, durationNanos, outcome)` | A leader-only work run ended. |
-| `onStarted(service)` / `onStopped(service)` | A contend service started, or stopped after delivering its release. |
-
 ## Related Pages
 
-- [Configuration](/guide/configuration): every `simba.*` property and the beans the starter creates.
-- [Correctness](/guide/correctness#failure-modes): what each failure looks like.
+- [Spring Boot](/guide/configuration): every `simba.*` property and the beans the starter creates.
+- [Concepts and Correctness](/guide/correctness#failure-modes): what each failure looks like.

@@ -1,6 +1,6 @@
 ---
 title: Contributing
-description: Build Simba, run its tests, add a backend with the TCK, and keep the documentation in sync.
+description: Build Simba, run its tests, change the engine safely, add a backend with the TCK, and keep the documentation in sync.
 ---
 
 # Contributing
@@ -17,74 +17,46 @@ You need JDK 21 and Docker.
 ```bash
 ./gradlew build                                   # all modules
 ./gradlew simba-core:check                        # tests + detekt for one module
-./gradlew simba-core:test --tests me.ahoo.simba.core.LeaseContendServiceTest
+./gradlew simba-core:test --tests me.ahoo.simba.engine.EngineTest
+./gradlew simba-testing:test -Psimba.simulation.seed=42   # replay one simulation seed
 ./gradlew simba-example:check -PexampleBackend=jdbc   # jdbc | redis | zookeeper (default: redis)
 ./gradlew codeCoverageReport                      # aggregated JaCoCo report
-./gradlew check -PtestJavaVersion=25              # run tests on another JDK; bytecode stays 21
+./gradlew test -PtestJavaVersion=25               # run tests on another JDK; bytecode stays 21
 ```
 
 | Module | Test infrastructure |
 |---|---|
-| `simba-core` | None |
+| `simba-core`, `simba-testing`, `simba-tck` | None |
 | `simba-zookeeper` | Embedded Curator `TestingServer` |
-| `simba-spring-redis` | Testcontainers `redis:7.4-alpine` (`RedisFixture`) |
-| `simba-jdbc` | Testcontainers `mysql:8.4` initialized with `init-simba-mysql.sql` (`MySqlFixture`) |
+| `simba-redis` (also covers `simba-spring-redis`) | Testcontainers `redis:7.4-alpine` (`RedisFixture`) |
+| `simba-jdbc` | Testcontainers `mysql:8.4` and `postgres:17` (`LeaseDatabaseFixture`) |
 | `simba-spring-boot-starter` | Spring Boot test slices |
 
 ## Writing Tests
 
-- Name tests after the behavior. New assertions use FluentAssert (`.assert()`); MockK only when a real code path is
+- Name tests after the behavior. Assertions use FluentAssert (`.assert()`); MockK only when a real code path is
   impractical.
-- Never `sleep` to synchronize; wait on latches or futures.
-- Races in the contention loop are tested deterministically in `LeaseContendServiceTest`, with a manual scheduler and
-  I/O executor and no real threads.
+- Never `sleep` to synchronize; wait on queues, latches or futures.
+- **Engine changes** are tested as tables of events in and effects out against `step()`, with no executor. Keep
+  `SimulationSpec` (the invariants over 10⁴ seeds) green.
+- **Threaded client tests** run on virtual time: `VirtualScheduler`, direct I/O and callback executors, and
+  `awaitIdle()` between timers (see `VirtualSimba` in the `simba-testing` tests).
 - Backend semantics are tested once, in the TCK.
-
-## Backend TCK
-
-`simba-test` provides `MutexContendServiceSpec` (and `FencingSpec` for resources that check tokens, see
-[Correctness](/guide/correctness#verifying-a-resource)). Every backend's test extends it and supplies a factory:
-
-```kotlin
-@TestInstance(TestInstance.Lifecycle.PER_CLASS)
-internal class MyBackendMutexContendServiceTest : MutexContendServiceSpec() {
-    override lateinit var mutexContendServiceFactory: MutexContendServiceFactory
-
-    @BeforeAll
-    fun setup() {
-        mutexContendServiceFactory = MyBackendMutexContendServiceFactory(/* ... */)
-    }
-
-    // optional: enables the observer() case
-    override fun createObservedFactory(observer: ContendObserver) = MyBackendMutexContendServiceFactory(observer = observer)
-}
-```
-
-| Case | Verifies |
-|---|---|
-| `start` | A single contender acquires, then releases on `stop()`. |
-| `restart` | A stopped service starts again and reacquires with the same contender id. |
-| `guard` | An owner keeps ownership across several lease periods (renewal works). |
-| `multiContend` | Ten contenders over 30 s: never more than one owner, and all agree on who it is. |
-| `schedule` | `AbstractScheduler` runs work on the leader. |
-| `simbaScheduler` | `SimbaScheduler` runs work on the leader and exposes the fencing token. |
-| `observer` | Observer events are reported (skipped without `createObservedFactory`; set `reportsContention = false` for event-driven backends). |
 
 ## Adding a Backend
 
-For a lease-based store, implement `MutexLeaseStore` (one atomic `contend`, one `release`) plus a factory that builds
-`LeaseContendService` instances with shared `ContendExecutors`. Do not re-implement scheduling, watchdogs or generation
-checks in the backend. Then:
-
-1. Extend `MutexContendServiceSpec` for it.
-2. Issue a fencing token that increases strictly per term and is stable across renewals (ADR 0002).
-3. Add an auto-configuration in the starter: activated by `simba.enabled`, `simba.<backend>.enabled` and
-   `simba.backend`, registered in `META-INF/spring/...AutoConfiguration.imports` and in
-   `additional-spring-configuration-metadata.json`, plus a `SimbaBackend` entry.
+1. Implement `LeaseBackend`: one round trip per call, no scheduling, no local lease state, remaining times measured by
+   the backend's clock and returned as durations, tokens that strictly increase and never reset, expired sessions that
+   are never revived.
+2. Extend [`LeaseBackendSpec`](/guide/testing#backend-tck) for it. A backend with an injectable clock overrides
+   `clock`; otherwise time-based tests poll until the backend's own lease ran out.
+3. Add a starter auto-configuration activated by `simba.enabled`, `simba.<backend>.enabled` and `simba.backend`,
+   registered in `META-INF/spring/...AutoConfiguration.imports` and `additional-spring-configuration-metadata.json`,
+   plus a `SimbaBackend` entry and an example backend.
 4. Document it in [Backends](/guide/backends) (both languages).
 
-Open an issue first: a new backend, dependency, or change to the Redis scripts, JDBC SQL or public `simba-core` API
-needs agreement before code.
+Open an issue first: a new backend, dependency, change of the `LeaseBackend` SPI, the Redis scripts or key names,
+the JDBC SQL or schema, or the public `simba-core` API needs agreement before code.
 
 ## Documentation
 

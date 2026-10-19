@@ -1,89 +1,63 @@
 # Backend Internals Reference
 
-Use this reference for backend debugging, not for everyday Simba usage. It mirrors the current repository implementation; when backend source changes, update this file in the same change.
+Use this reference for backend debugging, not for everyday Simba usage. It mirrors the Simba 5 implementation
+(ADR 0010); when backend source changes, update this file in the same change. User-facing detail:
+https://simba.ahoo.me/guide/backends.
 
-## Redis Backend — Lua Scripts
+## Common Contract (`LeaseBackend`)
 
-The Redis backend uses three Lua scripts for atomicity. Every script receives its keys through `KEYS` (`KEYS[1]` = `simba:{mutex}`). Acquire and guard return `{ownerId, remainingMs, fencingToken}`, or `{'', 0, 0}` when there is no owner. A successful acquire increments `simba:{mutex}:fence` and stores the term's token in `simba:{mutex}:token` (same `PX` as the lease); guard keeps it; release deletes the token key and keeps the counter.
+- One backend round trip per call (or one per Redis slot); no scheduling, no notification, no local lease state.
+- Remaining times are measured by the backend's clock and returned as durations; the client turns them into a local
+  deadline `sentAt + remaining × (1 − drift) − margin`.
+- Tokens are > 0, strictly increase per name, never reset. Release takes `(name → token)` and is a no-op for any other
+  token.
+- An expired session is never revived: `keepAlive` → `Expired`, `acquire` → `SessionExpiredException`.
+- Hints (`Released`, `MembersChanged`) only accelerate.
 
-### mutex_acquire.lua
+## JDBC (`JdbcLeaseBackend`, `Dialect.MYSQL` / `Dialect.POSTGRESQL`)
 
-Atomically tries to acquire the lock:
-1. `SET key contenderId NX PX (ttl + transition)` - set only if not exists, with millisecond expiry.
-2. On success: publishes `acquired@@contenderId` on the mutex channel and returns `{contenderId, leaseMs, fencingToken}`.
-3. On failure: returns `{currentOwnerId, remainingPttl}`. Nothing is queued; waiting contenders learn about releases from the broadcast.
+Tables (`me/ahoo/simba/jdbc/init-simba-{mysql,postgresql}.sql`):
 
-### mutex_guard.lua
+- `simba_session(session_id char(32) pk, expires_at bigint, metadata varchar(1024))` — `expires_at` in database
+  epoch ms.
+- `simba_lease(name varchar(128) pk, session_id char(32) default '', token bigint)` — rows never deleted; `''` = free.
+- `simba_member(group_name, session_id)` pk on both.
 
-For the current owner to renew (extend TTL):
-1. Checks if the lock is held by this contender (`GET key == contenderId`).
-2. If yes: `SET XX PX (ttlMs + transitionMs)` to renew the full lease. Returns `{contenderId, leaseMs, fencingToken}`.
-3. If no: returns the current owner info so the contender knows it lost the lock.
+Behavior:
 
-### mutex_release.lua
+- Keep-alive: `update simba_session set expires_at = now + lease where session_id = ? and expires_at > now`; 0 rows →
+  `Expired` (and the session row is removed).
+- Acquire: upsert that takes the row when free or owned by an expired session, `token = token + 1`; on MySQL the
+  `token` assignment is first in `SET` (left-to-right evaluation). Already owned → current token.
+- Release: `update simba_lease set session_id = '' where name = ? and session_id = ? and token = ?`.
+- Members: `simba_member` joined with live sessions. `purgeExpired()` cleans leftover expired sessions.
+- No hints: candidates take over released leases at their next attempt.
 
-Releases the lock and wakes every waiting contender:
-1. If the lock is not held by this contender: returns `0`.
-2. Otherwise `DEL key tokenKey`.
-3. Publishes `released@@releasedOwnerId` on the mutex channel, so all live contenders contend immediately and one wins.
+## Redis (`RedisLeaseBackend` over `RedisScripting`; Lua in `simba-redis/src/main/resources/me/ahoo/simba/redis/`)
 
-### Pub/Sub Channels
+Keys:
 
-- **Mutex channel** (`simba:{mutex}`): All contenders subscribe. Receives `acquired@@ownerId` and `released@@ownerId`.
+- `simba:lease:{name}` hash `{session, token, expires}` — never expires, never deleted; `expires` in Redis `TIME`.
+- `simba:session:{sid}` hash with `PX = lease`, plus `simba:session:{sid}:leases` and `:groups` sets (same slot).
+- `simba:group:{group}` sorted set of session ids scored by expiry.
 
-### Message Format
+Scripts: `lease_session_open`, `lease_keep_alive`, `lease_acquire`, `lease_release`, `lease_session_close`,
+`lease_group_join`, `lease_group_leave`, `lease_group_members`.
 
-All Pub/Sub messages use `@@` as delimiter:
-- `acquired@@{ownerId}` — lock was acquired by ownerId
-- `released@@{ownerId}` — lock was released by ownerId
+- Acquire takes a lease whose `session` is empty or whose `expires` passed, `token + 1`, `expires = now + session
+  remaining`; fails once the session key is gone.
+- Keep-alive extends the session and only the `held` leases still owned (leases expire on their own).
+- Release clears `session` and publishes `released` on the lease key's channel — the only broadcast.
+- `routeBySlot` (Cluster): session slot first, then one script per slot; clock skew between nodes shifts leases.
+- `waitReplicas`: `WAIT n timeout` after a new term; not on Cluster. Failover can still lose a token increment.
 
-## JDBC Backend — Database Schema
+## Zookeeper (`ZookeeperLeaseBackend`)
 
-The `simba_mutex` table:
-
-```sql
-CREATE TABLE simba_mutex (
-    mutex varchar(66) not null primary key comment 'mutex name',
-    acquired_at bigint unsigned not null,
-    ttl_at bigint unsigned not null,
-    transition_at bigint unsigned not null,
-    owner_id varchar(128) not null,
-    version int unsigned not null,
-    fencing_token bigint unsigned not null default 0 -- simba.jdbc.fencing (default true); see upgrade-simba-mysql-fencing-token.sql
-);
-```
-
-### Acquire Logic (SQL CAS)
-
-The critical `acquire` SQL atomically updates ownership:
-
-```sql
-UPDATE simba_mutex
-SET owner_id = #{contenderId},
-    acquired_at = currentDbAt,
-    ttl_at = currentDbAt + #{ttlMs},
-    transition_at = currentDbAt + #{ttlMs} + #{transitionMs},
-    version = version + 1
-WHERE mutex = #{mutex}
-  AND (
-    transition_at < #{currentDbAt}          -- lock fully expired
-    OR (owner_id = #{contenderId} AND transition_at > #{currentDbAt})  -- current owner renewing
-  )
-```
-
-This ensures:
-- A new contender can only acquire if `transition_at` has passed (hard expiry).
-- The current owner can renew if still within the transition window (soft renewal).
-- `version` records ownership changes and helps inspect concurrent updates.
-- `currentDbAt` comes from MySQL `current_timestamp(3)` to avoid application-node clock skew.
-
-## Zookeeper Backend — Curator Integration
-
-The Zookeeper backend is the simplest — it delegates entirely to Apache Curator's `LeaderLatch`:
-
-- Path: `/simba/{mutex}`
-- Contender ID: set as `LeaderLatch.setId(contenderId)`
-- Leadership changes: `LeaderLatchListener.isLeader()` / `notLeader()` callbacks
-- Close mode: `CloseMode.NOTIFY_LEADER` (notifies on close so the next contender can take over)
-
-No TTL/transition tuning needed — Zookeeper handles session management and ephemeral nodes.
+- One raw `ZooKeeper` client per session (requested timeout = lease), never reconnected to another session;
+  `SessionId` = zk session id as 16 hex digits.
+- Lease: ephemeral `{root}/leases/{name}` with the session id as data; owner = `ephemeralOwner`; token = `czxid`
+  (strictly increasing, not consecutive). Exists watch → `Released` hint.
+- Members: ephemeral `{root}/groups/{group}/{sessionId}` under a container node; children watch → `MembersChanged`.
+- A local watchdog closes a session that no keep-alive renewed within the lease (the client heartbeats on its own).
+- Remaining = `min(lease, negotiated timeout)`; disconnected → keep-alive / acquire fail; zk-expired → `Expired`.
+- `root` defaults to `/simba`.

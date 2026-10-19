@@ -1,113 +1,152 @@
 ---
-title: 正确性
-description: Simba 背后的租约模型、如何选择 ttl 与 transition、如何使用 fencing token，以及每种故障如何演变。
+title: 核心概念与正确性
+description: Simba 5 中的会话、租约、任期和 fencing token，本地截止时刻如何计算，交接顺序，回调语义，以及每种故障如何演变。
 ---
 
-# 正确性
+# 核心概念与正确性
 
 分布式锁无法知道它的持有者是否还活着；它只能把所有权 *租* 出去一段有限的时间。Simba 的所有保证都由此而来。
-本页说明租约、时序参数，以及当重叠执行绝不能发生时你的代码需要做什么。
+本页说明模型、时序，以及当重叠执行绝不能发生时你的代码需要做什么。设计记录在
+[ADR 0010](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0010-simba-5-target-architecture.md) 中。
 
-## 租约
-
-持有者的租约有两个截止时间，都以后端时钟计量：
-
-- `ttlAt`：持有者在此时续期。
-- `transitionAt = ttlAt + transition`：租约结束。两者之间只有当前持有者可以续期；`transitionAt` 之后任何人都可以获取。
+## 一图看懂模型 {#the-model-in-one-picture}
 
 ```mermaid
 graph LR
-    A["acquiredAt"] -->|"ttl"| B["ttlAt<br>持有者续期"]
-    B -->|"transition（仅持有者）"| C["transitionAt<br>租约结束"]
-    C -->|"+ 抖动"| D["竞争者获取"]
-    style A fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style B fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style C fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style D fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
+    P["Simba 客户端<br>（每个进程一个）"] -->|"打开、续约"| S["会话<br>SessionId，在后端过期"]
+    S -->|"拥有"| L1["租约 'report'<br>token 7"]
+    S -->|"拥有"| L2["租约 'billing.3'<br>token 12"]
+    L1 -.->|"本地视图"| T1["任期<br>name、token、isValid、remaining()"]
+    L2 -.->|"本地视图"| T2["任期"]
+    style P fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
+    style S fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
+    style L1 fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
+    style L2 fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
+    style T1 fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
+    style T2 fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 
-- **持有者** 在 `ttlAt` 尝试续期。续期成功会开始一个新租约；fencing token 保持不变。
-- **竞争者** 在 `transitionAt` 加上 `[-200, 1000)` ms 的随机抖动后重试（`transition` 为零时为 `[0, 1000)`），避免同时冲击后端。
-  在 Redis 上，释放广播会让它们立即重试。
-- **本地租约守护。** 每次获取或续期成功后，都会为租约结束时刻设置一个看门狗，用本地单调时钟 *从请求发出时* 开始计量。
-  如果到时没有续期成功（包括后端调用挂起的情况），节点会撤销自己的所有权并调用 `onReleased`。由于看门狗在后端授予租约之前就开始计时，
-  本地所有权不会晚于后端租约结束。
-- **续期失败。** 租约仍有效时，持有者保持所有权，并以减半的退避（至少 100 ms）重试。租约结束后，所有权被撤销，节点在 `ttl` 后重新竞争。
+## 会话 {#sessions}
 
-Zookeeper 没有租约：领导权持续到 latch 关闭或会话过期（见 [后端](/zh/guide/backends#zookeeper)）。
+活性属于节点，而不是每把锁。一个 `Simba` 客户端在后端打开 **一个会话**，并每隔 `renewInterval` 用一次续约 (keep-alive) 为其续期；
+节点持有的每个租约和加入的每个组都与该会话同生共死。无论租约有多少，续期开销都是每个节点一次调用。
 
-## 选择 `ttl` 和 `transition`
+- 一个 `SessionId` 标识一次会话 *实例*，且永不复用：在 JDBC 和 Redis 上是随机 128 位，在 Zookeeper 上是 Zookeeper 会话 id。
+- 过期的会话 **永不复活**。后端对它的续约回复 `Expired`，并拒绝它的获取请求；客户端会打开一个新会话（新的 id）并重新竞争。
+  否则，一个在此期间已被其他节点接管的租约可能会重新变成“我的”。
+- `close()` 关闭会话，因此后端会立即释放该节点的所有租约。
 
-两者都是租约长度，与工作运行多久无关：工作运行时，续期在后台进行。
+会话状态可在 [`snapshot()`](/zh/guide/observability#snapshot) 中查看：`OPENING`（还没有会话，或上一个过期后正在打开新会话）、
+`LIVE`（上一次续约成功）、`SUSPENDED`（上一次续约失败，截止时刻未过）或 `CLOSED`。
 
-- **`ttl + transition` 是崩溃或网络分区后的故障转移时间。** 越短接管越快。
-- **`transition` 是续期余量。** 延迟小于 `transition` 的续期（后端变慢、GC 暂停、调度器繁忙）仍能保持所有权。
-  `transition = 0` 时，`ttlAt` 处的任何延迟都会让其他节点接管，导致所有权抖动。
-- **负载** 大约是每个竞争者每个 `ttl` 一次后端调用。
+## 本地截止时刻 {#the-local-deadline}
 
-| 目标 | ttl | transition |
+客户端从不把自己的挂钟与后端比较。每次续约的回复都携带会话的剩余时间，这是由后端测量的一个 *时长*，客户端把它换算成自己单调时钟上的截止时刻：
+
+```
+deadline = sentAt + remaining × (1 − drift) − margin
+```
+
+`sentAt` 是续约请求 **发出** 的时刻，而不是回复到达的时刻，因此慢回复只会缩短截止时刻。只要两个时钟的速率之比在
+`1 ± drift` 之内，本地截止时刻就会在后端让会话过期并把其租约交给别人之前到达。
+
+## 租约、任期与 Token {#leases-terms-and-tokens}
+
+**租约** 是后端的一条记录 `name → (session, token)`。在所有后端上，租约名称都是 1–128 个 `[A-Za-z0-9._:-]` 字符，
+因此一个名称作为 Redis 键、Zookeeper 路径和 JDBC 列值时含义相同。
+
+**任期** 是本节点拥有某个租约的一段时期。两次赢得同一名称会得到两个不同的 `Term` 对象。任期包含：
+
+| 成员 | 含义 |
+|---|---|
+| `name` | 租约名称 |
+| `token` | Fencing token：大于零，在任期内不变，在同一名称的任期之间严格递增 |
+| `isValid` | 未被撤销，且会话的本地截止时刻未过 |
+| `remaining()` | 距本地截止时刻的剩余时间；任期结束后为 `Duration.ZERO` |
+| `ensureValid(minRemaining)` | 除非任期在超过 `minRemaining` 的时间内仍然有效，否则抛出 `LeaseExpiredException` |
+| `revoked` | `CompletionStage<RevokeReason>`，在任期结束时恰好完成一次 |
+
+`isValid` 和 `remaining()` 是单调时钟与会话截止时刻的纯函数：不需要先运行任何看门狗线程，因此一个从长时间暂停中醒来的进程在第一次读取时就会看到
+`false`，而且已结束的任期即使节点再次当选也不会重新变为有效。
+
+任期因以下原因之一结束：
+
+| `RevokeReason` | 何时 |
+|---|---|
+| `STOPPED` | 选举被停止、锁被释放或客户端被关闭 |
+| `STEPPED_DOWN` | 选举让位 |
+| `DEADLINE_PASSED` | 会话的本地截止时刻已过，期间没有成功的续约 |
+| `SESSION_EXPIRED` | 后端报告会话已过期 |
+| `TAKEN_OVER` | 续约回复不再把该租约列为本会话所有 |
+
+任期总是 **先** 被撤销，然后才释放其租约；每次释放都携带任期的 token，因此迟到的释放无法释放之后的任期。
+
+## 时序 {#timing}
+
+| `SimbaConfig` | 默认值 | 含义 |
 |---|---|---|
-| 默认 | 10s | 6s |
-| 更快的故障转移 | 3–5s | 2–3s |
-| 网络不稳定或 GC 暂停较长 | 15–30s | ≥ 预期的最长暂停 |
+| `leaseDuration` | 15 s | 后端在会话最后一次续约之后经过这么长时间使其过期 |
+| `renewInterval` | `leaseDuration / 3` | 续约周期 |
+| `drift` | 0.01 | 节点与后端之间时钟速率差异的上界，取值 `[0, 0.5)` |
+| `margin` | 50 ms | 从每个截止时刻额外减去的安全余量 |
+| `retryJitter` | `renewInterval / 2` | 候选者在 `renewInterval / 2` 加上 `[0, retryJitter)` 内的随机延迟后重试 |
+| `minBackoff` | 100 ms | 续约失败后退避时间的下限 |
 
-让 `transition` 大于最差的后端延迟加上 GC 暂停，否则所有权会在负载下来回转移。
+除非 `renewInterval × 2 ≤ leaseDuration`（截止时刻之前至少能容纳两次续约尝试）且
+`leaseDuration × (1 − drift) − margin > renewInterval`（否则每个任期都会抖动），否则构造会失败。在 Spring Boot 中，它们对应
+[`simba.session.*`](/zh/guide/configuration#properties) 属性。
 
-## 每一步之前检查租约
+如何选择：
 
-分多步运行的工作不应只依赖中断，因为中断可能在某一步进行到一半时才到达。开始每一步之前，先检查租约还剩多少：
+- **`leaseDuration`** 决定崩溃或分区后故障转移的时间上界：只有在会话于后端过期之后，其他节点才能接管租约。越短故障转移越快，
+  但对慢后端调用和 GC 暂停的容忍度越低。
+- **`renewInterval`** 是节点调用后端的频率。一次续约调用在一个续约间隔后超时；失败后，客户端以减半的退避（剩余时间的一半，上限为
+  `renewInterval`，至少 `minBackoff`）重试，直到截止时刻。
+- **`drift`** 和 **`margin`** 只会缩短本地看到的租约；如果主机时钟校准较差，或运行在可能被暂停的虚拟机中，请调大它们。
 
-```kotlin
-@SimbaScheduled(mutex = "settlement", fixedDelay = "30s")
-fun settle(context: ScheduleContext) {
-    for (batch in pendingBatches()) {
-        context.ensureLease(Duration.ofSeconds(2)) // 剩余不超过 2 秒时抛出 LeaseExpiredException
-        ledger.settle(batch, fencingToken = context.fencingToken)
-    }
-}
+## 候选者 {#candidates}
+
+想要某个租约但尚未持有它的节点是 *候选者*。候选者每隔 `renewInterval / 2` 加抖动尝试获取一次。Redis 和 Zookeeper 还会广播释放，
+因此在这两个后端上 leader 正常停止后会被立即接管；在 JDBC 上则由下一次尝试接手。每个选举至多同时有一个获取请求在途。
+
+只有当回复对应选举当前的尝试、在会话的本地截止时刻之前收到、并且 token 大于本会话为该名称释放过的所有 token 时，任期才会被采纳。
+对已放弃的尝试迟到的回复会释放它所赢得的租约。
+
+## Fencing Token {#fencing-tokens}
+
+任期的有效性只是何时 *开始* 一个步骤的提示，从来不能证明没有别人拥有该租约。只有被保护的资源才能拒绝过期的持有者，而它需要 token 才能做到：
+
+1. 每次写入被保护的资源时都传入 `term.token`。
+2. 资源只在 token **不小于** 它已接受的最大 token 时才接受写入，并记录该 token。相等的 token 必须被接受：同一任期内的重试携带相同的 token。
+
+```mermaid
+sequenceDiagram
+autonumber
+    participant A as 节点 A (token 7)
+    participant B as 节点 B (token 8)
+    participant R as 资源
+    A->>A: 被 GC 暂停，会话过期
+    B->>R: write(token 8) 被接受，最大值 = 8
+    A->>R: 醒来后 write(token 7)
+    R-->>A: 拒绝 (7 < 8)
 ```
 
-`ScheduleContext`、`Locker`、`AbstractScheduler` 和 `MutexContendService` 都提供 `leaseRemaining` 与
-`ensureLease(minRemaining)`。在 JDBC 和 Redis 上，剩余时间截止于本地租约看门狗的期限（从发出授予租约的那次调用时算起），
-因此永远不会晚于本节点自行撤销所有权的时刻。在 Zookeeper 上，作为 leader 时为 `MutexContendService.UNBOUNDED_LEASE`。
-剩余时间为正只是 *开始* 一步的理由，不保证能完成它：暂停可能超过剩余时间，因此写入仍然需要 fencing token。
+### 在资源中检查 Token {#checking-tokens-in-the-resource}
 
-## Fencing Token
+检查与写入必须是 **一个原子步骤**。先读取最大 token、再写入，会让过期的持有者通过检查，并在较新的持有者之后完成写入。
 
-本地租约守护能按时结束所有权，但无法阻止进程暂停时已经在运行的工作。一个在 20 秒 GC 暂停开始时正在写入的调度线程，
-会在另一个节点接管之后才完成这次写入。
-
-解决办法属于被保护的资源。每个所有权任期都有一个 **fencing token**，随任期严格递增，在续期时保持不变。每次写入都带上它；
-资源保存已见过的最大 token，并拒绝更小的 token：
-
-```kotlin
-@SimbaScheduled(mutex = "settlement", fixedDelay = "30s")
-fun settle(context: ScheduleContext) {
-    ledger.settle(batch, fencingToken = context.fencingToken)
-}
-```
-
-Token 可通过 `ScheduleContext.fencingToken`、`SimbaScheduler.fencingToken`、`Locker.fencingToken` 和
-`MutexContendService.fencingToken` 获得；当本节点不持有 mutex 或后端不签发 token 时为 `0`。只有资源检查 token，这一保证才成立；
-Simba 无法强制执行。
-
-### 在资源中检查 token
-
-检查和写入必须是 **一个原子步骤**。先读取最大 token 再写入，会让过期的持有者通过检查，并在更新的持有者之后完成写入。
-要接受相等的 token：持有者自己的重试和续期带着同一个 token。
-
-**SQL** —— 一条条件 `UPDATE`；匹配行数为零即表示过期的持有者：
+**SQL** —— 一条条件 `UPDATE`；匹配零行表示过期的持有者：
 
 ```sql
--- 每个资源一次：insert ignore into ledger_state (id) values (?);
+-- once per resource: insert ignore into ledger_state (id) values (?);
 update ledger_state
 set last_batch = ?, fencing_token = ?
 where id = ? and fencing_token <= ?;
 ```
 
-MySQL Connector/J 默认返回匹配行数，因此用相同 token 和相同值重试仍计为 `1`。
+MySQL Connector/J 默认报告匹配的行数，因此使用相同 token 和相同值的重试仍然计为 `1`。
 
-**Redis** —— 一个 Lua 脚本；在 Redis Cluster 上让 token 和值处于同一个哈希槽（`{resource}`）：
+**Redis** —— 一个 Lua 脚本；对于 Redis Cluster，把 token 和值放在同一个哈希槽（`{resource}`）中：
 
 ```lua
 -- KEYS[1] = {resource}:token, KEYS[2] = {resource}:value, ARGV[1] = token, ARGV[2] = value
@@ -120,7 +159,7 @@ redis.call('set', KEYS[2], ARGV[2])
 return 1
 ```
 
-**单个 JVM 内** —— 在同一把锁下检查并写入：
+**在单个 JVM 内** —— 在同一把锁下检查并写入：
 
 ```kotlin
 synchronized(state) {
@@ -131,62 +170,80 @@ synchronized(state) {
 }
 ```
 
-### 验证资源
+### 验证资源 {#verifying-a-resource}
 
-`simba-test` 提供 `FencingSpec`，用于测试你自己资源的 JUnit 测试套件。继承它并实现 `write(resource, fencingToken)` 和
-`highestToken(resource)`。它检查递增和相等的 token 被接受、更小的被拒绝，以及多个写入者竞争时最大的 token 胜出。上面的范式都通过了它（见
-[`JdbcFencingRecipeTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/test/kotlin/me/ahoo/simba/jdbc/JdbcFencingRecipeTest.kt)
-和
-[`RedisFencingRecipeTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-spring-redis/src/test/kotlin/me/ahoo/simba/spring/redis/RedisFencingRecipeTest.kt)）。
+`simba-tck` 提供 `FencingSpec`，这是一个针对你自己资源的 JUnit 测试套件；见
+[测试](/zh/guide/testing#verifying-a-fencing-resource)。上面的示例都能通过它
+（[`JdbcFencingRecipeTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/test/kotlin/me/ahoo/simba/jdbc/JdbcFencingRecipeTest.kt)、
+[`RedisFencingRecipeTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-redis/src/test/kotlin/me/ahoo/simba/redis/RedisFencingRecipeTest.kt)）。
+
+| 后端 | Token 来源 | 注意事项 |
+|---|---|---|
+| JDBC | `simba_lease.token`，每个任期 `+1` | 行永不删除，因此 token 永不重置 |
+| Redis | `simba:lease:{name}` 的 `token` 字段，每个任期 `+1` | 异步复制：[主从切换后可能回退](/zh/guide/backends#token-regression-after-a-failover) |
+| Zookeeper | 租约节点的 `czxid` | 严格递增但不连续 |
+
+## 在每个步骤前检查任期 {#checking-the-term-before-each-step}
+
+除非任期在超过 `minRemaining` 的时间内仍然有效，否则 `term.ensureValid(minRemaining)` 抛出 `LeaseExpiredException`。
+在任期即将结束时不应开始的步骤之前调用它：
 
 ```kotlin
-class LedgerFencingTest : FencingSpec() {
-    override fun write(resource: String, fencingToken: Long): Boolean = ledger.settle(resource, fencingToken)
-    override fun highestToken(resource: String): Long = ledger.fencingToken(resource)
+simba.election("ledger").runWhileLeader { term ->
+    for (batch in batches) {
+        term.ensureValid(Duration.ofSeconds(2))   // expected duration of one batch
+        ledger.settle(batch, fencingToken = term.token)
+    }
 }
 ```
 
-| 后端 | Token 来源 | 注意 |
-|---|---|---|
-| JDBC | `fencing_token` 列，在获取的 `UPDATE` 中递增 | 需要该列（`simba.jdbc.fencing=true`，默认） |
-| Redis | 获取时 `INCR simba:{mutex}:fence` | 只有开启持久化（AOF）才能跨重启保持单调 |
-| Zookeeper | 获胜 latch 节点的 `czxid` | — |
+这会缩小过期持有者开始新工作的窗口，但不能消除它。检查 *之后* 仍可能发生暂停，这就是资源必须检查 token 的原因。
 
-## 主动让出与交接
+## 交接顺序 {#handover-order}
 
-竞争服务和调度器上的 `relinquish(cooldown)` 会放弃所有权但仍保持候选资格，例如在滚动发布前或排空节点时：
+当选举运行着任务（`runWhileLeader`、`schedule`、分区组、`@SimbaScheduled`、`@SimbaPartitioned`）时，`stop()` 和
+`stepDown(cooldown)` 按固定顺序交出租约：
 
-```kotlin
-scheduler.relinquish(Duration.ofMinutes(2)) // 停止工作、释放，两分钟内不参与竞争，之后重新竞争
+```mermaid
+sequenceDiagram
+autonumber
+    participant U as 调用方
+    participant E as 引擎
+    participant W as Leader 任务
+    participant B as 后端
+    U->>E: stop() / stepDown(cooldown)
+    E->>W: 撤销任期 (isValid = false)，中断
+    W-->>E: 任务退出（或任期的本地截止时刻已过）
+    E->>B: release(name, token)
+    E->>U: onRevoked(term, STOPPED / STEPPED_DOWN)，future 完成
 ```
 
-服务保持 `RUNNING`；非持有者只是暂停竞争。再次调用会替换冷却时间，`stop()` 会结束冷却。其他节点接管的速度取决于后端：
+租约会一直保持，直到任务退出或停止时会话的本地截止时刻已过，以先到者为准，因此在旧的运行仍在收尾时，不会有其他节点开始同样的工作。
+因此，忽略中断的任务最多会把交接推迟任期的剩余时间。没有任务的任期会立即释放。
 
-| 后端 | 后继者何时接管 |
+以其他方式失去的任期（截止时刻、被接管、会话过期）不会等待：后端可能已经把租约交给了另一个节点，因此任务会被中断，任期会被立即撤销。
+
+`stepDown(cooldown)` 让选举保持启动状态，但从让位时刻起在 `cooldown` 内不参与竞争：可用于在部署前把领导权从某个节点移走，或排空某个节点。
+`stop()` 则结束选举。
+
+## 回调与生命周期 {#callbacks-and-lifecycle}
+
+- 每个 `onElected(term)` 之后，针对同一任期恰好跟随一个 `onRevoked(term, reason)`。
+- 同一选举的回调按顺序逐个执行，由回调执行器（默认是虚拟线程）之上的串行分发器调度。回调运行时不持有任何内部锁，并且除了通过
+  `stop()` 和 `stepDown()` 的 future 之外，引擎从不等待回调。
+- `stop()` 和 `stepDown()` 返回一个 `CompletionStage<Void>`，在最后一个 `onRevoked` 运行之后完成；`stop()` 完成后，监听器不会再收到任何回调。
+- 当同一名称已在本客户端上启动时，`start(listener)` 抛出 `IllegalStateException`。
+- 阻塞的 `close()` 方法（`Simba`、`LeaderTask`、`LockTerm`、`GroupTask`）在回调或 leader 任务中调用时不会等待，因为那样会等待自己。
+
+## 故障模式 {#failure-modes}
+
+| 场景 | 会发生什么 |
 |---|---|
-| Redis | 立即：释放会广播给所有竞争者。 |
-| Zookeeper | 立即：下一个 latch 节点成为 leader。 |
-| JDBC | 在它下一次计划的尝试时，大约是原租约本应结束的时刻。让出会释放 mutex，但不会缩短故障转移时间。 |
-
-调度器按安全的顺序交接。`SimbaScheduler.stop()`、`relinquish(cooldown)` 以及 `AbstractScheduler` 的对应方法，会先取消工作，
-再等待正在进行的运行返回。等待时间最多为剩余租约（租约不限期时为 30 秒）。之后才释放 mutex，因此后继者不会在本节点的运行
-尚未结束时开始。超过等待时间仍在运行的工作不会再推迟释放，它的写入仍然需要 fencing token（[ADR 0008](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0008-relinquish-and-handover.md)）。
-
-## 故障模式
-
-| 事件 | 结果 |
-|---|---|
-| 持有者进程崩溃 | 租约耗尽；另一个节点在 `transitionAt` + 抖动时获取（Zookeeper：会话超时后）。 |
-| 持有者调用 `stop()` | 投递 `onReleased` 并释放租约；Redis 和 Zookeeper 的竞争者立即接管，JDBC 竞争者在下一次轮询时接管。 |
-| 持有者暂停（GC、stop-the-world）超过 `transition` | 另一个节点获取。暂停的节点恢复时，看门狗已撤销其所有权，但进行中的工作仍会完成：**请使用 fencing token**。 |
-| 后端不可达 | 持有者在租约有效期内保持所有权，之后撤销。后端恢复前没有任何持有者。 |
-| 后端变慢 | 在租约内重试续期；若租约结束前都没有成功，则撤销所有权。 |
-| Redis 主节点在复制前故障转移 | 两个节点可能同时持有租约。来自持久化计数器的 fencing token 仍会拒绝旧的那个。 |
-| 节点时钟跳变 | 对 JDBC（数据库时间）和看门狗（单调时钟）无影响。在 Redis 上，节点对 `transitionAt` 的估计会偏移，只影响它何时重试。 |
-
-## 回调与生命周期
-
-- `onAcquired` / `onReleased` 在 handle executor 上运行，每个竞争者一次一个且按顺序；从不在内部锁内执行。
-- 如果竞争者持有 mutex，`stop()` 总会投递最后一次 `onReleased`，并在其执行完毕后返回。不要在持有回调也会获取的锁时调用 `stop()`。
-- 服务可以用同一个 contender id 重启；之前 `start()` 产生的通知会被丢弃。
-- `SimbaScheduler` 的工作在 `onReleased` 时被中断；忽略中断的工作会一直运行到返回，这也是需要传递 fencing token 的另一个原因。
+| Leader 进程崩溃 | 其会话在 `leaseDuration`（Zookeeper：会话超时）之后过期；候选者在下一次尝试时获取。 |
+| Leader 正常停止 | 任务退出，租约被释放；Redis 和 Zookeeper 的候选者立即获取，JDBC 的候选者在下一次尝试时获取。 |
+| 后端不可达 | 会话进入 `SUSPENDED`，续约按退避重试；到达本地截止时刻时，该节点的每个任期都被撤销（`DEADLINE_PASSED`），后端恢复响应后打开新会话。在此期间不会有任何东西继续以 leader 身份运行。 |
+| 后端报告会话已过期 | 每个任期都被撤销（`SESSION_EXPIRED`），打开新会话，重新竞争。 |
+| Leader 暂停时间超过租约（GC、虚拟机冻结） | 醒来时 `term.isValid` 已为 `false`；引擎撤销该任期。已经在途的写入仍可能落地：[fencing token](#fencing-tokens) 是唯一的防线。 |
+| 续约显示租约被他人拥有 | 任期被撤销（`TAKEN_OVER`）。 |
+| 时钟速率差异超过 `drift` | 安全性论证不再成立；请调大 `drift`。 |
+| Redis 主从切换丢失最近的写入 | Token 可能回退；见 [后端](/zh/guide/backends#token-regression-after-a-failover)。 |

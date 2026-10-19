@@ -1,105 +1,109 @@
 ---
-title: Configuration
-description: Every simba.* Spring Boot property, the callback executor, and the backend factories for use without Spring.
+title: Spring Boot
+description: Every simba.* property, the beans the Spring Boot starter creates, the shutdown order, and how to build the Simba client without Spring.
 ---
 
-# Configuration
+# Spring Boot
 
-For what `ttl` and `transition` mean and how to choose them, read [Correctness](/guide/correctness#choosing-ttl-and-transition).
+`simba-spring-boot-starter` builds one `Simba` client over the backend on the classpath, runs `@SimbaScheduled` and
+`@SimbaPartitioned` methods, and adds Micrometer metrics, the `simba` Actuator endpoint and the `simba` health
+indicator.
 
-## Spring Boot Properties
+## Properties
 
 | Property | Default | Description |
 |---|---|---|
-| `simba.enabled` | `true` | Master switch for all Simba auto-configuration. |
-| `simba.backend` | — | `jdbc`, `redis` or `zookeeper`. Required when more than one backend is active; startup fails otherwise. Must name an active backend. |
-| `simba.jdbc.enabled` | `true` | Enable the JDBC backend. |
-| `simba.jdbc.initial-delay` | `0s` | Delay before the first contention after `start()`. |
-| `simba.jdbc.ttl` | `10s` | Lease length until the owner renews. Also used as the JDBC statement timeout. |
-| `simba.jdbc.transition` | `6s` | Grace period after `ttl` in which only the owner may renew. |
-| `simba.jdbc.fencing` | `true` | Issue fencing tokens from the `fencing_token` column; set `false` for tables without it. |
-| `simba.redis.enabled` | `true` | Enable the Redis backend. |
-| `simba.redis.ttl` | `10s` | Lease length until the owner renews. |
-| `simba.redis.transition` | `6s` | Grace period after `ttl` in which only the owner may renew. |
-| `simba.zookeeper.enabled` | `true` | Enable the Zookeeper backend. Timing is governed by the Curator session. |
-| `simba.scheduling.enabled` | `true` | Run `@SimbaScheduled` methods and `SimbaScheduler` beans with the application context. |
-| `simba.metrics.enabled` | `true` | Record Micrometer metrics when a `MeterRegistry` bean exists; see [Observability](/guide/observability). |
+| `simba.enabled` | `true` | Enables the whole auto-configuration |
+| `simba.backend` | — | `jdbc`, `redis` or `zookeeper`; required when several backend modules are active |
+| `simba.session.lease-duration` | `15s` | The backend expires the session this long after its last keep-alive |
+| `simba.session.renew-interval` | `lease-duration / 3` | Keep-alive period; at most half of the lease duration |
+| `simba.session.drift` | `0.01` | Upper bound of the clock rate difference between a node and the backend, in `[0, 0.5)` |
+| `simba.session.margin` | `50ms` | Extra safety subtracted from every local deadline |
+| `simba.jdbc.enabled` | `true` | Enables the JDBC backend |
+| `simba.jdbc.dialect` | detected | `mysql` or `postgresql`; detected from the `DataSource` when unset |
+| `simba.jdbc.query-timeout` | renew interval | Per-statement timeout |
+| `simba.redis.enabled` | `true` | Enables the Redis backend |
+| `simba.redis.wait-replicas` | `0` | When positive, a new term counts only once that many replicas acknowledged it (`WAIT`); not on a Cluster |
+| `simba.redis.wait-timeout` | `1s` | How long `WAIT` waits |
+| `simba.redis.route-by-slot` | `true` on a Cluster | Split script calls by hash slot |
+| `simba.zookeeper.enabled` | `true` | Enables the Zookeeper backend |
+| `simba.zookeeper.connect-string` | `localhost:2181` | Ensemble the backend opens its sessions on |
+| `simba.zookeeper.root` | `/simba` | Parent path of the lease and group nodes |
+| `simba.zookeeper.connection-timeout` | `15s` | How long opening a session may take |
+| `simba.scheduling.enabled` | `true` | Runs `@SimbaScheduled` and `@SimbaPartitioned` methods |
+| `simba.metrics.enabled` | `true` | Records Micrometer metrics when a `MeterRegistry` bean exists |
+| `management.health.simba.enabled` | `true` | The `simba` health indicator |
 
-Durations accept Spring Boot formats (`10s`, `500ms`, `PT1M`). `ttl` must be positive, `transition` and
-`initial-delay` must not be negative.
+The session properties are explained in [Concepts and Correctness](/guide/correctness#timing); invalid combinations
+fail startup. A typical configuration:
+
+```yaml
+simba:
+  backend: redis            # only needed with several backend modules on the classpath
+  session:
+    lease-duration: 15s
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,simba
+```
 
 ## Beans the Starter Creates
 
-| Bean | Condition | Override or disable |
-|---|---|---|
-| `MutexContendServiceFactory` | The selected backend's infrastructure bean exists: a single `DataSource`, a `StringRedisTemplate`, or a `CuratorFramework` | Defining your own `MutexContendServiceFactory` |
-| `MutexOwnerRepository` (JDBC) | A single `DataSource` | Defining your own `MutexOwnerRepository` |
-| `RedisMessageListenerContainer` (Redis) | A single `RedisConnectionFactory` | Defining your own container |
-| `simbaHandleExecutor` | Always | A bean with the same name |
-| `MicrometerContendObserver` | Micrometer and a `MeterRegistry` bean | `simba.metrics.enabled=false` |
-| `SimbaEndpoint` | Actuator, endpoint enabled and exposed | Actuator `management.*` properties |
-| `SimbaHealthIndicator` | Spring Boot health support | `management.health.simba.enabled=false` |
+| Bean | Condition |
+|---|---|
+| `LeaseBackend` (`JdbcLeaseBackend`, `RedisLeaseBackend` or `ZookeeperLeaseBackend`) | The backend is active and the application defines no `LeaseBackend`; JDBC needs a single `DataSource`, Redis a single `RedisConnectionFactory` |
+| `Simba` | A `LeaseBackend` bean exists; built with `simba.session.*` and every `SimbaEventListener` bean |
+| `SimbaLifecycle` | Closes the client on shutdown |
+| `SimbaScheduledBeanPostProcessor` | `simba.scheduling.enabled` |
+| `MicrometerSimbaEventListener` | Micrometer on the classpath, a `MeterRegistry` bean, `simba.metrics.enabled` |
+| `SimbaEndpoint` (`simba`) | Actuator on the classpath and the endpoint available (enabled and exposed) |
+| `SimbaHealthIndicator` (`simba`) | Actuator on the classpath and `management.health.simba.enabled` |
 
-Every `ContendObserver` bean in the context is passed to the backend factory, in `@Order`.
+Every bean is `@ConditionalOnMissingBean`: define your own to replace it. To customize the client beyond the
+properties (executors, a fixed seed), define the `Simba` bean yourself with `Simba.builder()`.
 
-### Callback Executor
+## Annotated Methods
 
-`onAcquired` and `onReleased` run on `simbaHandleExecutor`, a dedicated daemon pool whose idle threads are reclaimed.
-Callbacks of one contender never run concurrently, so the pool grows only with the number of contenders notified at
-the same moment. To use your own executor:
+`@SimbaScheduled` runs a bean method on the leader of an election; `@SimbaPartitioned` runs it for every partition of
+a group this node leads. Both start after the context refreshed and stop on shutdown. Their attributes and method
+signatures are on the [Leader Work](/guide/leader-work#spring-annotations) page.
 
-```kotlin
-@Bean(name = [SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME]) // "simbaHandleExecutor"
-fun simbaHandleExecutor(): ExecutorService = Executors.newFixedThreadPool(2)
-```
+## Shutdown Order
+
+1. `SimbaScheduledBeanPostProcessor` (phase `DEFAULT_PHASE`) stops every annotated method: work is interrupted, and
+   each lease is released once its work exited (see [Handover Order](/guide/correctness#handover-order)).
+2. `SimbaLifecycle` (phase `DEFAULT_PHASE - 4096`) then closes the `Simba` client, which revokes every remaining term,
+   closes the session and frees its leases, before lower-phase infrastructure such as connection factories stops.
+
+Elections and locks you started yourself should be stopped before that, e.g. in a `ContextClosedEvent` listener;
+closing the client stops them anyway.
 
 ## Without Spring
 
-Each backend has a factory. Factories of polling backends own a scheduler (contention triggers and lease watchdogs) and
-an I/O executor (backend calls), both daemon and idle-reclaimed; `close()` the factory on shutdown. Without
-`handleExecutor`, callbacks run on `ForkJoinPool.commonPool()`; pass a dedicated executor if callbacks may block.
+Build the client with `Simba.builder()`:
 
-::: code-group
-
-```kotlin [JDBC]
-val factory = JdbcMutexContendServiceFactory(
-    mutexOwnerRepository = JdbcMutexOwnerRepository(
-        dataSource,
-        queryTimeout = Duration.ofSeconds(10), // default: no timeout
-        fencing = true
-    ),
-    handleExecutor = callbackExecutor,
-    initialDelay = Duration.ZERO,
-    ttl = Duration.ofSeconds(10),
-    transition = Duration.ofSeconds(6),
-    observer = myObserver // optional
-)
+```kotlin
+val simba = Simba.builder()
+    .backend(JdbcLeaseBackend.mysql(dataSource, queryTimeout = Duration.ofSeconds(5)))
+    .config(SimbaConfig(leaseDuration = Duration.ofSeconds(15), renewInterval = Duration.ofSeconds(5)))
+    .listener(myEventListener)
+    .build()
 ```
 
-```kotlin [Redis]
-val listenerContainer = RedisMessageListenerContainer().apply {
-    setConnectionFactory(connectionFactory)
-    afterPropertiesSet()
-    start()
-}
-val factory = SpringRedisMutexContendServiceFactory(
-    ttl = Duration.ofSeconds(10),
-    transition = Duration.ofSeconds(6),
-    redisTemplate = StringRedisTemplate(connectionFactory),
-    listenerContainer = listenerContainer,
-    handleExecutor = callbackExecutor,
-    observer = myObserver // optional
-)
-```
+| Builder method | Default | Description |
+|---|---|---|
+| `backend(LeaseBackend)` | required | The backend; the client does not close it |
+| `config(SimbaConfig)` | `SimbaConfig()` | Session timing, see [Timing](/guide/correctness#timing) |
+| `listener(SimbaEventListener)` | none | Receives every [`SimbaEvent`](/guide/observability#events); may be called several times |
+| `ioExecutor(Executor)` | a virtual thread per call | Runs backend calls |
+| `callbackExecutor(Executor)` | virtual threads | Runs leadership callbacks, serially per election |
+| `workExecutor(Executor)` | a virtual thread per term | Runs leader work |
+| `ticker(Ticker)` | `System.nanoTime()` | Monotonic clock; must advance at the rate of `System.nanoTime()` |
+| `seed(Long)` | random | Seed of the retry jitter |
 
-```kotlin [Zookeeper]
-val factory = ZookeeperMutexContendServiceFactory(
-    handleExecutor = callbackExecutor,
-    curatorFramework = curatorFramework, // already started
-    observer = myObserver // optional
-)
-```
-
-:::
-
-All factory and service constructors are `@JvmOverloads`, so Java callers can omit trailing optional parameters.
+Create **one client per process**. Several clients in one process are several sessions: useful only to isolate
+groups of leases from each other's renewal failures, at the cost of one keep-alive each. `close()` (or
+`closeAsync()`) revokes every term, closes the session and completes after the last callback ran; close the backend
+afterwards.

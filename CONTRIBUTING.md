@@ -13,7 +13,7 @@ Thanks for helping. This page is the contract for changes; the [contributor guid
 1. **Discuss first** for anything beyond a small fix: open an issue with the problem and acceptance criteria. Design decisions are recorded as ADRs in `docs/adr/`.
 2. **Branch** from `main` (`feat/...`, `fix/...`, `docs/...`). Branches are short-lived; `main` is always releasable and only changes through pull requests.
 3. **Commit and title** with [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): summary`, lowercase type, no trailing period. Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`, `style`, `revert`. Add `!` (`refactor(core)!: ...`) for breaking changes. The `Labeler` workflow checks the PR title and labels the PR, which drives the release notes.
-4. **Test** every behavior change with focused, deterministic tests (latches/futures, no sleeps). Backend semantics go through the TCK `MutexContendServiceSpec`.
+4. **Test** every behavior change with focused, deterministic tests (latches/futures, no sleeps). Backend semantics go through the TCK `LeaseBackendSpec`; engine changes keep `SimulationSpec` green.
 5. **Document** in English and Chinese (README, wiki). Regenerate `wiki/llms-full.txt` with `pnpm run sync:llms`. Update `AGENTS.md` when an invariant changes.
 6. **Review**: CODEOWNERS are requested automatically. A pull request merges (squash) only when all required checks pass and review comments are resolved.
 

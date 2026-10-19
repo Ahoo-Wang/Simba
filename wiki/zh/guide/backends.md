@@ -1,107 +1,154 @@
 ---
 title: 后端
-description: JDBC、Redis 和 Zookeeper 后端如何存储租约、各自需要什么，以及各自如何失效。
+description: JDBC（MySQL、PostgreSQL）、Redis 和 Zookeeper 后端如何存储会话、租约和组成员，fencing token 从何而来，以及如何运维各个后端。
 ---
 
 # 后端
 
-所有后端都实现同一份契约（见 [正确性](/zh/guide/correctness)），并由共享的 [TCK](/zh/contributing/#后端-tck) 验证。
-它们的区别在于租约存放在哪里、由哪个时钟决定，以及后端自身故障时会发生什么。
+每个后端都实现同一个 `LeaseBackend` SPI，并通过同一套 [TCK](/zh/guide/testing#backend-tck)，因此选举、锁和组在所有后端上的行为都相同。
+它们的区别在于存储方式、在哪里测量时间，以及 fencing token 的持久性。
 
-## JDBC（MySQL）
+每个后端都遵循相同的规则：会话在其租约时长内未续约即过期；过期的会话永不复活；租约只在其会话存活期间属于该会话；租约的 token 大于零，
+随每个新任期严格递增且永不重置；所有剩余时间都由后端的时钟测量，并以时长的形式返回。
 
-**存储。** `simba_mutex` 中每个 mutex 一行。用
-[`init-simba-mysql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/init-simba-mysql.sql)
-建表一次即可；行在首次使用时插入。
+## JDBC (MySQL 8, PostgreSQL 14+) {#jdbc-mysql-8-postgresql-14}
 
-```sql
-create table if not exists simba_mutex
-(
-    mutex         varchar(66)     not null primary key comment 'mutex name',
-    acquired_at   bigint unsigned not null,
-    ttl_at        bigint unsigned not null,
-    transition_at bigint unsigned not null,
-    owner_id      varchar(128)    not null,
-    version       int unsigned    not null,
-    fencing_token bigint unsigned not null default 0
-);
+模块 `simba-jdbc`，类 `JdbcLeaseBackend`，配合一个 `Dialect`（`Dialect.MYSQL`、`Dialect.POSTGRESQL`）：
+
+```kotlin
+val backend = JdbcLeaseBackend.mysql(dataSource)      // or JdbcLeaseBackend.postgres(dataSource)
 ```
 
-**获取与续期** 是同一条条件 `UPDATE`，使用数据库时钟求值：当租约已结束（`transition_at < now`），或调用者已经持有且租约未结束时成功。
-随后在同一事务中读回该行以及数据库时间（`current_at`），因此租约判断从不比较不同机器的挂钟。
+### 表结构 {#schema}
 
-**Fencing token** 来自 `fencing_token` 列，只在新任期开始时于该 `UPDATE` 中递增。默认开启（`simba.jdbc.fencing=true`）。
-3.3 之前创建的表需要执行
-[`upgrade-simba-mysql-fencing-token.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/upgrade-simba-mysql-fencing-token.sql)，
-或设置 `simba.jdbc.fencing=false`。
-
-**运维要点**
-
-- SQL 是 MySQL 专用的（`unix_timestamp(current_timestamp(3))`、`if(...)`、`SET` 从左到右求值）。
-- 竞争者靠轮询：正常 `stop()` 后，下一个持有者在其下一次计划的尝试时接管，而不是立即接管。
-- Starter 把语句超时设为 `simba.jdbc.ttl`，因此挂起的查询阻塞竞争的时间不会超过一个租约。
-- 数据库不可用：持有者在租约有效期内保持所有权，之后在本地撤销。数据库恢复前没有任何持有者。
-
-## Redis
-
-**存储。** 每个 mutex 三个键，共享 `{mutex}` hash tag，因此位于同一个集群 slot：
-
-| 键 | 内容 | 过期 |
-|---|---|---|
-| `simba:{mutex}` | 持有者的 contender id；同时是 pub/sub 频道 | `ttl + transition` |
-| `simba:{mutex}:fence` | Fencing 计数器 | 永不过期 |
-| `simba:{mutex}:token` | 当前任期的 fencing token | 随租约过期 |
-
-**获取** 是 Lua 脚本中的 `SET NX PX`，成功时递增计数器并发布 `acquired@@{contenderId}`。**续期** 是仅由持有者执行的 `SET XX PX`。
-**释放** 删除租约并发布 `released@@{contenderId}`，使所有已订阅的竞争者立即参与竞争。每个节点根据键的 `PTTL` 和本地时钟推算 `transitionAt`。
-
-**运维要点**
-
-- **持久化对 fencing 很重要。** 只有当计数器被持久化（AOF 配合 `appendfsync always` 或等效配置）时，它才会在 Redis 重启后继续递增。
-  没有持久化时，重启会重置计数器，token 可能回退。
-- 复制是异步的：故障转移到一个尚未同步最新 `SET` 的副本时，可能授予第二个租约。如果这很重要，请使用 fencing token，或使用同步复制的后端。
-- 混合版本：4.x 节点要求同一 mutex 的所有节点都运行 Simba 3.2 或更高版本。
-
-## Zookeeper
-
-**存储。** 位于 `/simba/{mutex}` 的 Curator `LeaderLatch`：每个竞争者创建一个临时顺序节点，序号最小者成为 leader。
-没有 TTL：`ttl` 和 `transition` 不适用，leader 关闭 latch 或会话过期时领导权结束。需要提供一个已启动的 `CuratorFramework` bean；
-starter 不会创建它。
-
-**Fencing token** 是获胜 latch 节点的 `czxid`。ZooKeeper 事务 id 在整个集群内单调递增，因此每个新 leader 都会得到更大的 token。
-（节点序号不可用：父节点是容器节点，为空时会被 ZooKeeper 删除，序号随之重新开始。）
-
-**运维要点**
-
-- 崩溃后的故障转移时间取决于 `CuratorFramework` 上配置的会话超时。
-- 连接中断（`SUSPENDED`）时 Curator 会撤销领导权；节点重连后重新竞争，并获得新的 token。
-- 在 Zookeeper 上 Simba 只观察自己的领导权：非 leader 不知道谁是 leader，它们的 [`simba` 端点](/zh/guide/observability#actuator-端点)
-  不显示当前持有者。由于竞争由 Curator 执行，不会上报竞争指标。
-
-## 分区调度的成员注册
-
-`SimbaPartitionedScheduler` 需要知道哪些节点存活。每个后端都提供一个 `MemberRegistry`，starter 会把它注册为 bean（[ADR 0009](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0009-partitioned-leadership.md)）。
-
-| 后端 | 存储 | 过期 |
-|---|---|---|
-| JDBC | `simba_member` 表，每个成员一行 | `expire_at` 使用数据库时间，由心跳刷新 |
-| Redis | 有序集合 `simba:{group}:members`，分数为过期时间 | Redis `TIME`，每次心跳和读取时清理 |
-| Zookeeper | 临时节点 `/simba-members/{group}/{memberId}` | 随 Curator 会话结束 |
-
-JDBC 表已包含在 `init-simba-mysql.sql` 中。已有的库请执行 [`upgrade-simba-mysql-member.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/upgrade-simba-mysql-member.sql)。只有分区调度需要这张表，
-mutex 不依赖它。
+使用对应数据库的脚本创建这三张表（只需一次）：
+[`init-simba-mysql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-mysql.sql)
+或
+[`init-simba-postgresql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-postgresql.sql)
+（两者都在 classpath 的 `me/ahoo/simba/jdbc/` 下）。MySQL 版本：
 
 ```sql
+create table if not exists simba_session
+(
+    session_id char(32) character set ascii collate ascii_bin not null primary key,
+    expires_at bigint                                        not null comment 'database time, epoch ms',
+    metadata   varchar(1024)                                 not null default ''
+);
+
+create table if not exists simba_lease
+(
+    name       varchar(128) character set ascii collate ascii_bin not null primary key,
+    session_id char(32) character set ascii collate ascii_bin     not null default '' comment 'empty = free',
+    token      bigint                                             not null comment 'term number, never reset',
+    index idx_lease_session (session_id)
+);
+
 create table if not exists simba_member
 (
-    group_name varchar(66)     not null,
-    member_id  varchar(128)    not null,
-    expire_at  bigint unsigned not null,
-    primary key (group_name, member_id)
+    group_name varchar(128)                                  not null,
+    session_id char(32) character set ascii collate ascii_bin not null,
+    primary key (group_name, session_id),
+    index idx_member_session (session_id)
 );
 ```
 
-## 在 Spring Boot 中选择后端
+| 表 | 每行对应 | 说明 |
+|---|---|---|
+| `simba_session` | 会话 | `expires_at` 为数据库时间；每次续约一条 `UPDATE` 即可为会话续期，并由此为该节点的每个租约和组成员身份续期 |
+| `simba_lease` | 曾被获取过的租约名称 | 永不删除，因此 token 永不重置；释放会把 `session_id` 置为 `''` 并保留 token |
+| `simba_member` | 组成员 | 仅在其会话存活期间有效 |
 
-当后端模块位于 classpath、`simba.enabled` 与 `simba.<backend>.enabled` 为 `true`（默认）并且其基础设施 bean 存在时，该后端被激活。
-如果激活了多个后端模块，请设置 `simba.backend=jdbc|redis|zookeeper`；否则启动失败，而不是依赖自动配置的顺序。
+租约名称区分大小写（MySQL 上为二进制排序规则，PostgreSQL 上为 `"C"`）。
+
+### 工作原理 {#how-it-works}
+
+- 只有当 `session_id` 所指会话的 `expires_at` 在未来时，租约才属于该会话。获取是一条 upsert：当行空闲或其会话已过期时占有该行，并把
+  `token` 加一。在 MySQL 上，`token` 的赋值在 `SET` 中排在最前，因为 MySQL 按从左到右的顺序、使用已更新的值求值 `SET`。
+- 每次时间比较都使用数据库自身的时钟（`now`，以 epoch 毫秒表示，在一条语句内不变），因此应用主机的时钟从不影响结果。
+- 过期会话被惰性清理：过期会话的租约对下一个获取者空闲，发现自己会话已过期的续约会将其删除。`JdbcLeaseBackend.purgeExpired()`
+  删除剩余的部分；如果大量短生命周期的进程留下了残余行，请不时调用它。
+
+### 运维说明 {#operating-notes}
+
+- 释放不会通知任何人：正常停止后，候选者在下一次尝试（`renewInterval / 2` 加抖动）时接管。
+- 每条语句都有超时；starter 将其设为会话的续约间隔（`simba.jdbc.query-timeout`），超过之后引擎无论如何都会放弃该调用。
+- 为 Simba 提供一个不会被应用耗尽的连接池：等待连接超过续约间隔的续约会被视为失败。
+
+## Redis 7 {#redis-7}
+
+模块 `simba-redis`（与驱动无关，Lua 脚本位于 `RedisScripting` 端口之后）和 `simba-spring-redis`
+（`SpringRedisScripting`，Spring Data Redis 适配器）：
+
+```kotlin
+val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
+```
+
+### 键 {#keys}
+
+| 键 | 类型 | 内容 |
+|---|---|---|
+| `simba:lease:{name}` | 哈希，永不过期 | `session`、`token`、`expires`（Redis `TIME`）；释放只清除 `session`，因此 token 永不重置 |
+| `simba:session:{sid}` | 哈希，`PX` = 租约时长 | 会话；一旦它消失，续约、获取和加入组都会失败 |
+| `simba:session:{sid}:leases` | 集合，同一槽 | 会话的租约 |
+| `simba:session:{sid}:groups` | 集合，同一槽 | 会话加入的组 |
+| `simba:group:{group}` | 有序集合 | 成员（会话 id），以 Redis 时间下的过期时刻为分数 |
+
+释放会在租约键的频道（`simba:lease:{name}`）上发布 `released`；这是唯一的广播，让候选者能够立即接管。所有时间判断都在脚本内使用 Redis `TIME`。
+
+新任期的持续时间与其会话相同，而续约只延长节点仍持有的租约，因此即使会话键比租约存活得更久，租约也会自行过期。
+
+### Cluster {#cluster}
+
+在 Redis Cluster 上（`RedisScripting.clustered`，或 `simba.redis.route-by-slot=true`），每次脚本调用都限定在一个哈希槽内：
+一次调用先访问会话所在的槽，然后为其余键的每个槽各运行一个脚本。此时租约和会话所在的槽可能位于时钟不同的节点上；它们之间的时钟偏差会让租约缩短或延长相应的时长。
+
+### 主从切换后 token 回退 {#token-regression-after-a-failover}
+
+Redis 复制是异步的。当主节点在副本收到最新的 `token` 递增之前故障时，被提升的副本可能分配一个已经用过的 token，或更小的 token。
+此时检查 token 的资源可能接受一个任期在时间上更新但 token 更小的节点的写入，或拒绝合法的持有者。
+
+- 设置 `simba.redis.wait-replicas`（构造参数 `waitReplicas`）：只有当这么多副本通过 `WAIT` 确认后，新任期才算数，否则获取失败。
+  这会缩小窗口，但不能消除它，并且在 Cluster 上不可用。
+- 启用持久化（AOF），使单节点重启不会重置 token。
+- 当 fencing 必须严格时，使用 JDBC 或 Zookeeper。
+
+## Zookeeper {#zookeeper}
+
+模块 `simba-zookeeper`，类 `ZookeeperLeaseBackend`：
+
+```kotlin
+val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba")
+```
+
+### 节点 {#nodes}
+
+| 路径 | 类型 | 内容 |
+|---|---|---|
+| `{root}/leases/{name}` | 临时节点 | 会话 id；持有者是节点的 `ephemeralOwner`，token 是其 `czxid` |
+| `{root}/groups/{group}/{sessionId}` | 临时节点，位于容器节点之下 | 组成员 |
+
+`root` 默认为 `/simba`。
+
+### 工作原理 {#how-it-works-1}
+
+- 一个 Simba 会话就是一个 Zookeeper 会话：后端为每个会话打开一个专用的 Zookeeper 客户端（不使用共享的 Curator 客户端），并且从不把它重连到另一个会话。
+  `SessionId` 是以 16 位十六进制数字表示的 Zookeeper 会话 id。
+- Token 是租约节点的 `czxid`：由于 zxid 是全局的，它在任期之间严格递增，但不连续。
+- 释放会删除该节点；候选者 watch 该节点并立即接管。组成员的变化同样会被 watch。
+- Zookeeper 客户端会自行发送心跳，因此一个本地看门狗会关闭在租约时长内没有被续约的会话：停止续约的节点永远不会仅靠心跳保住自己的租约。
+- 剩余时间为 `min(leaseDuration, 协商后的会话超时)`。客户端断开连接期间，续约和获取都会失败，因此本地截止时刻会耗尽；当 Zookeeper
+  报告会话过期时，会话为 `Expired`。
+
+### 运维说明 {#operating-notes-1}
+
+- 请求的会话超时为 `leaseDuration`；集群会将其限制在 `[minSessionTimeout, maxSessionTimeout]` 之内（默认为 2 到 20 个 tick）。
+  崩溃后的故障转移需要协商后的超时时长。
+- `simba.zookeeper.connection-timeout` 限制打开会话所需的最长时间。
+
+## 在 Spring Boot 中选择后端 {#selecting-a-backend-in-spring-boot}
+
+当后端模块在 classpath 上、`simba.enabled` 和 `simba.<backend>.enabled` 不为 `false`、并且 `simba.backend` 未设置或指向它时，
+对应后端的自动配置生效。除非应用自己定义了 `LeaseBackend` bean，否则它会定义该 bean。
+
+当 classpath 上有多个后端模块时，请设置 `simba.backend=jdbc|redis|zookeeper`；否则启动会失败，`simba.backend` 指向一个未生效的后端时也会失败。
+要使用 starter 不负责配置的后端（或你自己的 `LeaseBackend`），请自行定义 `LeaseBackend` bean。见 [Spring Boot](/zh/guide/configuration)。

@@ -1,61 +1,113 @@
 ---
 title: 可观测性
-description: Micrometer 指标、只读的 simba Actuator 端点、告警规则以及自定义 ContendObserver。
+description: 用 snapshot() 读取客户端状态，接收 SimbaEvent，使用 Micrometer 指标与告警规则、simba Actuator 端点和 simba 健康指示器。
 ---
 
 # 可观测性
 
-Simba 通过 `ContendObserver` 报告每个 mutex 上发生的事件。使用 Spring Boot 时，starter 会把这些事件记录为 Micrometer 指标，并通过 Actuator 端点提供当前状态。
+Simba 通过两种方式报告它在做什么：会话和每个选举在某一时刻的 `snapshot()`，以及 `SimbaEvent` 事件流。
+Spring Boot starter 基于快照构建 Actuator 端点和健康指示器，基于事件构建 Micrometer 指标。
 
-## Micrometer 指标
+## 快照 {#snapshot}
 
-应用中存在 `MeterRegistry` bean 时（例如引入了 `spring-boot-starter-actuator`）自动生效；设置 `simba.metrics.enabled=false` 可关闭。
+`simba.snapshot()` 返回在引擎循环上读取的 `SimbaSnapshot`；它从不调用后端。
+
+| 字段 | 含义 |
+|---|---|
+| `session.id` | 当前的 `SessionId`，没有打开的会话时为 `null` |
+| `session.status` | `OPENING`、`LIVE`、`SUSPENDED` 或 `CLOSED` |
+| `session.validFor` | 距会话本地截止时刻的剩余时间 |
+| `session.notLiveFor` | 会话不处于 `LIVE` 的时长（从启动起，或从上次存活起）；存活时为零 |
+| `elections[]` | 每个已启动的选举（包括锁、调度和分区）：`name`、`status`、`token`、`remaining` |
+| `leaseDuration` | 配置的会话租约 |
+| `healthy` | `notLiveFor ≤ leaseDuration` |
+
+选举的 `status` 为 `CANDIDATE`（竞争中）、`LEADER`（持有有效任期）、`COOLDOWN`（已让位，等待冷却期结束）或
+`HANDOVER`（已停止或已让位，等待其任务退出后再释放租约）。没有任期时 `token` 和 `remaining` 为 `0`。
+
+## 事件 {#events}
+
+通过 `Simba.builder().listener(...)` 注册 `SimbaEventListener`，或在使用 starter 时将其声明为 bean。事件从引擎循环上发布：
+监听器要快速且线程安全；异常会被记录日志并忽略。
+
+| `SimbaEvent` | 触发时机 |
+|---|---|
+| `SessionOpened(session)` | 打开了一个新会话 |
+| `SessionRenewed(session, latency)` | 一次续约 (keep-alive) 成功 |
+| `SessionSuspended(session, cause)` | 一次续约 (keep-alive) 在本地截止时刻之前失败 |
+| `SessionExpired(session, reason)` | 会话结束：截止时刻已过，或后端报告其已过期 |
+| `Elected(name, token)` | 本节点获得了一个任期 |
+| `Revoked(name, token, reason)` | 一个任期结束 |
+| `AcquireFailed(name, cause)` | 一次获取调用失败（不包括“被他人持有”，那是正常情况） |
+| `WorkCompleted(name, token, outcome, duration, cause)` | leader 任务的一次运行结束：`COMPLETED`、`FAILED` 或 `CANCELLED` |
+
+```kotlin
+@Component
+class AuditListener(private val audit: Audit) : SimbaEventListener {
+    override fun onEvent(event: SimbaEvent) {
+        when (event) {
+            is SimbaEvent.Elected -> audit.record("leader", event.name.value, event.token)
+            is SimbaEvent.Revoked -> audit.record("revoked", event.name.value, event.reason)
+            else -> Unit
+        }
+    }
+}
+```
+
+## Micrometer 指标 {#micrometer-metrics}
+
+classpath 上有 Micrometer 且存在 `MeterRegistry` bean 时，starter 注册 `MicrometerSimbaEventListener`
+（用 `simba.metrics.enabled=false` 禁用）：
 
 | 指标 | 类型 | 标签 | 含义 |
 |---|---|---|---|
-| `simba.mutex.owner` | Gauge | `mutex` | 本节点持有该 mutex 的竞争者数量：leader 上为 `1`，其他节点为 `0`。 |
-| `simba.mutex.ownership.changes` | Counter | `mutex`、`change` = `acquired` / `released` | 本节点获得或失去 leader 身份的次数。 |
-| `simba.mutex.contend` | Timer | `mutex`、`operation` = `acquire` / `renew`、`outcome` = `owner` / `other` / `failed` | 后端往返：延迟和失败率。 |
-| `simba.mutex.lease.expired` | Counter | `mutex` | 租约到期仍未续期成功、本地身份被撤销的次数。 |
-| `simba.scheduler.work` | Timer | `mutex`、`outcome` = `success` / `failed` / `interrupted` | `@SimbaScheduled` / `SimbaScheduler` 任务的执行情况。 |
+| `simba.session.renew` | Timer | — | 成功续约 (keep-alive) 的延迟 |
+| `simba.session.state` | Gauge | `state`（`opening`、`live`、`suspended`、`closed`） | 当前会话状态对应的值为 `1` |
+| `simba.leadership` | Gauge | `name` | 本节点持有该名称的任期时为 `1` |
+| `simba.revocations` | Counter | `name`、`reason` | 已结束的任期，按 `RevokeReason`（小写）区分 |
+| `simba.work` | Timer | `name`、`outcome` | leader 任务的运行（`completed`、`failed`、`cancelled`） |
 
-指标只按 mutex 打标签，不按竞争者 ID，所以数量受应用使用的 mutex 个数限制。
+分区选举也以名称（`{group}.{partition}`）出现。不使用 Spring 时，自行把 `MicrometerSimbaEventListener(registry)` 加到 builder 上。
 
-Zookeeper 后端通过 Curator 的 `LeaderLatch` 选主，只报告 `owner`、`ownership.changes` 和 `scheduler.work`。在 Zookeeper 上，`owner` 指标在节点第一次成为 leader 时出现；租约类后端在第一次竞争时就会注册。
+## 告警规则 {#alert-rules}
 
-## 告警规则
-
-Prometheus 示例（Micrometer 会把点号转为下划线）：
+Prometheus 示例（Micrometer 会把点号渲染为下划线）：
 
 ```yaml
 groups:
   - name: simba
     rules:
       - alert: SimbaNoLeader
-        expr: sum by (mutex) (simba_mutex_owner) < 1
+        expr: sum by (name) (simba_leadership) < 1
         for: 1m
         annotations:
-          summary: "No node leads mutex {{ $labels.mutex }}"
-      - alert: SimbaSplitLeadership
-        expr: sum by (mutex) (simba_mutex_owner) > 1
+          summary: "No node leads {{ $labels.name }}"
+      - alert: SimbaSessionNotLive
+        expr: simba_session_state{state="live"} == 0
         for: 1m
         annotations:
-          summary: "More than one node claims mutex {{ $labels.mutex }}"
-      - alert: SimbaLeaseExpired
-        expr: increase(simba_mutex_lease_expired_total[10m]) > 0
+          summary: "The Simba session of {{ $labels.instance }} is not live"
+      - alert: SimbaTermsLost
+        expr: increase(simba_revocations_total{reason=~"deadline_passed|session_expired|taken_over"}[10m]) > 0
         annotations:
-          summary: "A lease of {{ $labels.mutex }} ended without renewal; protect writes with fencing tokens"
+          summary: "{{ $labels.name }} lost a term ({{ $labels.reason }}); protect writes with fencing tokens"
       - alert: SimbaLeadershipFlapping
-        expr: increase(simba_mutex_ownership_changes_total{change="acquired"}[10m]) > 3
+        expr: increase(simba_revocations_total[10m]) > 3
         annotations:
-          summary: "Leadership of {{ $labels.mutex }} moves too often"
+          summary: "Leadership of {{ $labels.name }} moves too often"
+      - alert: SimbaWorkFailing
+        expr: increase(simba_work_seconds_count{outcome="failed"}[10m]) > 0
+        annotations:
+          summary: "Leader work of {{ $labels.name }} failed"
 ```
 
-各节点被抓取的时刻不同，交接时可能短暂显示为 0 个或 2 个 owner，`for: 1m` 用来过滤这种情况。租约到期时节点会在本地撤销身份，因此持续的 `SimbaSplitLeadership` 指向后端问题（例如 Redis 故障转移）。可能比租约活得更久的写入应携带 [fencing token](/zh/guide/correctness#fencing-token)。
+各节点在不同时刻被抓取，因此一次交接可能短暂地看起来像没有 leader 或有两个 leader；`for: 1m` 子句会过滤掉这种情况。
+`simba_leadership` 是每个节点的本地视图：两个节点报告 `1` 的时间超过一个租约，说明存在暂停的节点或丢失了写入的后端
+（例如 Redis 故障转移），而这正是 [fencing token](/zh/guide/correctness#fencing-tokens) 所防护的情况。
 
-## Actuator 端点
+## Actuator 端点 {#actuator-endpoint}
 
-引入 Spring Boot Actuator 后，只读的 `simba` 端点会展示本节点正在竞争的 mutex。和所有 Actuator 端点一样，它默认不通过 HTTP 暴露：
+使用 Spring Boot Actuator 时，只读的 `simba` 端点展示快照。与所有 Actuator 端点一样，它默认不通过 HTTP 暴露：
 
 ```yaml
 management:
@@ -65,94 +117,49 @@ management:
         include: health,simba
 ```
 
-`GET /actuator/simba` 列出正在运行的竞争服务；`GET /actuator/simba/{mutex}` 只返回一个 mutex（本节点没有竞争它时返回 404）：
+`GET /actuator/simba`：
 
 ```json
 {
-  "mutexes": [
-    {
-      "mutex": "report",
-      "contenderId": "0:4242@host-a",
-      "status": "RUNNING",
-      "owner": true,
-      "currentOwner": {
-        "ownerId": "0:4242@host-a",
-        "fencingToken": 7,
-        "acquiredAt": "2026-10-10T08:00:00Z",
-        "ttlAt": "2026-10-10T08:00:10Z",
-        "transitionAt": "2026-10-10T08:00:16Z"
-      }
-    }
+  "session": {
+    "id": "5f0c8e9d2b7a4c1e9f3a6b8d0e2c4a71",
+    "status": "LIVE",
+    "validForMillis": 13870,
+    "notLiveForMillis": 0
+  },
+  "elections": [
+    { "name": "report", "status": "LEADER", "token": 42, "remainingMillis": 13870 },
+    { "name": "billing.3", "status": "CANDIDATE", "token": 0, "remainingMillis": 0 }
   ]
 }
 ```
 
-`currentOwner` 是本节点最后观察到的 owner，所以 JDBC 和 Redis 的非 leader 节点也能看到谁是 leader；Zookeeper 节点只知道自己的情况。租约不限期时 `ttlAt` 和 `transitionAt` 为 `null`。端点没有写操作。不通过 starter 创建的工厂，需要传入 `SimbaServiceTracker` 观察者才会出现在端点里。
+`GET /actuator/simba/{name}` 返回单个选举，若该选举未在本节点启动则返回 `404`。端点只展示本节点的视图；它不会查询其他地方由谁担任 leader。
 
-## 健康检查
+## 健康指示器 {#health-indicator}
 
-启用 Spring Boot 健康检查支持（Actuator 的一部分）时，starter 会注册 `simba` 健康指示器。当一个运行中的 JDBC 或 Redis
-竞争服务超过两倍 `ttl + transition` 都没有一次成功的后端往返时，它为 `DOWN`：无论调用是失败还是挂起，该节点既无法获取也无法保持租约。
-不持有 mutex 是健康的。Zookeeper 服务只提供详情，不会变为 `DOWN`；Curator 连接由 Curator 客户端自己负责。
+一旦会话不处于存活状态的时间超过 `leaseDuration`，`simba` 健康指示器即为 `DOWN`：此时本节点在任何后端上都既无法保持任期，
+也无法赢得任期。不是 leader 属于健康状态。
 
 ```json
 {
-  "status": "DOWN",
+  "status": "UP",
   "details": {
-    "mutexes": [
-      {
-        "mutex": "report",
-        "contenderId": "0:4242@host-a",
-        "owner": false,
-        "fencingToken": 0,
-        "sinceLastSuccess": "33012ms",
-        "failingFor": "33012ms",
-        "stale": true
-      }
-    ]
+    "session": "5f0c8e9d2b7a4c1e9f3a6b8d0e2c4a71",
+    "status": "LIVE",
+    "validFor": "13870ms",
+    "notLiveFor": "0ms",
+    "leaseDuration": "15000ms",
+    "leading": ["report"]
   }
 }
 ```
 
-持有者还会显示 `leaseRemaining`；如果租约看门狗在最近一个 `ttl + transition` 内撤销过所有权，会出现 `leaseExpiredAgo`。
+该指示器**不**属于 liveness 或 readiness 组。后端故障会同时影响所有节点；重启所有节点或把它们全部摘除流量，
+会把一次协调故障变成一次应用故障。只有在你确实需要时，才自行把它加入某个组（`management.endpoint.health.group.<name>.include=simba`），
+并可用 `management.health.simba.enabled=false` 禁用它。
 
-该指示器 **不** 属于 liveness 或 readiness 分组。后端故障会同时影响所有节点；重启或摘除所有节点会把协调层故障变成应用故障。
-只有确实需要时才自行加入分组（`management.endpoint.health.group.<name>.include=simba`），可用
-`management.health.simba.enabled=false` 关闭它。
+## 相关页面 {#related-pages}
 
-## 自定义观察者
-
-实现 `ContendObserver` 即可把事件转发到其他地方。所有方法默认什么都不做；实现必须快速且线程安全，抛出的异常会被记录并忽略。
-
-```kotlin
-@Component
-class AuditObserver : ContendObserver {
-    override fun onAcquired(mutex: String) = audit.record("leader", mutex)
-    override fun onLeaseExpired(mutex: String) = audit.record("lease-expired", mutex)
-}
-```
-
-starter 会把所有 `ContendObserver` bean 连同 Micrometer 观察者一起传给后端工厂。不使用 Spring 时，直接传给工厂：
-
-```kotlin
-val factory = SpringRedisMutexContendServiceFactory(
-    ttl = Duration.ofSeconds(10),
-    transition = Duration.ofSeconds(6),
-    redisTemplate = redisTemplate,
-    listenerContainer = listenerContainer,
-    observer = myObserver
-)
-```
-
-| 事件 | 触发时机 |
-|---|---|
-| `onContend(mutex, renew, durationNanos, outcome)` | 一次后端往返结束（JDBC、Redis）。 |
-| `onAcquired(mutex)` / `onReleased(mutex)` | 本竞争者获得或失去身份（所有后端）。 |
-| `onLeaseExpired(mutex)` | 租约看门狗撤销了身份（JDBC、Redis），随后触发 `onReleased`。 |
-| `onWork(mutex, durationNanos, outcome)` | 一次只在 leader 上执行的任务结束。 |
-| `onStarted(service)` / `onStopped(service)` | 竞争服务已启动，或已停止并送达释放通知。 |
-
-## 相关页面
-
-- [配置](/zh/guide/configuration)：所有 `simba.*` 属性以及 starter 创建的 bean。
-- [正确性](/zh/guide/correctness#故障模式)：每种故障的表现。
+- [Spring Boot](/zh/guide/configuration)：所有 `simba.*` 属性以及 starter 创建的 bean。
+- [核心概念与正确性](/zh/guide/correctness#failure-modes)：每种故障表现为什么样子。

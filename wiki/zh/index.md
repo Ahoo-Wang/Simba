@@ -1,12 +1,12 @@
 ---
 layout: home
 title: Simba
-description: JVM 选主与分布式互斥库，基于 MySQL、Redis 或 Zookeeper。
+description: JVM 选主与分布式锁库，基于 MySQL、PostgreSQL、Redis 或 Zookeeper。
 
 hero:
   name: "Simba"
   text: "JVM 选主库"
-  tagline: "同一时刻只有一个节点执行任务——基于你已经在运维的 MySQL、Redis 或 Zookeeper。"
+  tagline: "同一时刻只有一个节点执行任务——基于你已经在运维的数据库、Redis 或 Zookeeper。"
   actions:
     - theme: brand
       text: 快速开始
@@ -19,16 +19,16 @@ hero:
       link: https://github.com/Ahoo-Wang/Simba
 
 features:
-  - title: 仅在 leader 上调度
-    details: "给方法加上 @SimbaScheduled，或在不使用 Spring 时使用 SimbaScheduler。节点成为 leader 时开始工作，失去领导权时中断。"
-  - title: 可推理的租约
-    details: "所有权是有时限的租约。租约结束时，每个节点都会自行撤销所有权，即使后端调用仍然挂起。"
+  - title: 任期，而非标志位
+    details: "赢得租约即获得一个 Term：它的 fencing token、是否仍然有效，以及还剩多长时间。每个任期都以恰好一次 onRevoked 结束。"
+  - title: 每个节点一个会话
+    details: "一个进程只保持一个后端会话；每个选举、锁和分区都随它存续、随它结束。一次续约（keep-alive）即可续期全部。"
   - title: Fencing token
-    details: "每个所有权任期都带有严格递增的 token，被保护的资源可以据此拒绝暂停后恢复的旧 leader。"
-  - title: 三种后端，一份契约
-    details: "JDBC/MySQL、Redis 和 Zookeeper 通过同一套兼容性测试。无需运行 Simba 服务端。"
-  - title: Spring Boot starter
-    details: "为 classpath 上的后端自动配置，提供专用回调执行器，并支持显式的 simba.backend 选择。"
-  - title: 可观测
-    details: "提供领导权、竞争和租约过期的 Micrometer 指标，以及只读的 simba Actuator 端点。"
+    details: "每个任期都带有严格递增的 token，被保护的资源可以据此拒绝暂停后恢复的旧 leader。"
+  - title: 任务绑定到任期
+    details: "runWhileLeader、调度、@SimbaScheduled 和 @SimbaPartitioned 运行在虚拟线程上，任期结束时被中断，并在租约释放之前完成。"
+  - title: 三种后端，一个引擎
+    details: "JDBC（MySQL、PostgreSQL）、Redis 和 Zookeeper 在同一个纯状态机下通过同一套 TCK。无需运行 Simba 服务端。"
+  - title: 可测试、可观测
+    details: "测试中使用内存后端和虚拟时间；生产中提供 snapshot()、Micrometer 指标、simba Actuator 端点和健康指示器。"
 ---
