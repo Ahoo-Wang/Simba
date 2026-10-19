@@ -7,6 +7,8 @@ create table if not exists simba_session
     metadata   varchar(1024)        not null default ''
 );
 
+create index if not exists idx_session_expires on simba_session (expires_at);
+
 create table if not exists simba_lease
 (
     name       varchar(128) collate "C" not null primary key,
@@ -18,7 +20,7 @@ create index if not exists idx_lease_session on simba_lease (session_id);
 
 create table if not exists simba_member
 (
-    group_name varchar(128)         not null,
+    group_name varchar(128) collate "C" not null,
     session_id char(32) collate "C" not null,
     primary key (group_name, session_id)
 );

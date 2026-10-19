@@ -33,7 +33,7 @@ object PostgreSqlDialect : Dialect {
         on conflict (name) do update
            set token = simba_lease.token + 1, session_id = excluded.session_id
          where simba_lease.session_id <> excluded.session_id
-           and not ${live("simba_lease.session_id")}
+           and ${notLiveLocked("simba_lease.session_id")}
         """.trimIndent()
 
     override val join: String =

@@ -18,11 +18,15 @@ import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.TestInstance
 
 /**
- * The SQL recipe from the correctness guide: one conditional `UPDATE` checks the token and writes atomically.
+ * The SQL recipe from the correctness guide: one conditional `UPDATE` checks the token and writes atomically, on each
+ * dialect.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-internal class JdbcFencingRecipeTest : FencingSpec() {
-    private val dataSource = LeaseDatabaseFixture.mysql
+internal abstract class JdbcFencingRecipeTest(private val dialect: Dialect) : FencingSpec() {
+    private val dataSource = LeaseDatabaseFixture.dataSource(dialect)
+
+    /** Inserts the resource row unless present. */
+    protected abstract val insertIfAbsent: String
 
     @BeforeAll
     fun createTable() {
@@ -32,7 +36,7 @@ internal class JdbcFencingRecipeTest : FencingSpec() {
                     """
                     create table if not exists fenced_resource (
                         id varchar(128) not null primary key,
-                        fencing_token bigint unsigned not null default 0,
+                        fencing_token bigint not null default 0,
                         payload varchar(64) not null default ''
                     )
                     """.trimIndent()
@@ -41,11 +45,11 @@ internal class JdbcFencingRecipeTest : FencingSpec() {
         }
     }
 
-    override fun leaseBackend(): LeaseBackend = JdbcLeaseBackend.mysql(dataSource)
+    override fun leaseBackend(): LeaseBackend = JdbcLeaseBackend(dataSource, dialect)
 
     override fun write(resource: String, fencingToken: Long): Boolean {
         dataSource.connection.use { connection ->
-            connection.prepareStatement("insert ignore into fenced_resource (id) values (?)").use {
+            connection.prepareStatement(insertIfAbsent).use {
                 it.setString(1, resource)
                 it.executeUpdate()
             }
@@ -69,4 +73,12 @@ internal class JdbcFencingRecipeTest : FencingSpec() {
             }
         }
     }
+}
+
+internal class MySqlFencingRecipeTest : JdbcFencingRecipeTest(Dialect.MYSQL) {
+    override val insertIfAbsent: String = "insert ignore into fenced_resource (id) values (?)"
+}
+
+internal class PostgreSqlFencingRecipeTest : JdbcFencingRecipeTest(Dialect.POSTGRESQL) {
+    override val insertIfAbsent: String = "insert into fenced_resource (id) values (?) on conflict do nothing"
 }
