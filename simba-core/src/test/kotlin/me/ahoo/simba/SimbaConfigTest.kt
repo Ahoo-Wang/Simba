@@ -27,6 +27,29 @@ class SimbaConfigTest {
     }
 
     @Test
+    fun `the builder keeps defaults and derives from the values set`() {
+        SimbaConfig.builder().build().assert().isEqualTo(SimbaConfig())
+        val config = SimbaConfig.builder()
+            .leaseDuration(Duration.ofSeconds(9))
+            .drift(0.02)
+            .margin(Duration.ofMillis(10))
+            .minBackoff(Duration.ofMillis(20))
+            .build()
+        config.assert().isEqualTo(
+            SimbaConfig(
+                Duration.ofSeconds(9),
+                Duration.ofSeconds(3),
+                0.02,
+                Duration.ofMillis(10),
+                Duration.ofMillis(1500),
+                Duration.ofMillis(20)
+            )
+        )
+        SimbaConfig.builder().renewInterval(Duration.ofSeconds(2)).retryJitter(Duration.ZERO).build()
+            .assert().isEqualTo(SimbaConfig(renewInterval = Duration.ofSeconds(2), retryJitter = Duration.ZERO))
+    }
+
+    @Test
     fun `invalid timings are rejected`() {
         val lease = Duration.ofSeconds(3)
         listOf(

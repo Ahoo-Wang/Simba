@@ -73,7 +73,7 @@ task.partitions()   // partitions this node runs in its latest view
 租约保证一个分区在任何时刻都不会有两个有效任期，即使在变化期间各节点对成员列表的看法不一致；分配只决定谁去竞争。
 每个成员必须使用相同的 `partitions`。组名遵循租约名规则，且 `"{group}.{partitions - 1}"` 必须不超过 128 个字符。
 
-也可以使用 `runWhileLeader { term, partition -> }`。`GroupTask.stop()` 离开组并停止每个分区，在每个分区都完成交接后完成。
+也可以使用 `runWhileLeader { term, partition -> }`。`GroupTask.stop()` 离开组并停止每个分区，在每个分区都完成交接后完成，包括之前的视图变化中移走、仍在交接中的分区。
 
 ## Spring 注解 {#spring-annotations}
 

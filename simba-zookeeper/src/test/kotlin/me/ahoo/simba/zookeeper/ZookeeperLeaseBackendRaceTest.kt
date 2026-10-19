@@ -88,18 +88,9 @@ class ZookeeperLeaseBackendRaceTest {
     }
 
     @Test
-    fun aBatchWithAnInvalidNodeNameIsRejectedBeforeAnyRequest() {
-        val session = backend.openSession(lease).id
-        val valid = name()
-        backend.granted(session, name())
-
-        listOf(".", "..").map(::LeaseName).forEach { invalid ->
-            assertThrows<IllegalArgumentException> { backend.acquire(session, linkedSetOf(valid, invalid)) }
-            assertThrows<IllegalArgumentException> { backend.release(session, mapOf(invalid to 1L)) }
-            assertThrows<IllegalArgumentException> { backend.keepAlive(session, lease, setOf(invalid)) }
-        }
-
-        admin.exists(leasePath(valid), false).assert().isNull()
+    fun invalidNodeNamesCannotReachTheBackend() {
+        // "." and ".." are not valid Zookeeper node names; LeaseName rejects them before any request can be built.
+        listOf(".", "..").forEach { invalid -> assertThrows<IllegalArgumentException> { LeaseName(invalid) } }
     }
 
     @Test

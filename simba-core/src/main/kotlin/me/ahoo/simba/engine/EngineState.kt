@@ -14,6 +14,7 @@
 package me.ahoo.simba.engine
 
 import me.ahoo.simba.SimbaConfig
+import me.ahoo.simba.event.ElectionKind
 import me.ahoo.simba.spi.LeaseName
 import me.ahoo.simba.spi.SessionId
 import java.time.Duration
@@ -50,7 +51,8 @@ data class EngineConfig(
 /**
  * The whole engine state. Immutable; only [step] produces a new one.
  *
- * [works] names the elections whose terms carry work (ADR 0010 contract 3): stopping or stepping down such a term
+ * [kinds] tells which API started each election (absent means [ElectionKind.ELECTION]). [works] names the elections
+ * whose terms carry work (ADR 0010 contract 3): stopping or stepping down such a term
  * waits in [ElectionState.Handover] before releasing its lease. [groups] are the groups this client joins. A
  * non-empty [closing] holds the close requests waiting for the last handover.
  *
@@ -66,6 +68,7 @@ data class EngineState(
     val elections: Map<LeaseName, ElectionState>,
     val pending: Map<Long, Pending>,
     val works: Set<LeaseName> = emptySet(),
+    val kinds: Map<LeaseName, ElectionKind> = emptyMap(),
     val groups: Map<String, GroupState> = emptyMap(),
     val closing: List<CompletableFuture<Void>> = emptyList(),
 ) {
@@ -115,12 +118,14 @@ sealed interface SessionState {
 sealed interface ElectionState {
     /**
      * Contending: [attempt] is the acquire in flight, [retryTimer] the next attempt; both null means idle. [probe]
-     * completes when the first answered attempt does not elect this node.
+     * completes when the first answered attempt does not elect this node. [released] when a release hint arrived
+     * while [attempt] was in flight: its reply may predate the release, so a lost attempt contends again at once.
      */
     data class Candidate(
         val attempt: Long?,
         val retryTimer: Long?,
         val probe: CompletableFuture<Void>? = null,
+        val released: Boolean = false,
     ) : ElectionState
 
     /**
@@ -154,19 +159,27 @@ sealed interface AfterHandover {
     /** The election was stopped: it is removed. */
     data object Stop : AfterHandover
 
-    /** Contend again at [at] (monotonic nanoseconds): the end of a cooldown, or a restart after a stop. */
-    data class Resume(val at: Long) : AfterHandover
+    /**
+     * Contend again at [at] (monotonic nanoseconds): the end of a cooldown, or a restart after a stop, carrying the
+     * restart's [probe].
+     */
+    data class Resume(val at: Long, val probe: CompletableFuture<Void>? = null) : AfterHandover
 }
 
 /**
- * Membership of one group: [joined] is the session the group was joined with, [request] the join or members
- * request in flight, [refreshTimer] the next refresh, and [session] / [members] the view published last.
+ * Membership of one group: [joined] is the session the group was joined with, [request] the join, members or leave
+ * request in flight, [refreshTimer] the next refresh (or retry), and [session] / [members] the view published last.
+ * [stale] when a membership hint arrived while [request] was in flight: the members are read again at once after it.
+ * While [leaving], no view is published and the group is forgotten once a leave succeeded (sent after an in-flight
+ * join answers, retried when it fails).
  */
 @InternalSimbaApi
 data class GroupState(
+    val leaving: Boolean = false,
     val joined: SessionId? = null,
     val request: Long? = null,
     val refreshTimer: Long? = null,
     val session: SessionId? = null,
     val members: List<SessionId>? = null,
+    val stale: Boolean = false,
 )

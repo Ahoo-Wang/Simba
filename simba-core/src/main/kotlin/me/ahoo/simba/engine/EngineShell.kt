@@ -15,6 +15,7 @@ package me.ahoo.simba.engine
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.LeadershipListener
+import me.ahoo.simba.event.ElectionKind
 import me.ahoo.simba.event.ElectionSnapshot
 import me.ahoo.simba.event.ElectionStatus
 import me.ahoo.simba.event.SessionSnapshot
@@ -32,6 +33,8 @@ import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -94,13 +97,14 @@ internal class EngineShell(
     private inner class LoopScheduler : Scheduler {
         override fun nanoTime(): Long = ticker.nanoTime()
 
-        override fun schedule(at: Long, task: Runnable) {
-            try {
-                loop.schedule(task, at - ticker.nanoTime(), TimeUnit.NANOSECONDS)
-            } catch (error: RejectedExecutionException) {
-                log.debug(error) { "Simba engine is closed; timer runs at once." }
+        override fun schedule(at: Long, task: Runnable): Cancellable {
+            val future = loop.enqueue(task, at - ticker.nanoTime())
+            if (future == null) {
+                log.debug { "Simba engine is closed; timer runs at once." }
                 task.run()
+                return Cancellable.NONE
             }
+            return Cancellable { future.cancel(false) }
         }
     }
 
@@ -113,13 +117,20 @@ internal class EngineShell(
         listener: LeadershipListener,
         work: Boolean = false,
         probe: CompletableFuture<Void>? = null,
+        kind: ElectionKind = ElectionKind.ELECTION,
     ) {
         onLoop {
             val dispatcher = dispatcher(name)
+            if (dispatcher.active) {
+                // Never swap the listener of a running election: its callbacks would reach the wrong listener.
+                log.warn { "Election [$name] is already started; start ignored." }
+                probe?.complete(null)
+                return@onLoop
+            }
             dispatcher.listener = listener
             dispatcher.active = true
             dispatcher.starts++
-            handle(Event.Start(name, work, probe))
+            handle(Event.Start(name, work, probe, kind))
         }
     }
 
@@ -152,9 +163,7 @@ internal class EngineShell(
     }
 
     /** Runs [task] once the ticker reaches [at]; at once when the engine is closed. */
-    fun schedule(at: Long, task: Runnable) {
-        timers.schedule(at, task)
-    }
+    fun schedule(at: Long, task: Runnable): Cancellable = timers.schedule(at, task)
 
     /**
      * Completes, with the number of loop tasks handled so far, once the loop has nothing queued. Meaningful only with
@@ -175,13 +184,7 @@ internal class EngineShell(
     }
 
     /** Runs [action] on the loop without counting it as handled. */
-    private fun submit(action: () -> Unit): Boolean =
-        try {
-            loop.execute(action)
-            true
-        } catch (_: RejectedExecutionException) {
-            false
-        }
+    private fun submit(action: () -> Unit): Boolean = loop.enqueue(action, 0) != null
 
     /** Elections, dispatchers and groups kept by the engine; for tests of bounded state. */
     fun footprint(): CompletableFuture<Footprint> =
@@ -233,17 +236,19 @@ internal class EngineShell(
             },
         )
         val elections = state.elections.entries.sortedBy { it.key.value }.map { (name, election) ->
+            val kind = state.kinds[name] ?: ElectionKind.ELECTION
             when (election) {
-                is ElectionState.Candidate -> ElectionSnapshot(name, ElectionStatus.CANDIDATE, 0, Duration.ZERO)
-                is ElectionState.Cooldown -> ElectionSnapshot(name, ElectionStatus.COOLDOWN, 0, Duration.ZERO)
+                is ElectionState.Candidate -> ElectionSnapshot(name, ElectionStatus.CANDIDATE, 0, Duration.ZERO, kind)
+                is ElectionState.Cooldown -> ElectionSnapshot(name, ElectionStatus.COOLDOWN, 0, Duration.ZERO, kind)
                 is ElectionState.Handover ->
-                    ElectionSnapshot(name, ElectionStatus.HANDOVER, election.token, Duration.ZERO)
+                    ElectionSnapshot(name, ElectionStatus.HANDOVER, election.token, Duration.ZERO, kind)
 
                 is ElectionState.Leader -> ElectionSnapshot(
                     name,
                     ElectionStatus.LEADER,
                     election.token,
                     terms.term(election.term)?.remaining() ?: Duration.ZERO,
+                    kind,
                 )
             }
         }
@@ -295,8 +300,13 @@ internal class EngineShell(
     internal fun dispatcherCount(): CompletableFuture<Int> =
         CompletableFuture<Int>().also { count -> onLoop { count.complete(dispatchers.size) } }
 
+    /** Steps down; completes at once when the loop is already shut down, like [stop]. */
     fun stepDown(name: LeaseName, cooldownNanos: Long): CompletableFuture<Void> =
-        CompletableFuture<Void>().also { post(Event.StepDown(name, cooldownNanos, it)) }
+        CompletableFuture<Void>().also { done ->
+            if (!onLoop { handle(Event.StepDown(name, cooldownNanos, done)) }) {
+                done.complete(null)
+            }
+        }
 
     /** Revokes every term, closes the session, waits for pending callbacks, then stops the loop. */
     fun close(): CompletableFuture<Void> {
@@ -328,17 +338,19 @@ internal class EngineShell(
 
     /** Runs [action] on the loop; `false` when the loop is already shut down. */
     private fun onLoop(action: () -> Unit): Boolean {
-        try {
-            loop.execute {
+        val queued = loop.enqueue(
+            {
                 handled.incrementAndGet()
                 try {
                     action()
                 } catch (error: Throwable) {
                     log.error(error) { "Simba engine failed to handle an event." }
                 }
-            }
-        } catch (error: RejectedExecutionException) {
-            log.debug(error) { "Simba engine is closed; event dropped." }
+            },
+            0,
+        )
+        if (queued == null) {
+            log.debug { "Simba engine is closed; event dropped." }
             return false
         }
         return true
@@ -398,13 +410,18 @@ internal class EngineShell(
 
     private fun call(effect: Effect.Call) {
         val replied = AtomicBoolean(false)
+        var timeout = Cancellable.NONE
         fun reply(result: BackendResult) {
             if (replied.compareAndSet(false, true)) {
+                timeout.cancel()
                 post(Event.Reply(effect.requestId, result))
             }
         }
-        timers.schedule(ticker.nanoTime() + config.renewInterval) {
+        timeout = timers.schedule(ticker.nanoTime() + config.renewInterval) {
             reply(BackendResult.Failed(TimeoutException("${effect.request} timed out.")))
+        }
+        if (replied.get()) {
+            timeout.cancel()
         }
         try {
             ioExecutor.execute { reply(backend.execute(effect.request)) }
@@ -432,6 +449,18 @@ internal class EngineShell(
         }
     }
 }
+
+/**
+ * Queues [task] after [delayNanos]; `null` when the executor no longer takes tasks. A task racing the executor's
+ * termination is not rejected but silently cancelled by `ScheduledThreadPoolExecutor`, so a cancelled future counts as
+ * not queued: callers then complete what they would otherwise wait for.
+ */
+internal fun ScheduledExecutorService.enqueue(task: Runnable, delayNanos: Long): ScheduledFuture<*>? =
+    try {
+        schedule(task, delayNanos, TimeUnit.NANOSECONDS).takeUnless { it.isCancelled }
+    } catch (_: RejectedExecutionException) {
+        null
+    }
 
 /** What an [EngineShell] keeps; every count returns to zero once nothing is started. */
 internal data class Footprint(

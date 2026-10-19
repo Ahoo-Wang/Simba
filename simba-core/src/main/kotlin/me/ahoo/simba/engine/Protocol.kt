@@ -14,6 +14,7 @@
 package me.ahoo.simba.engine
 
 import me.ahoo.simba.RevokeReason
+import me.ahoo.simba.event.ElectionKind
 import me.ahoo.simba.event.SimbaEvent
 import me.ahoo.simba.spi.AcquireResult
 import me.ahoo.simba.spi.BackendHint
@@ -36,12 +37,14 @@ sealed interface Event {
     /**
      * Starts contending for [name]. With [work], every term carries work that must exit (see [WorkExited]) before a
      * stop or step-down releases the lease. [probe] completes when the first answered attempt does not elect this
-     * node (used by `tryAcquire`); it may never complete if the election stops first.
+     * node (used by `tryAcquire`), or at once when the election is already started; it may never complete if the
+     * election stops first. [kind] labels the election's events and snapshot.
      */
     data class Start(
         val name: LeaseName,
         val work: Boolean = false,
         val probe: CompletableFuture<Void>? = null,
+        val kind: ElectionKind = ElectionKind.ELECTION,
     ) : Event
 
     /**

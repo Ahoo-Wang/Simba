@@ -14,6 +14,7 @@
 package me.ahoo.simba.engine
 
 import me.ahoo.simba.RevokeReason
+import me.ahoo.simba.event.ElectionKind
 import me.ahoo.simba.event.SimbaEvent
 import me.ahoo.simba.spi.AcquireResult
 import me.ahoo.simba.spi.BackendHint
@@ -55,12 +56,13 @@ private class Transition(state: EngineState, private val now: Long) {
     private val elections = LinkedHashMap(state.elections)
     private val pending = HashMap(state.pending)
     private val works = HashSet(state.works)
+    private val kinds = HashMap(state.kinds)
     private val groups = LinkedHashMap(state.groups)
     private var closing = state.closing
     private val effects = ArrayList<Effect>()
 
     fun result(): Pair<EngineState, List<Effect>> =
-        EngineState(config, random, nextId, session, elections, pending, works, groups, closing) to effects
+        EngineState(config, random, nextId, session, elections, pending, works, kinds, groups, closing) to effects
 
     fun handle(event: Event) {
         when (event) {
@@ -95,15 +97,25 @@ private class Transition(state: EngineState, private val now: Long) {
         when (val election = elections[name]) {
             null -> elections[name] = ElectionState.Candidate(attempt = null, retryTimer = null, probe = event.probe)
             is ElectionState.Handover -> if (election.next == AfterHandover.Stop) {
-                elections[name] = election.copy(next = AfterHandover.Resume(now))
+                elections[name] = election.copy(next = AfterHandover.Resume(now, event.probe))
             } else {
+                alreadyStarted(event)
                 return
             }
 
-            else -> return
+            else -> {
+                alreadyStarted(event)
+                return
+            }
         }
         if (event.work) works += name else works -= name
+        if (event.kind == ElectionKind.ELECTION) kinds -= name else kinds[name] = event.kind
         tryAcquire(name)
+    }
+
+    /** A start of a started election changes nothing; its probe reports at once that it did not elect. */
+    private fun alreadyStarted(event: Event.Start) {
+        event.probe?.let { effects += Effect.Complete(event.name, it) }
     }
 
     private fun stop(name: LeaseName, done: CompletableFuture<Void>) {
@@ -133,7 +145,7 @@ private class Transition(state: EngineState, private val now: Long) {
             is ElectionState.Handover -> {
                 val next = when (val current = election.next) {
                     AfterHandover.Stop -> current
-                    is AfterHandover.Resume -> AfterHandover.Resume(maxOf(current.at, now + cooldown))
+                    is AfterHandover.Resume -> current.copy(at = later(current.at, now + cooldown))
                 }
                 elections[name] = election.copy(next = next, done = election.done + done)
                 return
@@ -203,9 +215,10 @@ private class Transition(state: EngineState, private val now: Long) {
         when (val next = handover.next) {
             AfterHandover.Stop -> remove(name)
             is AfterHandover.Resume -> if (now - next.at >= 0) {
-                elections[name] = ElectionState.Candidate(attempt = null, retryTimer = null)
+                elections[name] = ElectionState.Candidate(attempt = null, retryTimer = null, probe = next.probe)
                 tryAcquire(name)
             } else {
+                next.probe?.let { effects += Effect.Complete(name, it) }
                 elections[name] = ElectionState.Cooldown(arm(next.at))
             }
         }
@@ -215,6 +228,7 @@ private class Transition(state: EngineState, private val now: Long) {
     private fun remove(name: LeaseName) {
         elections.remove(name)
         works -= name
+        kinds -= name
     }
 
     private fun close(done: CompletableFuture<Void>) {
@@ -251,6 +265,7 @@ private class Transition(state: EngineState, private val now: Long) {
         val waiting = closing
         closing = emptyList()
         val current = session
+        effects += Effect.Publish(SimbaEvent.SessionClosed((current as? SessionState.Active)?.id))
         if (current is SessionState.Active) {
             session = SessionState.Closed(call(BackendRequest.CloseSession(current.id)), waiting)
         } else {
@@ -282,10 +297,7 @@ private class Transition(state: EngineState, private val now: Long) {
                 }
             }
         }
-        groups.entries.firstOrNull { (_, group) -> group.refreshTimer == id }?.let { (group, state) ->
-            val current = session as? SessionState.Active ?: return
-            groups[group] = state.copy(refreshTimer = null)
-            if (state.joined == current.id) refreshMembers(group) else joinGroup(group)
+        if (groupTimer(id)) {
             return
         }
         val (name, election) = elections.entries.firstOrNull { (_, election) -> election.timer() == id } ?: return
@@ -301,6 +313,19 @@ private class Transition(state: EngineState, private val now: Long) {
                 tryAcquire(name)
             }
         }
+    }
+
+    /** Handles [id] when it is a group's refresh or retry timer; `false` when it is not one. */
+    private fun groupTimer(id: Long): Boolean {
+        val (group, state) = groups.entries.firstOrNull { (_, group) -> group.refreshTimer == id } ?: return false
+        val current = session as? SessionState.Active ?: return true
+        groups[group] = state.copy(refreshTimer = null)
+        when {
+            state.leaving -> sendLeave(group)
+            state.joined == current.id -> refreshMembers(group)
+            else -> joinGroup(group)
+        }
+        return true
     }
 
     private fun ElectionState.timer(): Long? =
@@ -341,7 +366,7 @@ private class Transition(state: EngineState, private val now: Long) {
             is BackendRequest.CloseSession -> onClosed(requestId)
             is BackendRequest.Join -> onJoined(requestId, request, result)
             is BackendRequest.Members -> onMembers(requestId, request, result)
-            is BackendRequest.Leave -> Unit
+            is BackendRequest.Leave -> onLeft(requestId, request, result)
         }
     }
 
@@ -401,16 +426,17 @@ private class Transition(state: EngineState, private val now: Long) {
     }
 
     private fun renewed(current: SessionState.Active, requestId: Long, sentAt: Long, alive: KeepAliveResult.Live) {
-        val validUntil = maxOf(current.validUntil, sentAt + config.localValidity(alive.remaining))
-        if (validUntil - now <= 0) {
+        // Once the local deadline passed, the session's terms ended for good: a late renewal must not revive them.
+        if (now - current.validUntil >= 0) {
             expire(current, RevokeReason.DEADLINE_PASSED)
             return
         }
+        val validUntil = later(current.validUntil, sentAt + config.localValidity(alive.remaining))
         session = current.copy(
             validUntil = validUntil,
             suspended = false,
             keepAlive = null,
-            renewTimer = arm(maxOf(now, sentAt + config.renewInterval)),
+            renewTimer = arm(later(now, sentAt + config.renewInterval)),
         )
         if (validUntil != current.validUntil) {
             effects += Effect.Deadline(current.id, validUntil)
@@ -520,7 +546,7 @@ private class Transition(state: EngineState, private val now: Long) {
             when (outcome) {
                 is AcquireResult.Granted -> onGranted(requestId, name, outcome.token)
                 is AcquireResult.HeldBy -> if (isAttempt(name, requestId)) {
-                    lost(name)
+                    lost(name, again = (elections[name] as ElectionState.Candidate).released)
                 }
 
                 null -> if (isAttempt(name, requestId)) {
@@ -544,7 +570,7 @@ private class Transition(state: EngineState, private val now: Long) {
             val leader = ElectionState.Leader(term = newId(), token = token, working = name in works)
             elections[name] = leader
             effects += Effect.Elected(name, leader.term, token, current.id)
-            effects += Effect.Publish(SimbaEvent.Elected(name, token))
+            effects += Effect.Publish(SimbaEvent.Elected(name, token, kindOf(name)))
             return
         }
         releaseLease(name, token)
@@ -553,10 +579,18 @@ private class Transition(state: EngineState, private val now: Long) {
         }
     }
 
-    /** The current attempt of [name] did not elect this node: reports the probe once and retries later. */
-    private fun lost(name: LeaseName) {
+    /**
+     * The current attempt of [name] did not elect this node: reports the probe once and retries later, or [again] at
+     * once.
+     */
+    private fun lost(name: LeaseName, again: Boolean = false) {
         (elections[name] as? ElectionState.Candidate)?.probe?.let { effects += Effect.Complete(name, it) }
-        retryLater(name)
+        if (again) {
+            elections[name] = ElectionState.Candidate(attempt = null, retryTimer = null)
+            tryAcquire(name)
+        } else {
+            retryLater(name)
+        }
     }
 
     private fun isAttempt(name: LeaseName, requestId: Long): Boolean =
@@ -575,18 +609,56 @@ private class Transition(state: EngineState, private val now: Long) {
     // region groups
 
     private fun join(group: String) {
-        if (session is SessionState.Closed || closing.isNotEmpty() || group in groups) {
+        if (session is SessionState.Closed || closing.isNotEmpty()) {
             return
         }
-        groups[group] = GroupState()
-        joinGroup(group)
+        val state = groups[group]
+        if (state == null) {
+            groups[group] = GroupState()
+            joinGroup(group)
+        } else if (state.leaving) {
+            // Joined again while leaving: the pending leave still completes, then the group is joined anew.
+            groups[group] = state.copy(leaving = false)
+        }
     }
 
+    /**
+     * Leaves [group]: after the reply when a join is in flight (it may have succeeded), otherwise at once (also after
+     * a failed join, which may have succeeded too), and not at all without a session (the membership, if any, ends
+     * with its session).
+     */
     private fun leave(group: String) {
-        val state = groups.remove(group) ?: return
+        val state = groups[group]?.takeUnless { it.leaving } ?: return
+        if (session !is SessionState.Active) {
+            groups.remove(group)
+            return
+        }
+        groups[group] = state.copy(leaving = true)
+        if (state.request?.let { pending[it]?.request } !is BackendRequest.Join) {
+            sendLeave(group)
+        }
+    }
+
+    private fun sendLeave(group: String) {
         val current = session as? SessionState.Active ?: return
-        if (state.joined == current.id) {
-            call(BackendRequest.Leave(current.id, group))
+        val state = groups[group] ?: return
+        groups[group] = state.copy(request = call(BackendRequest.Leave(current.id, group)), refreshTimer = null)
+    }
+
+    /** A leave that succeeded forgets the group, or joins it again when it was joined meanwhile; a failure retries. */
+    private fun onLeft(requestId: Long, request: BackendRequest.Leave, result: BackendResult) {
+        val state = groups[request.group]?.takeIf { it.request == requestId } ?: return
+        when {
+            result == BackendResult.Done ||
+                result is BackendResult.Failed && result.cause is SessionExpiredException ->
+                if (state.leaving) {
+                    groups.remove(request.group)
+                } else {
+                    groups[request.group] = state.copy(joined = null, request = null)
+                    joinGroup(request.group)
+                }
+
+            else -> groups[request.group] = state.copy(request = null, refreshTimer = arm(now + retryDelay()))
         }
     }
 
@@ -604,7 +676,8 @@ private class Transition(state: EngineState, private val now: Long) {
     private fun refreshMembers(group: String) {
         val state = groups[group] ?: return
         if (state.request == null) {
-            groups[group] = state.copy(request = call(BackendRequest.Members(group)), refreshTimer = null)
+            groups[group] =
+                state.copy(request = call(BackendRequest.Members(group)), refreshTimer = null, stale = false)
         }
     }
 
@@ -612,6 +685,12 @@ private class Transition(state: EngineState, private val now: Long) {
         val state = groups[request.group]?.takeIf { it.request == requestId } ?: return
         val current = session as? SessionState.Active
         if (current?.id != request.session) {
+            return
+        }
+        if (state.leaving && !(result is BackendResult.Failed && result.cause is SessionExpiredException)) {
+            // Left while joining: the join may have succeeded even when its reply failed, so leave either way.
+            groups[request.group] = state.copy(joined = current.id, request = null)
+            sendLeave(request.group)
             return
         }
         if (result is BackendResult.Failed && result.cause is SessionExpiredException) {
@@ -626,7 +705,10 @@ private class Transition(state: EngineState, private val now: Long) {
         refreshMembers(request.group)
     }
 
-    /** Publishes the view when it changed, then refreshes again after one renew interval. */
+    /**
+     * Publishes the view when it changed, then refreshes again after one renew interval, or at once when a hint made
+     * the reply [GroupState.stale].
+     */
     private fun onMembers(requestId: Long, request: BackendRequest.Members, result: BackendResult) {
         val state = groups[request.group]?.takeIf { it.request == requestId } ?: return
         if (result !is BackendResult.Members) {
@@ -634,6 +716,11 @@ private class Transition(state: EngineState, private val now: Long) {
             return
         }
         val viewer = state.joined
+        if (state.stale) {
+            groups[request.group] = publishView(request.group, state.copy(request = null), viewer, result.members)
+            refreshMembers(request.group)
+            return
+        }
         val next = state.copy(request = null, refreshTimer = arm(now + config.renewInterval))
         groups[request.group] = publishView(request.group, next, viewer, result.members)
     }
@@ -648,8 +735,12 @@ private class Transition(state: EngineState, private val now: Long) {
 
     private fun groupHint(group: String) {
         val state = groups[group] ?: return
-        if (state.joined != null && state.joined == (session as? SessionState.Active)?.id) {
-            refreshMembers(group)
+        if (!state.leaving && state.joined != null && state.joined == (session as? SessionState.Active)?.id) {
+            if (state.request == null) {
+                refreshMembers(group)
+            } else {
+                groups[group] = state.copy(stale = true)
+            }
         }
     }
 
@@ -667,6 +758,8 @@ private class Transition(state: EngineState, private val now: Long) {
         if (election.attempt == null) {
             elections[hint.name] = election.copy(retryTimer = null)
             tryAcquire(hint.name)
+        } else {
+            elections[hint.name] = election.copy(released = true)
         }
     }
 
@@ -690,7 +783,13 @@ private class Transition(state: EngineState, private val now: Long) {
             }
         }
         for ((group, state) in groups.entries.toList()) {
-            groups[group] = publishView(group, GroupState(session = state.session, members = state.members), null, emptyList())
+            if (state.leaving) {
+                // The membership ends with the session.
+                groups.remove(group)
+            } else {
+                val reset = GroupState(session = state.session, members = state.members)
+                groups[group] = publishView(group, reset, null, emptyList())
+            }
         }
         effects += Effect.Publish(SimbaEvent.SessionExpired(current.id, reason))
         if (reason == RevokeReason.DEADLINE_PASSED) {
@@ -706,7 +805,7 @@ private class Transition(state: EngineState, private val now: Long) {
             return
         }
         val request = call(BackendRequest.Acquire(current.id, setOf(name)))
-        elections[name] = election.copy(attempt = request, retryTimer = null)
+        elections[name] = election.copy(attempt = request, retryTimer = null, released = false)
     }
 
     /** Retries later; a reported probe is not reported again. */
@@ -716,7 +815,7 @@ private class Transition(state: EngineState, private val now: Long) {
 
     private fun revoke(name: LeaseName, leader: ElectionState.Leader, reason: RevokeReason) {
         effects += Effect.Revoked(name, leader.term, reason)
-        effects += Effect.Publish(SimbaEvent.Revoked(name, leader.token, reason))
+        effects += Effect.Publish(SimbaEvent.Revoked(name, leader.token, reason, kindOf(name)))
     }
 
     private fun releaseLease(name: LeaseName, token: Long) {
@@ -731,6 +830,11 @@ private class Transition(state: EngineState, private val now: Long) {
             session = current.copy(abandoned = current.abandoned + (name to token))
         }
     }
+
+    private fun kindOf(name: LeaseName): ElectionKind = kinds[name] ?: ElectionKind.ELECTION
+
+    /** The later of two monotonic instants, compared by difference so that a wrapping clock stays ordered. */
+    private fun later(a: Long, b: Long): Long = if (a - b >= 0) a else b
 
     private fun call(request: BackendRequest): Long {
         val id = newId()

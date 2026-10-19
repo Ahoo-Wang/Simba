@@ -27,10 +27,11 @@ Behavior:
 
 - Keep-alive: `update simba_session set expires_at = now + lease where session_id = ? and expires_at > now`; 0 rows →
   `Expired` (and the session row is removed).
-- Acquire: upsert that takes the row when free or owned by an expired session, `token = token + 1`; on MySQL the
-  `token` assignment is first in `SET` (left-to-right evaluation). Already owned → current token.
+- Acquire: upsert that takes the row when free or owned by an expired session, `token = token + 1`; the holder's
+  session row is read `for share`, so a take-over serializes with that session's keep-alive. On MySQL the `token`
+  assignment is first in `SET` (left-to-right evaluation). Already owned → current token.
 - Release: `update simba_lease set session_id = '' where name = ? and session_id = ? and token = ?`.
-- Members: `simba_member` joined with live sessions. `purgeExpired()` cleans leftover expired sessions.
+- Members: `simba_member` joined with live sessions. `purgeExpired()` cleans leftover expired sessions, automatically at most once per `purgeInterval` (default 1 min) after `openSession` / `keepAlive`.
 - No hints: candidates take over released leases at their next attempt.
 
 ## Redis (`RedisLeaseBackend` over `RedisScripting`; Lua in `simba-redis/src/main/resources/me/ahoo/simba/redis/`)

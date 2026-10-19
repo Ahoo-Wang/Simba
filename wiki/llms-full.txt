@@ -327,12 +327,13 @@ deadline = sentAt + remaining × (1 − drift) − margin
 
 `sentAt` is when the keep-alive was **sent**, not when the reply arrived, so a slow reply only shortens the deadline.
 As long as the two clocks run at rates within `1 ± drift` of each other, the local deadline passes before the backend
-can expire the session and give its leases to someone else.
+can expire the session and give its leases to someone else. Once the local deadline has passed, a renewal that arrives
+late never extends it: the session ends (`DEADLINE_PASSED`) and its terms stay ended.
 
 ## Leases, Terms and Tokens
 
-A **lease** is a backend record `name → (session, token)`. Lease names are 1–128 characters of `[A-Za-z0-9._:-]`
-on every backend, so a name means the same as a Redis key, a Zookeeper path and a JDBC column.
+A **lease** is a backend record `name → (session, token)`. Lease names are 1–128 characters of `[A-Za-z0-9._:-]`,
+other than `.` and `..`, on every backend, so a name means the same as a Redis key, a Zookeeper path and a JDBC column.
 
 A **term** is one period during which this node owns a lease. Winning the same name twice gives two different
 `Term` objects. A term carries:
@@ -578,7 +579,8 @@ create table if not exists simba_session
 (
     session_id char(32) character set ascii collate ascii_bin not null primary key,
     expires_at bigint                                        not null comment 'database time, epoch ms',
-    metadata   varchar(1024)                                 not null default ''
+    metadata   varchar(1024)                                 not null default '',
+    index idx_session_expires (expires_at)
 );
 
 create table if not exists simba_lease
@@ -591,7 +593,7 @@ create table if not exists simba_lease
 
 create table if not exists simba_member
 (
-    group_name varchar(128)                                  not null,
+    group_name varchar(128) character set utf8mb4 collate utf8mb4_bin not null,
     session_id char(32) character set ascii collate ascii_bin not null,
     primary key (group_name, session_id),
     index idx_member_session (session_id)
@@ -604,18 +606,22 @@ create table if not exists simba_member
 | `simba_lease` | Lease name ever acquired | Never deleted, so the token never resets; release sets `session_id` to `''` and keeps the token |
 | `simba_member` | Group member | Live only while its session is |
 
-Lease names are case-sensitive (binary collation on MySQL, `"C"` on PostgreSQL).
+Lease and group names are case-sensitive (binary collations on MySQL, `"C"` on PostgreSQL).
 
 ### How It Works
 
 - A lease belongs to the session in `session_id` only while that session's `expires_at` is in the future. Acquire is
   one upsert that takes the row when it is free or its session expired and advances `token` by one. On MySQL the
   `token` assignment comes first in `SET`, because MySQL evaluates `SET` left to right with already-updated values.
-- Every time comparison uses the database's own clock (`now` in epoch milliseconds, constant within a statement), so
-  application hosts' clocks never matter.
+- The take-over reads the holder's session row with a shared lock (`for share`), so it serializes with that session's
+  keep-alive at any isolation level: a renewal that commits concurrently either wins, or sees the lease gone in the
+  same keep-alive reply.
+- Every time comparison uses the database's own clock (`now`: UTC epoch milliseconds, constant within a statement and
+  independent of the connection's time zone), so application hosts' clocks never matter.
 - Expired sessions are cleaned up lazily: a lease of an expired session is free for the next acquirer, and a
-  keep-alive that finds its session expired removes it. `JdbcLeaseBackend.purgeExpired()` removes the rest; call it
-  from time to time if many short-lived processes leave rows behind.
+  keep-alive that finds its session expired removes it. The rest (sessions of crashed processes) is removed by
+  `purgeExpired()`, which runs at most once per `purgeInterval` (default one minute) after an `openSession` or
+  `keepAlive`, up to 1000 sessions per run, along `idx_session_expires`.
 
 ### Operating Notes
 
@@ -696,7 +702,11 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
   as 16 hex digits.
 - The token is the lease node's `czxid`: strictly increasing across terms because zxids are global, but not
   consecutive.
-- Release deletes the node; candidates watch it and take over at once. Group membership changes are watched too.
+- Release deletes the node; candidates watch it and take over at once. Group membership changes are watched too,
+  including the creation of a group that did not exist yet.
+- A name counts as possibly owned from the moment its create is sent, so a lease whose create succeeded but whose reply
+  was lost (connection loss, timeout) is still reported by the next keep-alive, after checking the node's owner, and
+  released by the engine. Releases of one session run one at a time.
 - The Zookeeper client heartbeats on its own, so a local watchdog closes a session that no keep-alive renewed within
   the lease: a node that stopped renewing never keeps its leases through heartbeats alone.
 - Remaining time is `min(leaseDuration, negotiated session timeout)`. While the client is disconnected, keep-alive and
@@ -910,7 +920,8 @@ list during a change; the assignment only decides who contends. Every member mus
 group name follows the lease name rules, and `"{group}.{partitions - 1}"` must fit in 128 characters.
 
 `runWhileLeader { term, partition -> }` is available too. `GroupTask.stop()` leaves the group and stops every
-partition, completing once each one handed over.
+partition, completing once each one handed over, including partitions an earlier view moved away that are still
+handing over.
 
 ## Spring Annotations
 
@@ -996,7 +1007,7 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 
 | Method | Behavior |
 |---|---|
-| `acquire(timeout)` | Waits up to `timeout` (on the client's clock) for a term; throws `LockTimeoutException` when none was won in time. Interrupting the caller abandons the attempt and rethrows `InterruptedException`. |
+| `acquire(timeout)` | Waits up to `timeout` (on the client's clock) for a term; throws `LockTimeoutException` when none was won in time. A term that ends right after it was won does not end the wait: the lock contends again until the timeout. Interrupting the caller abandons the attempt and rethrows `InterruptedException`. |
 | `tryAcquire()` | One attempt: the term when this client wins the first answered attempt; `null` when another session or this client holds the lease, or when no attempt is answered within one lease duration (backend unreachable). |
 
 Within one client a name has **at most one holder**: a second `acquire` of the same name waits until the first is
@@ -1074,8 +1085,9 @@ published from the engine's loop: keep listeners fast and thread-safe; exception
 | `SessionRenewed(session, latency)` | A keep-alive succeeded |
 | `SessionSuspended(session, cause)` | A keep-alive failed before the local deadline |
 | `SessionExpired(session, reason)` | The session ended: deadline passed or the backend reported it expired |
-| `Elected(name, token)` | This node got a term |
-| `Revoked(name, token, reason)` | A term ended |
+| `SessionClosed(session)` | The client closed (`session` is `null` when none was open); published once |
+| `Elected(name, token, kind)` | This node got a term; `kind` (`ELECTION`, `LOCK`, `GROUP`) tells which API started the election, so metrics can label by kind instead of by unbounded lock names |
+| `Revoked(name, token, reason, kind)` | A term ended |
 | `AcquireFailed(name, cause)` | An acquire call failed (not "held by someone else", which is normal) |
 | `WorkCompleted(name, token, outcome, duration, cause)` | One run of leader work ended: `COMPLETED`, `FAILED` or `CANCELLED` |
 
@@ -1101,14 +1113,16 @@ With Micrometer on the classpath and a `MeterRegistry` bean, the starter registe
 |---|---|---|---|
 | `simba.session.renew` | Timer | — | Latency of successful keep-alives |
 | `simba.session.state` | Gauge | `state` (`opening`, `live`, `suspended`, `closed`) | `1` for the current session status |
-| `simba.leadership` | Gauge | `name` | `1` while this node holds a term of the name, `0` after it lost one |
-| `simba.revocations` | Counter | `reason` | Ended terms of every election and lock, by `RevokeReason` (lowercase), including `stopped` and `stepped_down` |
+| `simba.leadership` | Gauge | `name` | `1` while this node holds a term of the election or partition, `0` after it lost one |
+| `simba.locks.held` | Gauge | — | Locks this node holds |
+| `simba.revocations` | Counter | `reason`, `kind` (`election`, `lock`, `group`) | Ended terms, by `RevokeReason` (lowercase), including `stopped` and `stepped_down` |
 | `simba.work` | Timer | `name`, `outcome` | Leader work runs (`completed`, `failed`, `cancelled`) |
 
-Partition elections appear as names too (`{group}.{partition}`). To keep the number of series bounded, a name's
-`simba.leadership` series exists only from its first term until a term ends by `stopped` (the election stopped, the
-client closed, or a lock was released): a released lock leaves no series behind and never reads as "no leader", and
-revocations carry no name. Without Spring, add
+Only elections and partitions (`{group}.{partition}`), whose names come from your code, are tagged by name. Locks,
+whose names often come from data (`invoice-42`), are counted together: `simba.locks.held` and the `kind="lock"`
+revocations, so a normal unlock never reads as "no leader". A name's `simba.leadership` series exists from its first
+term until a term ends `stopped` (the election stopped, the partition moved to another node, or the client closed), so
+stopped elections leave no series behind. Without Spring, add
 `MicrometerSimbaEventListener(registry)` to the builder yourself.
 
 ## Alert Rules
@@ -1132,9 +1146,9 @@ groups:
       - alert: SimbaTermsLost
         expr: increase(simba_revocations_total{reason=~"deadline_passed|session_expired|taken_over"}[10m]) > 0
         annotations:
-          summary: "{{ $labels.instance }} lost a term ({{ $labels.reason }}); protect writes with fencing tokens"
+          summary: "{{ $labels.instance }} lost a {{ $labels.kind }} term ({{ $labels.reason }}); protect writes with fencing tokens"
       - alert: SimbaLeadershipFlapping
-        expr: increase(simba_revocations_total{reason!~"stopped|stepped_down"}[10m]) > 3
+        expr: increase(simba_revocations_total{kind!="lock", reason!~"stopped|stepped_down"}[10m]) > 3
         annotations:
           summary: "Leadership on {{ $labels.instance }} moves too often"
       - alert: SimbaWorkFailing
@@ -1502,7 +1516,7 @@ ids, so the assignment of partitions to nodes changes.
 | 4.x | 5.0 |
 |---|---|
 | `simba.mutex.owner{mutex}` | `simba.leadership{name}` |
-| `simba.mutex.ownership.changes{mutex,change}` | `simba.revocations{reason}` (every ended term, `stopped` and `stepped_down` included) |
+| `simba.mutex.ownership.changes{mutex,change}` | `simba.revocations{reason,kind}` (every ended term, `stopped` and `stepped_down` included); locks: `simba.locks.held` |
 | `simba.mutex.contend{mutex,operation,outcome}` | `simba.session.renew` (one keep-alive per node) |
 | `simba.mutex.lease.expired{mutex}` | `simba.revocations{reason="deadline_passed"}` |
 | `simba.scheduler.work{mutex,outcome}` | `simba.work{name,outcome}` |
@@ -1544,7 +1558,9 @@ Names follow the lease name rules: 1–128 characters of `[A-Za-z0-9._:-]`; anyt
 
 `data class SimbaConfig(leaseDuration = 15s, renewInterval = leaseDuration / 3, drift = 0.01, margin = 50ms,
 retryJitter = renewInterval / 2, minBackoff = 100ms)`. Construction validates `renewInterval × 2 ≤ leaseDuration` and
-`leaseDuration × (1 − drift) − margin > renewInterval`. See [Timing](/guide/correctness#timing).
+`leaseDuration × (1 − drift) − margin > renewInterval`. From Java, use `SimbaConfig.builder()` (unset values keep
+their defaults, derived ones follow the values set) or the overloaded constructors. See
+[Timing](/guide/correctness#timing).
 
 ## Elections — `me.ahoo.simba`
 
@@ -1594,7 +1610,7 @@ overruns skips the missed starts.
 | `token: Long` | Fencing token: `> 0`, constant within the term, strictly increasing across terms of the name |
 | `isValid: Boolean` | Not revoked and the session's local deadline has not passed |
 | `remaining(): Duration` | Time left before the local deadline; `ZERO` once the term ended |
-| `ensureValid(minRemaining = ZERO)` | Throws `LeaseExpiredException` unless valid for more than `minRemaining` |
+| `ensureValid(minRemaining)`, `ensureValid()` | Throws `LeaseExpiredException` unless valid for more than `minRemaining` (`ZERO` without an argument) |
 | `revoked: CompletionStage<RevokeReason>` | Completes exactly once, when the term is revoked |
 
 ### `RevokeReason`
@@ -1626,11 +1642,12 @@ See [Locks](/guide/locks).
 | Type | Members |
 |---|---|
 | `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`; exceptions are logged and ignored |
-| `SimbaEvent` | `SessionOpened`, `SessionRenewed`, `SessionSuspended`, `SessionExpired`, `Elected`, `Revoked`, `AcquireFailed`, `WorkCompleted` |
+| `SimbaEvent` | `SessionOpened`, `SessionRenewed`, `SessionSuspended`, `SessionExpired`, `SessionClosed`, `Elected`, `Revoked`, `AcquireFailed`, `WorkCompleted` |
+| `ElectionKind` | `ELECTION`, `LOCK`, `GROUP`: which API started an election (on `Elected`, `Revoked` and `ElectionSnapshot`) |
 | `WorkOutcome` | `COMPLETED`, `FAILED`, `CANCELLED` |
 | `SimbaSnapshot` | `session: SessionSnapshot`, `elections: List<ElectionSnapshot>`, `leaseDuration`, `healthy` |
 | `SessionSnapshot` | `id`, `status` (`OPENING`, `LIVE`, `SUSPENDED`, `CLOSED`), `validFor`, `notLiveFor` |
-| `ElectionSnapshot` | `name`, `status` (`CANDIDATE`, `LEADER`, `COOLDOWN`, `HANDOVER`), `token`, `remaining` |
+| `ElectionSnapshot` | `name`, `status` (`CANDIDATE`, `LEADER`, `COOLDOWN`, `HANDOVER`), `token`, `remaining`, `kind` |
 
 See [Observability](/guide/observability).
 
@@ -1661,8 +1678,8 @@ Rules every implementation follows (checked by [`LeaseBackendSpec`](/guide/testi
 - `release` frees only leases the session still owns with exactly the given token, so a stale release is a no-op;
 - hints only accelerate; losing one never affects correctness.
 
-Value types: `LeaseName` (1–128 characters of `[A-Za-z0-9._:-]`), `SessionId` (never reused), `Ticker` (monotonic
-nanoseconds). Implementations: `JdbcLeaseBackend`, `RedisLeaseBackend`, `ZookeeperLeaseBackend`,
+Value types: `LeaseName` (1–128 characters of `[A-Za-z0-9._:-]`, not `.` or `..`), `SessionId` (never reused) —
+both plain immutable classes with value equality, usable from Java — and `Ticker` (monotonic nanoseconds). Implementations: `JdbcLeaseBackend`, `RedisLeaseBackend`, `ZookeeperLeaseBackend`,
 `InMemoryLeaseBackend`; see [Backends](/guide/backends).
 
 ## Spring Boot — `me.ahoo.simba.spring.boot.starter`
@@ -1798,7 +1815,8 @@ Nodes of the same major version may run together, so these must not change withi
 - **Partition assignment:** `PartitionAssignment.weight` (FNV-1a 64 of `"$partition@$member"` mixed with SplitMix64,
   members are session ids).
 - **JDBC:** tables `simba_session`, `simba_lease`, `simba_member`; `simba_lease` rows are never deleted and release
-  clears `session_id` only; every time comparison uses the dialect's `now`; the MySQL acquire assigns `token` before
+  clears `session_id` only; every time comparison uses the dialect's `now` (UTC epoch ms); the take-over reads the
+  holder's session row `for share`, serializing with its keep-alive; the MySQL acquire assigns `token` before
   `session_id` (left-to-right `SET`).
 - **Redis:** `simba:lease:{name}` = `{session, token, expires}` (never expires, never deleted),
   `simba:session:{sid}` (`PX`) with `:leases` / `:groups`, `simba:group:{g}` scored by expiry, `released` published on

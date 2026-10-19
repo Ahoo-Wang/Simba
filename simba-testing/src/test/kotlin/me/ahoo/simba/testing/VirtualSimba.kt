@@ -23,6 +23,7 @@ import me.ahoo.simba.spi.SessionId
 import java.time.Duration
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Threaded clients on virtual time: one [VirtualScheduler] for every client and the backend, direct I/O and
@@ -31,7 +32,10 @@ import java.util.concurrent.TimeUnit
  */
 class VirtualSimba : AutoCloseable {
     val scheduler = VirtualScheduler()
-    val backend = InMemoryLeaseBackend(scheduler)
+    private val sessions = AtomicInteger()
+
+    /** Session ids are numbered so that partition assignments, which hash them, are the same on every run. */
+    val backend = InMemoryLeaseBackend(scheduler) { SessionId("session-${sessions.incrementAndGet()}") }
 
     /** Names of every acquire call that reached the backend, in order. */
     val acquires = LinkedBlockingQueue<Set<LeaseName>>()

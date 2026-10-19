@@ -32,7 +32,8 @@ create table if not exists simba_session
 (
     session_id char(32) character set ascii collate ascii_bin not null primary key,
     expires_at bigint                                        not null comment 'database time, epoch ms',
-    metadata   varchar(1024)                                 not null default ''
+    metadata   varchar(1024)                                 not null default '',
+    index idx_session_expires (expires_at)
 );
 
 create table if not exists simba_lease
@@ -45,7 +46,7 @@ create table if not exists simba_lease
 
 create table if not exists simba_member
 (
-    group_name varchar(128)                                  not null,
+    group_name varchar(128) character set utf8mb4 collate utf8mb4_bin not null,
     session_id char(32) character set ascii collate ascii_bin not null,
     primary key (group_name, session_id),
     index idx_member_session (session_id)
@@ -58,15 +59,18 @@ create table if not exists simba_member
 | `simba_lease` | 曾被获取过的租约名称 | 永不删除，因此 token 永不重置；释放会把 `session_id` 置为 `''` 并保留 token |
 | `simba_member` | 组成员 | 仅在其会话存活期间有效 |
 
-租约名称区分大小写（MySQL 上为二进制排序规则，PostgreSQL 上为 `"C"`）。
+租约名称和组名都区分大小写（MySQL 上为二进制排序规则，PostgreSQL 上为 `"C"`）。
 
 ### 工作原理 {#how-it-works}
 
 - 只有当 `session_id` 所指会话的 `expires_at` 在未来时，租约才属于该会话。获取是一条 upsert：当行空闲或其会话已过期时占有该行，并把
   `token` 加一。在 MySQL 上，`token` 的赋值在 `SET` 中排在最前，因为 MySQL 按从左到右的顺序、使用已更新的值求值 `SET`。
-- 每次时间比较都使用数据库自身的时钟（`now`，以 epoch 毫秒表示，在一条语句内不变），因此应用主机的时钟从不影响结果。
-- 过期会话被惰性清理：过期会话的租约对下一个获取者空闲，发现自己会话已过期的续约会将其删除。`JdbcLeaseBackend.purgeExpired()`
-  删除剩余的部分；如果大量短生命周期的进程留下了残余行，请不时调用它。
+- 接管时以共享锁（`for share`）读取持有者的会话行，因此在任何隔离级别下都与该会话的续约串行化：并发提交的续约要么胜出，要么在同一次续约
+  回复中看到租约已被接管。
+- 每次时间比较都使用数据库自身的时钟（`now`：UTC epoch 毫秒，在一条语句内不变，且不受连接时区影响），因此应用主机的时钟从不影响结果。
+- 过期会话被惰性清理：过期会话的租约对下一个获取者空闲，发现自己会话已过期的续约会将其删除。其余部分（崩溃进程留下的会话）由
+  `purgeExpired()` 删除：它在 `openSession` 或 `keepAlive` 之后运行，每个 `purgeInterval`（默认一分钟）至多一次，每次至多 1000
+  个会话，沿 `idx_session_expires` 索引查找。
 
 ### 运维说明 {#operating-notes}
 
