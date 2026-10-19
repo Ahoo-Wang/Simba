@@ -111,10 +111,10 @@ class RedisLeaseBackendTest {
         val slots = (names.map { RedisSlots.slot(RedisLeaseKeys.lease(it)) } + groupSlot).toSet()
         scripting.calls.set(0)
 
-        val result = routed.keepAlive(session, lease, names + name())
+        val result = routed.keepAlive(session, lease, emptySet())
 
         result.assert().isEqualTo(KeepAliveResult.Live(lease, tokens))
-        scripting.calls.get().assert().isEqualTo(1 + slots.size + 1)
+        scripting.calls.get().assert().isEqualTo(1 + slots.size)
         names.forEach {
             redis.getExpire(RedisLeaseKeys.lease(it)).assert().isEqualTo(-1L)
         }
@@ -175,6 +175,75 @@ class RedisLeaseBackendTest {
     }
 
     @Test
+    fun acquiringAnOwnedLeaseExtendsItToTheSession() {
+        listOf(backend, RedisLeaseBackend(RedisLeaseFixture.scripting, routeBySlot = true)).forEach { backend ->
+            val name = name()
+            val key = RedisLeaseKeys.lease(name)
+            val session = backend.openSession(lease).id
+            val token = backend.granted(session, name)
+            val expires = redis.opsForHash<String, String>().get(key, "expires")!!.toLong()
+            // As if the lease was granted long before the session's last keep-alive and never extended since.
+            redis.opsForHash<String, String>().put(key, "expires", (expires - lease.toMillis() + 1_000).toString())
+
+            backend.granted(session, name).assert().isEqualTo(token)
+
+            redis.opsForHash<String, String>().get(key, "expires")!!.toLong().assert().isGreaterThanOrEqualTo(expires)
+        }
+    }
+
+    @Test
+    fun keepAliveDropsLeasesTheSessionNoLongerHoldsFromItsIndex() {
+        val name = name()
+        val session = backend.openSession(lease).id
+        backend.release(session, mapOf(name to backend.granted(session, name)))
+        redis.opsForZSet().score(RedisLeaseKeys.sessionLeases(session), RedisLeaseKeys.lease(name)).assert().isNotNull()
+
+        backend.keepAlive(session, lease, emptySet()).assert().isEqualTo(KeepAliveResult.Live(lease, emptyMap()))
+
+        redis.opsForZSet().score(RedisLeaseKeys.sessionLeases(session), RedisLeaseKeys.lease(name)).assert().isNull()
+    }
+
+    @Test
+    fun onAClusterKeepAliveDropsALostLeaseOnlyOneLeaseAfterItsLastAttempt() {
+        val routed = RedisLeaseBackend(SlotCheckingScripting(RedisLeaseFixture.scripting), routeBySlot = true)
+        val name = name()
+        val session = routed.openSession(shortLease).id
+        val index = RedisLeaseKeys.sessionLeases(session)
+        routed.release(session, mapOf(name to routed.granted(session, name)))
+
+        val live = routed.keepAlive(session, shortLease, emptySet())
+        live.assert().isEqualTo(KeepAliveResult.Live(shortLease, emptyMap()))
+        redis.opsForZSet().score(index, RedisLeaseKeys.lease(name)).assert().isNotNull()
+
+        awaitUntil {
+            routed.keepAlive(session, shortLease, emptySet())
+            redis.opsForZSet().score(index, RedisLeaseKeys.lease(name)) == null
+        }
+    }
+
+    @Test
+    fun aCloseThatFailedWhileFreeingFinishesWhenRepeated() {
+        listOf(false, true).forEach { routeBySlot ->
+            val failing = FailingOnce(RedisLeaseFixture.scripting, "lease_release")
+            val closing = RedisLeaseBackend(failing, routeBySlot = routeBySlot)
+            val name = name()
+            val session = closing.openSession(lease).id
+            val token = closing.granted(session, name)
+            val contender = backend.openSession(lease).id
+
+            assertThrows<IllegalStateException> { closing.closeSession(session) }
+            val held = backend.acquire(contender, setOf(name))
+            held.assert().isEqualTo(mapOf(name to AcquireResult.HeldBy(session, token)))
+            backend.keepAlive(session, lease, emptySet()).assert().isEqualTo(KeepAliveResult.Expired)
+
+            closing.closeSession(session)
+
+            backend.acquire(contender, setOf(name)).assert().isEqualTo(mapOf(name to AcquireResult.Granted(token + 1)))
+            redis.hasKey(RedisLeaseKeys.sessionLeases(session)).assert().isFalse()
+        }
+    }
+
+    @Test
     fun groupNamesFollowTheLeaseNameRules() {
         val session = backend.openSession(lease).id
 
@@ -209,6 +278,20 @@ class RedisLeaseBackendTest {
             done.get(30, TimeUnit.SECONDS)
         } finally {
             polling.cancel(false)
+        }
+    }
+
+    /** Fails the first batch that runs [script], before running it. */
+    private class FailingOnce(private val delegate: RedisScripting, private val script: String) :
+        RedisScripting by delegate {
+        private var failed = false
+
+        override fun eval(calls: List<ScriptCall>, wait: ReplicaWait?): ScriptReplies {
+            if (!failed && calls.any { it.script.name == script }) {
+                failed = true
+                throw IllegalStateException("Connection lost before [$script].")
+            }
+            return delegate.eval(calls, wait)
         }
     }
 }

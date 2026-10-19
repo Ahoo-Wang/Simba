@@ -61,9 +61,6 @@ abstract class LeaseBackendSpec {
     /** The backend's clock when the test controls it, else `null` (real time). */
     protected open val clock: ClockControl? = null
 
-    /** Whether leases expire on their own rather than with their session; keep-alive then reports only `held`. */
-    protected open val leasesExpireIndependently: Boolean = false
-
     /** Upper bound for anything a test waits for. */
     protected open val timeout: Duration = Duration.ofSeconds(30)
 
@@ -393,10 +390,42 @@ abstract class LeaseBackendSpec {
 
         val owned = backend.keepAlive(session, lease, setOf(held)).live().owned
 
-        owned.assert().containsEntry(held, heldToken)
-        if (!leasesExpireIndependently) {
-            owned.assert().isEqualTo(mapOf(held to heldToken, unlisted to unlistedToken))
+        owned.assert().isEqualTo(mapOf(held to heldToken, unlisted to unlistedToken))
+    }
+
+    @Test
+    fun keepAliveKeepsLeasesTheCallerDidNotListBeyondTheLeaseDuration() {
+        val kept = open(shortLease)
+        val control = open(shortLease)
+        val name = name()
+        val token = backend.grantedToken(kept, name)
+
+        // An acquire whose reply was lost, or one in flight while the keep-alive was sent: `held` lacks the name.
+        awaitExpired(control) {
+            backend.keepAlive(kept, shortLease, emptySet()).live().owned.assert().containsEntry(name, token)
         }
+
+        backend.acquire(open(), setOf(name)).assert().isEqualTo(mapOf(name to AcquireResult.HeldBy(kept, token)))
+        backend.keepAlive(kept, lease, emptySet()).live().owned.assert().isEqualTo(mapOf(name to token))
+    }
+
+    @Test
+    fun aTokenMissingFromOwnedIsNeverGrantedToTheSameSessionAgain() {
+        val session = open(shortLease)
+        val control = open(shortLease)
+        val names = List(3) { name() }
+        val tokens = names.associateWith { backend.grantedToken(session, it) }
+
+        // Whatever keep-alive no longer reports is gone: acquiring it again must begin a new term.
+        awaitExpired(control) {
+            val owned = backend.keepAlive(session, shortLease, setOf(names.first())).live().owned
+            owned.assert().isEqualTo(tokens)
+        }
+        backend.release(session, mapOf(names.first() to tokens.getValue(names.first())))
+        val owned = backend.keepAlive(session, lease, names.toSet()).live().owned
+
+        owned.assert().isEqualTo(tokens - names.first())
+        backend.grantedToken(session, names.first()).assertAfter(tokens.getValue(names.first()))
     }
 
     @Test
@@ -518,9 +547,42 @@ abstract class LeaseBackendSpec {
         }
     }
 
+    // ---- input rules ----------------------------------------------------------------------------------------------
+
     @Test
-    fun capabilitiesAllowAtLeastOneNamePerBatch() {
-        backend.capabilities.maxBatch.assert().isGreaterThanOrEqualTo(1)
+    fun acquireTakesAFullBatchAndRejectsALargerOne() {
+        val session = open()
+        val names = List(LeaseBackend.MAX_BATCH) { name() }.toSet()
+
+        backend.acquire(session, names).values.forEach { it.assert().isInstanceOf(AcquireResult.Granted::class.java) }
+        assertThrows<IllegalArgumentException> { backend.acquire(session, names + name()) }
+        backend.keepAlive(session, lease, names).live().owned.keys.assert().isEqualTo(names)
+    }
+
+    @Test
+    fun leasesShorterThanOneMillisecondAreRejected() {
+        val session = open()
+
+        listOf(Duration.ofNanos(999_999), Duration.ZERO, Duration.ofSeconds(-1)).forEach { tooShort ->
+            assertThrows<IllegalArgumentException> { backend.openSession(tooShort) }
+            assertThrows<IllegalArgumentException> { backend.keepAlive(session, tooShort, emptySet()) }
+        }
+        backend.keepAlive(session, lease, emptySet()).live()
+    }
+
+    @Test
+    fun groupNamesFollowTheLeaseNameRules() {
+        val session = open()
+
+        listOf("", "a/b", "{a}", "a b", ".", "..", "x".repeat(LeaseName.MAX_LENGTH + 1)).forEach { invalid ->
+            assertThrows<IllegalArgumentException> { backend.join(session, invalid) }
+            assertThrows<IllegalArgumentException> { backend.leave(session, invalid) }
+            assertThrows<IllegalArgumentException> { backend.members(invalid) }
+        }
+        val longest = "g".repeat(LeaseName.MAX_LENGTH)
+        backend.join(session, longest)
+        backend.members(longest).assert().contains(session)
+        backend.leave(session, longest)
     }
 
     // ---- helpers --------------------------------------------------------------------------------------------------

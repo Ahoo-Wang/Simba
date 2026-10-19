@@ -31,16 +31,20 @@ import java.util.concurrent.CopyOnWriteArrayList
  * A [LeaseBackend] in memory, with time read from [ticker] (the "backend clock"). Thread-safe; hints are delivered
  * synchronously after the call that caused them, outside the internal lock.
  *
- * Leases belong to sessions: a lease is free when released or when its session expired, and a lease's token never
- * resets. Expired sessions are forgotten on first sight and never revived.
+ * By default leases belong to sessions: a lease is free when released or when its session expired. With
+ * [selfExpiringLeases] a lease instead expires on its own, like on Redis: a grant lasts one full lease of its
+ * session, keep-alive extends every lease the session owns, and a lease outlives an expired session until its own
+ * expiry. Either way a lease's token never resets, and expired sessions are forgotten on first sight and never
+ * revived.
  */
-class InMemoryLeaseBackend(
+class InMemoryLeaseBackend @JvmOverloads constructor(
     private val ticker: Ticker = Ticker.SYSTEM,
+    private val selfExpiringLeases: Boolean = false,
     private val sessionIds: () -> SessionId = SessionId::random,
 ) : LeaseBackend {
-    private class Session(val id: SessionId, var expiresAt: Long)
+    private class Session(val id: SessionId, var expiresAt: Long, var lease: Long)
 
-    private class Lease(var session: SessionId?, var token: Long)
+    private class Lease(var session: SessionId?, var token: Long, var expiresAt: Long = 0)
 
     /** Owner of a lease as the backend sees it now. */
     data class Owner(val session: SessionId, val token: Long)
@@ -51,36 +55,49 @@ class InMemoryLeaseBackend(
     private val groups = HashMap<String, MutableSet<SessionId>>()
     private val listeners = CopyOnWriteArrayList<BackendHintListener>()
 
-    override val capabilities: Capabilities =
-        Capabilities(releaseHints = true, membershipHints = true, maxBatch = Int.MAX_VALUE)
+    override val capabilities: Capabilities = Capabilities(releaseHints = true, membershipHints = true)
 
     override fun openSession(lease: Duration, metadata: Map<String, String>): SessionGrant =
         synchronized(lock) {
+            LeaseBackend.requireLease(lease)
             val id = sessionIds()
             check(id !in sessions) { "Session id [$id] reused." }
-            sessions[id] = Session(id, now() + lease.toNanos())
+            sessions[id] = Session(id, now() + lease.toNanos(), lease.toNanos())
             SessionGrant(id, lease)
         }
 
     override fun keepAlive(session: SessionId, lease: Duration, held: Set<LeaseName>): KeepAliveResult =
         withHints { hints ->
+            LeaseBackend.requireLease(lease)
             val live = live(session, hints) ?: return@withHints KeepAliveResult.Expired
             live.expiresAt = now() + lease.toNanos()
-            KeepAliveResult.Live(lease, owned(session))
+            live.lease = lease.toNanos()
+            val owned = owned(session)
+            if (selfExpiringLeases) {
+                owned.keys.forEach { leases.getValue(it).extend(live.expiresAt) }
+            }
+            KeepAliveResult.Live(lease, owned)
         }
 
     override fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult> =
         withHints { hints ->
-            live(session, hints) ?: throw SessionExpiredException(session)
+            LeaseBackend.requireBatch(names)
+            val live = live(session, hints) ?: throw SessionExpiredException(session)
+            // A grant lasts as long as the session, or one full lease when leases expire on their own.
+            val until = if (selfExpiringLeases) now() + live.lease else live.expiresAt
             names.associateWith { name ->
                 val lease = leases.getOrPut(name) { Lease(null, 0) }
-                val holder = lease.session?.let { live(it, hints) }
+                val holder = holder(lease, hints)
                 when {
-                    lease.session == session -> AcquireResult.Granted(lease.token)
-                    holder != null -> AcquireResult.HeldBy(holder.id, lease.token)
+                    holder == session -> {
+                        lease.extend(until)
+                        AcquireResult.Granted(lease.token)
+                    }
+                    holder != null -> AcquireResult.HeldBy(holder, lease.token)
                     else -> {
                         lease.session = session
                         lease.token++
+                        lease.expiresAt = until
                         AcquireResult.Granted(lease.token)
                     }
                 }
@@ -100,10 +117,11 @@ class InMemoryLeaseBackend(
     }
 
     override fun closeSession(session: SessionId) {
-        withHints { hints -> end(session, hints) }
+        withHints { hints -> end(session, hints, closing = true) }
     }
 
     override fun join(session: SessionId, group: String) {
+        LeaseBackend.requireGroup(group)
         withHints { hints ->
             live(session, hints) ?: throw SessionExpiredException(session)
             if (groups.getOrPut(group) { LinkedHashSet() }.add(session)) {
@@ -113,6 +131,7 @@ class InMemoryLeaseBackend(
     }
 
     override fun leave(session: SessionId, group: String) {
+        LeaseBackend.requireGroup(group)
         withHints { hints ->
             if (groups[group]?.remove(session) == true) {
                 hints += BackendHint.MembersChanged(group)
@@ -122,6 +141,7 @@ class InMemoryLeaseBackend(
 
     override fun members(group: String): List<SessionId> =
         withHints { hints ->
+            LeaseBackend.requireGroup(group)
             groups[group].orEmpty().toList().filter { live(it, hints) != null }.sortedBy { it.value }
         }
 
@@ -130,12 +150,12 @@ class InMemoryLeaseBackend(
         return AutoCloseable { listeners -= listener }
     }
 
-    /** The current owner of [name], if its session is live. */
+    /** The current owner of [name]: a live session, or with self-expiring leases one whose lease has not expired. */
     fun owner(name: LeaseName): Owner? =
         withHints { hints ->
             val lease = leases[name] ?: return@withHints null
-            val session = lease.session?.let { live(it, hints) } ?: return@withHints null
-            Owner(session.id, lease.token)
+            val session = holder(lease, hints) ?: return@withHints null
+            Owner(session, lease.token)
         }
 
     /** The latest token of [name]; `0` when never acquired. */
@@ -144,7 +164,25 @@ class InMemoryLeaseBackend(
     private fun now(): Long = ticker.nanoTime()
 
     private fun owned(session: SessionId): Map<LeaseName, Long> =
-        leases.entries.filter { it.value.session == session }.associate { it.key to it.value.token }
+        leases.entries
+            .filter { it.value.session == session && (!selfExpiringLeases || now() - it.value.expiresAt < 0) }
+            .associate { it.key to it.value.token }
+
+    /** The session holding [lease]: its own expiry decides with self-expiring leases, else its session's liveness. */
+    private fun holder(lease: Lease, hints: MutableList<BackendHint>): SessionId? {
+        val session = lease.session ?: return null
+        if (!selfExpiringLeases) {
+            return live(session, hints)?.id
+        }
+        live(session, hints)
+        return session.takeIf { now() - lease.expiresAt < 0 }
+    }
+
+    private fun Lease.extend(until: Long) {
+        if (until - expiresAt > 0) {
+            expiresAt = until
+        }
+    }
 
     /** The session if live; an expired one is ended (its leases freed) and forgotten. */
     private fun live(id: SessionId, hints: MutableList<BackendHint>): Session? {
@@ -156,10 +194,11 @@ class InMemoryLeaseBackend(
         return null
     }
 
-    private fun end(id: SessionId, hints: MutableList<BackendHint>) {
+    /** Ends [id]: closing frees its leases, expiry too unless leases expire on their own. */
+    private fun end(id: SessionId, hints: MutableList<BackendHint>, closing: Boolean = false) {
         sessions.remove(id)
         for ((name, lease) in leases) {
-            if (lease.session == id) {
+            if (lease.session == id && (closing || !selfExpiringLeases)) {
                 lease.session = null
                 hints += BackendHint.Released(name)
             }

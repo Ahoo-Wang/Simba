@@ -15,6 +15,7 @@ package me.ahoo.simba.jdbc
 import com.zaxxer.hikari.HikariDataSource
 import me.ahoo.simba.spi.AcquireResult
 import me.ahoo.simba.spi.KeepAliveResult
+import me.ahoo.simba.spi.LeaseBackend
 import me.ahoo.simba.spi.LeaseName
 import me.ahoo.simba.spi.SessionId
 import me.ahoo.test.asserts.assert
@@ -309,7 +310,7 @@ class JdbcLeaseBackendTest {
         assertThrows<IllegalArgumentException> { backend.openSession(Duration.ZERO) }
         assertThrows<IllegalArgumentException> { backend.join(session, "") }
         assertThrows<IllegalArgumentException> {
-            backend.acquire(session, (0..backend.capabilities.maxBatch).map { name() }.toSet())
+            backend.acquire(session, (0..LeaseBackend.MAX_BATCH).map { name() }.toSet())
         }
     }
 }

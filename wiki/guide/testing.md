@@ -153,7 +153,6 @@ class MyLeaseBackendTest : LeaseBackendSpec() {
 | `lease` | 30 s | Lease of sessions that must outlive a test |
 | `shortLease` | 1 s | Lease of sessions a test lets expire; keep it short on real time |
 | `clock` | `null` | The backend's clock when the test controls it; otherwise time-based tests poll until the lease ran out |
-| `leasesExpireIndependently` | `false` | Whether leases expire on their own rather than with their session (Redis) |
 | `timeout` | 30 s | Upper bound for anything a test waits for |
 
 Every test uses fresh lease and group names, so the store may be shared across tests. The JDBC, Redis and Zookeeper

@@ -83,7 +83,9 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
    time.
 3. **`LeaseBackend` SPI**: session open / keep-alive / close, batch acquire, release, group join / leave / members,
    optional hints. No scheduling, no notification, no local lease state; remaining durations come back as durations
-   measured by the backend's clock.
+   measured by the backend's clock. Keep-alive reports every owned lease (`held` is only a hint); inputs are validated
+   alike (`LeaseBackend.requireLease` ≥ 1 ms, `requireGroup` = `LeaseName` rules, `requireBatch` ≤ `MAX_BATCH` 64).
+   `InMemoryLeaseBackend(selfExpiringLeases = true)` models Redis-style leases; `SimulationSpec` runs both modes.
 
 ## Invariants
 
@@ -157,9 +159,13 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
 - Redis (`me.ahoo.simba.redis.RedisLeaseBackend`, Lua in `simba-redis/src/main/resources/me/ahoo/simba/redis/`): lease
   hash `simba:lease:{name}` = `{session, token, expires}` never expires and is never deleted (release clears
   `session`); `expires` is Redis `TIME`. Session hash `simba:session:{sid}` (PX) plus `:leases` / `:groups` index sets
-  in the same slot; keep-alive, acquire and join fail once its `PTTL` is 0 (Redis still keeps the key in that
-  millisecond, so a bare `PEXPIRE` would revive it). A new term lasts as long as its session and
-  keep-alive extends only `held`, so leases expire on their own. Groups: zset `simba:group:{g}` scored by expiry.
+  in the same slot (`:leases` is a zset of lease keys scored by the acquire attempt's Redis time); keep-alive, acquire
+  and join fail once the session hash's `PTTL` is 0 (Redis still keeps the key in that millisecond, so a bare
+  `PEXPIRE` would revive it). Leases expire on their own: a new term lasts as long as its session (a full session
+  lease on a Cluster), acquire by the holder extends it, and keep-alive extends and reports every indexed lease the
+  session holds (never only `held`). Index entries leave only atomically on a single node, or on a Cluster once not
+  held and unchanged for a lease. Close: delete session, free indexed leases and groups, drop indexes (retry-safe).
+  Groups: zset `simba:group:{g}` scored by expiry.
   Release publishes `released` on the lease key, the only broadcast. With `routeBySlot` (Cluster) every script call
   keeps to one hash slot. Group names follow the `LeaseName` rules. `wait-replicas` makes a new term wait for `WAIT`.
 - Zookeeper (`ZookeeperLeaseBackend`): one raw `ZooKeeper` client per session, never reconnected to another session;

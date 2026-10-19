@@ -670,8 +670,10 @@ val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
 Release publishes `released` on the lease key's channel (`simba:lease:{name}`); it is the only broadcast and lets
 candidates take over at once. Every time decision uses Redis `TIME` inside the scripts.
 
-A new term lasts as long as its session, and a keep-alive extends only the leases the node still holds, so leases
-expire on their own even if a session key outlives them.
+Leases expire on their own: a new term lasts as long as its session (one full session lease on a Cluster), and a
+keep-alive extends every lease the session holds, found through its lease index, so a lease acquired while a
+keep-alive was in flight is extended too. Closing a session deletes it first, then frees its leases and memberships,
+then drops its indexes, so a close repeated after a failure finishes the job.
 
 ### Cluster
 
@@ -1396,7 +1398,6 @@ class MyLeaseBackendTest : LeaseBackendSpec() {
 | `lease` | 30 s | Lease of sessions that must outlive a test |
 | `shortLease` | 1 s | Lease of sessions a test lets expire; keep it short on real time |
 | `clock` | `null` | The backend's clock when the test controls it; otherwise time-based tests poll until the lease ran out |
-| `leasesExpireIndependently` | `false` | Whether leases expire on their own rather than with their session (Redis) |
 | `timeout` | 30 s | Upper bound for anything a test waits for |
 
 Every test uses fresh lease and group names, so the store may be shared across tests. The JDBC, Redis and Zookeeper
@@ -1698,7 +1699,7 @@ See [Observability](/guide/observability).
 
 ```kotlin
 interface LeaseBackend : AutoCloseable {
-    val capabilities: Capabilities                    // releaseHints, membershipHints, maxBatch
+    val capabilities: Capabilities                    // releaseHints, membershipHints
     fun openSession(lease: Duration, metadata: Map<String, String> = emptyMap()): SessionGrant
     fun keepAlive(session: SessionId, lease: Duration, held: Set<LeaseName>): KeepAliveResult   // Live(remaining, owned) | Expired
     fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult>      // Granted(token) | HeldBy(session, token)
@@ -1713,11 +1714,16 @@ interface LeaseBackend : AutoCloseable {
 
 Rules every implementation follows (checked by [`LeaseBackendSpec`](/guide/testing#backend-tck)):
 
-- every method is one backend round trip (or one per slot), with no scheduling, no notification and no local state;
+- every method makes a bounded number of backend calls, without waiting, scheduling, notifying or keeping local lease
+  state;
 - every remaining duration is computed with the backend's clock and returned as a duration, never a timestamp;
 - a token is greater than zero, strictly increases with every new term of its name and never resets;
 - a session expires once it was not kept alive for its lease, even if the transport keeps a connection alive;
 - an expired session is never revived: `keepAlive` answers `Expired`, `acquire` throws `SessionExpiredException`;
+- `keepAlive` reports every lease the session owns, whatever `held` says, and an owned lease lasts at least as long
+  as its session, also on a backend whose leases expire on their own;
+- inputs are validated alike, with `IllegalArgumentException`: leases of at least 1 ms, group names under the
+  `LeaseName` rules, at most `LeaseBackend.MAX_BATCH` (64) names per `acquire`;
 - `release` frees only leases the session still owns with exactly the given token, so a stale release is a no-op;
 - hints only accelerate; losing one never affects correctness.
 
@@ -1786,7 +1792,7 @@ starter depends on the backends as optional features. `simba-bom` and `simba-dep
 | User API | `Simba`, `Election`, `DistributedLock`, `PartitionGroup`, `Term` | Handles; no state of their own beyond what the engine publishes |
 | Engine | `engine.step(state, event, now)` | Pure state machine: no threads, clock or I/O |
 | Shell | `EngineShell` | Runs `step` on one loop thread, executes its effects: backend calls, timers, callbacks, group views |
-| SPI | `LeaseBackend` | One round trip per call: sessions, leases, groups, optional hints |
+| SPI | `LeaseBackend` | A bounded number of calls per method: sessions, leases, groups, optional hints |
 
 ### The Pure Engine
 
@@ -1918,9 +1924,9 @@ You need JDK 21 and Docker.
 
 ## Adding a Backend
 
-1. Implement `LeaseBackend`: one round trip per call, no scheduling, no local lease state, remaining times measured by
-   the backend's clock and returned as durations, tokens that strictly increase and never reset, expired sessions that
-   are never revived.
+1. Implement `LeaseBackend`: a bounded number of calls per method, no scheduling, no local lease state, remaining
+   times measured by the backend's clock and returned as durations, tokens that strictly increase and never reset,
+   expired sessions that are never revived, keep-alive replies that list every owned lease.
 2. Extend [`LeaseBackendSpec`](/guide/testing#backend-tck) for it. A backend with an injectable clock overrides
    `clock`; otherwise time-based tests poll until the backend's own lease ran out.
 3. Add a starter auto-configuration activated by `simba.enabled`, `simba.<backend>.enabled` and `simba.backend`,
