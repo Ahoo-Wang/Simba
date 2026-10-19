@@ -109,8 +109,8 @@ flowchart TB
 
 - **Lease**:后端里"名字 → (会话, token)"的一条记录。名字为 `LeaseName` 值类型,统一校验:1–128 字符,
   `[A-Za-z0-9._:-]`,不含 `{}`、`/`(消除 Redis hash tag、ZK 路径、JDBC 列长三处各自的隐式约束)。
-- **Token**:每个名字一个永不重置的计数器,每次换任期 +1。**token 就是任期号**,不再区分 `version` 与 `fencing_token`,
-  也没有"关闭 fencing"的开关——它是免费的。
+- **Token**:每个名字一个永不重置、大于 0 的任期号,每次换任期严格递增(JDBC / Redis / 内存后端为 +1,ZooKeeper 为
+  czxid)。**token 就是任期号**,不再区分 `version` 与 `fencing_token`,也没有"关闭 fencing"的开关——它是免费的。
 - **Term**:本节点对某个名字的一个任期,不可变身份 + 只读的时间视图:
 
 ```kotlin
