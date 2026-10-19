@@ -135,6 +135,10 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   token = czxid (strictly increasing, not consecutive). Members are ephemeral `/simba/groups/{g}/{sid}`. A local
   watchdog closes a session no keep-alive started within `lease`; remaining is `min(lease, negotiated timeout)`. A
   disconnected client fails `keepAlive` / `acquire`; a zk-expired one is `Expired`.
+  A name is a keep-alive candidate from before its create is sent (under the session's send lock, so a keep-alive read
+  sent earlier cannot drop it); keep-alive reports candidates the session owns and forgets the others. Releases of a
+  session are serialized (the czxid check and the delete are not atomic). Lease paths of a batch are validated before
+  any request; `members` on a missing group leaves an exists watch. A closed backend opens no session.
 
 ### Starter
 - Properties: `simba.enabled`, `simba.backend`, `simba.session.{lease-duration,renew-interval,drift,margin}`,
