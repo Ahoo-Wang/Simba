@@ -176,11 +176,19 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
 
     /** Stops [name] if [run] (or any run, when null) is the current lifecycle; completes when it stopped. */
     private fun stopRun(name: LeaseName, run: Run?): CompletableFuture<Void> {
-        val stopped = if (run == null) running.remove(name) else run.takeIf { running.remove(name, it) }
-        if (stopped == null) {
-            return run?.stopped ?: CompletableFuture.completedFuture(null)
+        var stopping: Pair<Run, CompletableFuture<Void>>? = null
+        // Post the stop while the name is still taken: a claim in this client waits on the map entry, so its start
+        // always reaches the engine after this stop and is never dropped by it. `shell.stop` only enqueues.
+        running.computeIfPresent(name) { _, current ->
+            if (run != null && current !== run) {
+                current
+            } else {
+                stopping = current to shell.stop(name)
+                null
+            }
         }
-        shell.stop(name).whenComplete { _, _ -> stopped.stopped.complete(null) }
+        val (stopped, stop) = stopping ?: return run?.stopped ?: CompletableFuture.completedFuture(null)
+        stop.whenComplete { _, _ -> stopped.stopped.complete(null) }
         return stopped.stopped
     }
 
