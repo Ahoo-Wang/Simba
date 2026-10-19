@@ -39,7 +39,12 @@ interface Term {
     fun remaining(): Duration
 
     /** Throws [LeaseExpiredException] unless the term is valid for more than [minRemaining]. */
-    fun ensureValid(minRemaining: Duration = Duration.ZERO)
+    fun ensureValid(minRemaining: Duration)
+
+    /** Throws [LeaseExpiredException] unless the term is still valid; `ensureValid(Duration.ZERO)`. */
+    fun ensureValid() {
+        ensureValid(Duration.ZERO)
+    }
 
     /** Completes exactly once, when the engine revokes the term. */
     val revoked: CompletionStage<RevokeReason>

@@ -13,6 +13,10 @@
 
 package me.ahoo.simba.engine
 
+import me.ahoo.simba.RevokeReason
+import me.ahoo.simba.event.ElectionKind
+import me.ahoo.simba.event.SimbaEvent
+import me.ahoo.simba.spi.AcquireResult
 import me.ahoo.simba.spi.BackendHint
 import me.ahoo.simba.spi.KeepAliveResult
 import me.ahoo.simba.spi.LeaseName
@@ -128,15 +132,14 @@ class EngineEdgesTest : EngineHarness() {
     }
 
     @Test
-    fun `group requests and replies that no longer apply are ignored`() {
-        on(Event.Join(group))
-        on(Event.Leave(group)).assert().isEmpty()
+    fun `group replies that no longer apply are ignored`() {
         open()
         on(Event.Join(group))
         val join = call<BackendRequest.Join>()
         on(Event.Hint(BackendHint.MembersChanged(group))).assert().isEmpty()
-        on(Event.Leave(group)).assert().isEmpty()
-        on(Event.Reply(join.requestId, BackendResult.Done)).assert().isEmpty()
+        on(Event.Reply(join.requestId, BackendResult.Done))
+        on(Event.Leave(group))
+        on(Event.Reply(call<BackendRequest.Leave>().requestId, BackendResult.Done))
 
         on(Event.Join(group))
         val second = call<BackendRequest.Join>()
@@ -146,6 +149,7 @@ class EngineEdgesTest : EngineHarness() {
         on(Event.Reply(rejoin.requestId, BackendResult.Done))
         val members = call<BackendRequest.Members>()
         on(Event.Leave(group))
+        // The leave replaced the members request: its late reply publishes nothing.
         on(Event.Reply(members.requestId, BackendResult.Members(listOf(next)))).assert().isEmpty()
     }
 
@@ -166,5 +170,79 @@ class EngineEdgesTest : EngineHarness() {
         expireAndReopen()
         effects.filterIsInstance<Effect.Call>().map { it.request }.filterIsInstance<BackendRequest.Acquire>().size
             .assert().isEqualTo(2)
+    }
+
+    @Test
+    fun `a renewal arriving after the local deadline expires the session instead of reviving its terms`() {
+        open()
+        elect()
+        val deadline = active.validUntil
+        on(Event.Timer(active.renewTimer!!), now = SECOND)
+        val keepAlive = call<BackendRequest.KeepAlive>()
+        val live = KeepAliveResult.Live(Duration.ofSeconds(3), mapOf(name to 1L))
+        on(Event.Reply(keepAlive.requestId, BackendResult.KeptAlive(live)), now = deadline)
+
+        effects.filterIsInstance<Effect.Deadline>().assert().isEmpty()
+        effects.filterIsInstance<Effect.Revoked>().single().reason.assert().isEqualTo(RevokeReason.DEADLINE_PASSED)
+        call<BackendRequest.CloseSession>()
+    }
+
+    @Test
+    fun `deadlines keep moving forward when the monotonic clock wraps`() {
+        val start = Long.MAX_VALUE - 3_500 * MILLIS
+        open(now = start)
+        val before = active.validUntil
+        (before > 0).assert().isTrue()
+        on(Event.Timer(active.renewTimer!!), now = start + SECOND)
+        val live = KeepAliveResult.Live(Duration.ofSeconds(3), emptyMap())
+        on(Event.Reply(call<BackendRequest.KeepAlive>().requestId, BackendResult.KeptAlive(live)), now = start + SECOND)
+
+        // The new deadline wrapped below zero yet is later than the old one.
+        (active.validUntil < 0).assert().isTrue()
+        (active.validUntil - before).assert().isEqualTo(SECOND)
+        effects.assert().contains(Effect.Deadline(session, active.validUntil))
+    }
+
+    @Test
+    fun `a restart with a probe during a stop handover keeps the probe`() {
+        open()
+        val term = elect(work = true)
+        on(Event.Stop(name, CompletableFuture()))
+        val probe = CompletableFuture<Void>()
+        on(Event.Start(name, probe = probe))
+        on(Event.WorkExited(name, term))
+        (state.elections[name] as ElectionState.Candidate).probe.assert().isSameAs(probe)
+        val acquire = call<BackendRequest.Acquire>()
+        val held = BackendResult.Acquired(mapOf(name to AcquireResult.HeldBy(next, 9)))
+        on(Event.Reply(acquire.requestId, held))
+        effects.assert().contains(Effect.Complete(name, probe))
+    }
+
+    @Test
+    fun `a probe of an election that is already started reports at once`() {
+        open()
+        elect()
+        val probe = CompletableFuture<Void>()
+        on(Event.Start(name, probe = probe)).assert().isEqualTo(listOf(Effect.Complete(name, probe)))
+    }
+
+    @Test
+    fun `events and kinds tell which api started an election, and close reports the session closed`() {
+        open()
+        on(Event.Start(name, kind = ElectionKind.LOCK))
+        on(Event.Reply(call<BackendRequest.Acquire>().requestId, granted(1)))
+        effects.assert().contains(Effect.Publish(SimbaEvent.Elected(name, 1, ElectionKind.LOCK)))
+        state.kinds.assert().isEqualTo(mapOf(name to ElectionKind.LOCK))
+        on(Event.Stop(name, CompletableFuture()))
+        effects.assert().contains(Effect.Publish(SimbaEvent.Revoked(name, 1, RevokeReason.STOPPED, ElectionKind.LOCK)))
+        state.kinds.assert().isEmpty()
+
+        on(Event.Close(CompletableFuture()))
+        effects.assert().contains(Effect.Publish(SimbaEvent.SessionClosed(session)))
+    }
+
+    @Test
+    fun `closing without a session reports no session`() {
+        on(Event.Close(CompletableFuture())).assert().contains(Effect.Publish(SimbaEvent.SessionClosed(null)))
     }
 }

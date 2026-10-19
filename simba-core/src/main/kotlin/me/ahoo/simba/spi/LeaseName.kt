@@ -14,19 +14,24 @@
 package me.ahoo.simba.spi
 
 /**
- * Name of a lease: 1–128 characters from `[A-Za-z0-9._:-]`.
+ * Name of a lease: 1–128 characters from `[A-Za-z0-9._:-]`, other than `.` and `..`.
  *
  * One rule for every backend, so no name means something different as a Redis key, a Zookeeper path or a JDBC
- * column (no `{}` hash tags, no `/` path separators).
+ * column (no `{}` hash tags, no `/` path separators, no relative path names). An immutable value with equality by
+ * [value]; a plain class rather than a value class so that Java can construct it and call every API that takes one.
  */
-@JvmInline
-value class LeaseName(val value: String) : Comparable<LeaseName> {
+class LeaseName(val value: String) : Comparable<LeaseName> {
     init {
         require(value.length in 1..MAX_LENGTH) { "Lease name length must be in [1, $MAX_LENGTH], was ${value.length}." }
         require(value.all(::isAllowed)) { "Lease name [$value] must only contain [A-Za-z0-9._:-]." }
+        require(value != "." && value != "..") { "Lease name must not be [$value]." }
     }
 
     override fun compareTo(other: LeaseName): Int = value.compareTo(other.value)
+
+    override fun equals(other: Any?): Boolean = other is LeaseName && value == other.value
+
+    override fun hashCode(): Int = value.hashCode()
 
     override fun toString(): String = value
 

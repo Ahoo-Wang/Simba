@@ -45,6 +45,9 @@ class MicrometerSimbaEventListenerTest {
         listener.onEvent(SimbaEvent.SessionRenewed(session, Duration.ofMillis(3)))
         state("live").assert().isEqualTo(1.0)
         registry.get(MicrometerSimbaEventListener.SESSION_RENEW).timer().count().assert().isEqualTo(1L)
+        listener.onEvent(SimbaEvent.SessionClosed(session))
+        state("closed").assert().isEqualTo(1.0)
+        state("live").assert().isEqualTo(0.0)
     }
 
     @Test

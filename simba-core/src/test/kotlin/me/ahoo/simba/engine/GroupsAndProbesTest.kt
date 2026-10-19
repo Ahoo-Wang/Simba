@@ -134,9 +134,66 @@ class GroupsAndProbesTest : EngineHarness() {
         open()
         joined()
         on(Event.Leave(group))
-        calls<BackendRequest.Leave>().assert().isEqualTo(listOf(BackendRequest.Leave(session, group)))
-        state.groups.assert().isEmpty()
+        val leave = call<BackendRequest.Leave>()
+        leave.request.assert().isEqualTo(BackendRequest.Leave(session, group))
         on(Event.Leave(group)).assert().isEmpty()
+        on(Event.Hint(BackendHint.MembersChanged(group))).assert().isEmpty()
+        on(Event.Reply(leave.requestId, BackendResult.Done)).assert().isEmpty()
+        state.groups.assert().isEmpty()
+    }
+
+    @Test
+    fun `a failed leave retries until the backend confirms it`() {
+        open()
+        joined()
+        on(Event.Leave(group))
+        on(Event.Reply(call<BackendRequest.Leave>().requestId, BackendResult.Failed(IllegalStateException("down"))))
+        on(Event.Timer(effects.filterIsInstance<Effect.Arm>().single().id), now = SECOND)
+        val retry = call<BackendRequest.Leave>()
+        on(Event.Reply(retry.requestId, BackendResult.Done), now = SECOND)
+        state.groups.assert().isEmpty()
+    }
+
+    @Test
+    fun `a leave while joining is sent once the join answers, even a failed one`() {
+        for (answer in listOf(BackendResult.Done, BackendResult.Failed(IllegalStateException("timeout")))) {
+            state = EngineState.initial(config, 7)
+            open()
+            on(Event.Join(group))
+            val join = call<BackendRequest.Join>()
+            on(Event.Leave(group)).assert().isEmpty()
+            on(Event.Reply(join.requestId, answer))
+            calls<BackendRequest.Leave>().assert().isEqualTo(listOf(BackendRequest.Leave(session, group)))
+            effects.filterIsInstance<Effect.Members>().assert().isEmpty()
+        }
+    }
+
+    @Test
+    fun `joining again while leaving rejoins after the leave`() {
+        open()
+        joined()
+        on(Event.Leave(group))
+        val leave = call<BackendRequest.Leave>()
+        on(Event.Join(group)).assert().isEmpty()
+        on(Event.Reply(leave.requestId, BackendResult.Done))
+        calls<BackendRequest.Join>().assert().isEqualTo(listOf(BackendRequest.Join(session, group)))
+    }
+
+    @Test
+    fun `a session ending while leaving forgets the group`() {
+        open()
+        joined()
+        on(Event.Leave(group))
+        on(Event.Timer(active.renewTimer!!), now = SECOND)
+        on(Event.Reply(call<BackendRequest.KeepAlive>().requestId, BackendResult.KeptAlive(KeepAliveResult.Expired)))
+        state.groups.assert().isEmpty()
+    }
+
+    @Test
+    fun `leaving without a session forgets the group at once`() {
+        on(Event.Join(group))
+        on(Event.Leave(group)).assert().isEmpty()
+        state.groups.assert().isEmpty()
     }
 
     @Test

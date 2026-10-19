@@ -29,8 +29,11 @@ import java.time.Duration
  * @param margin extra safety subtracted from every deadline.
  * @param retryJitter candidates retry after `renewInterval / 2` plus a random delay in `[0, retryJitter)`.
  * @param minBackoff lower bound of the halving backoff after a failed keep-alive.
+ *
+ * From Java, use [builder] (unset values keep their defaults, derived ones from the values set) or the overloaded
+ * constructors.
  */
-data class SimbaConfig(
+data class SimbaConfig @JvmOverloads constructor(
     val leaseDuration: Duration = Duration.ofSeconds(15),
     val renewInterval: Duration = leaseDuration.dividedBy(3),
     val drift: Double = 0.01,
@@ -55,7 +58,37 @@ data class SimbaConfig(
     /** Local validity granted by a fresh keep-alive, in nanoseconds. */
     internal fun localValidity(): Long = (leaseDuration.toNanos() * (1.0 - drift)).toLong() - margin.toNanos()
 
+    /** Builds a [SimbaConfig]; [renewInterval] and [retryJitter] default to values derived as in the constructor. */
+    class Builder internal constructor() {
+        private var leaseDuration: Duration = Duration.ofSeconds(15)
+        private var renewInterval: Duration? = null
+        private var drift: Double = 0.01
+        private var margin: Duration = Duration.ofMillis(50)
+        private var retryJitter: Duration? = null
+        private var minBackoff: Duration = Duration.ofMillis(100)
+
+        fun leaseDuration(leaseDuration: Duration) = apply { this.leaseDuration = leaseDuration }
+
+        fun renewInterval(renewInterval: Duration) = apply { this.renewInterval = renewInterval }
+
+        fun drift(drift: Double) = apply { this.drift = drift }
+
+        fun margin(margin: Duration) = apply { this.margin = margin }
+
+        fun retryJitter(retryJitter: Duration) = apply { this.retryJitter = retryJitter }
+
+        fun minBackoff(minBackoff: Duration) = apply { this.minBackoff = minBackoff }
+
+        fun build(): SimbaConfig {
+            val renew = renewInterval ?: leaseDuration.dividedBy(3)
+            return SimbaConfig(leaseDuration, renew, drift, margin, retryJitter ?: renew.dividedBy(2), minBackoff)
+        }
+    }
+
     companion object {
         const val MAX_DRIFT = 0.5
+
+        @JvmStatic
+        fun builder(): Builder = Builder()
     }
 }

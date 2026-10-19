@@ -83,7 +83,8 @@ list during a change; the assignment only decides who contends. Every member mus
 group name follows the lease name rules, and `"{group}.{partitions - 1}"` must fit in 128 characters.
 
 `runWhileLeader { term, partition -> }` is available too. `GroupTask.stop()` leaves the group and stops every
-partition, completing once each one handed over.
+partition, completing once each one handed over, including partitions an earlier view moved away that are still
+handing over.
 
 ## Spring Annotations
 
