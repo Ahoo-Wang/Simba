@@ -76,6 +76,8 @@ create table if not exists simba_member
 
 - 释放不会通知任何人：正常停止后，候选者在下一次尝试（`renewInterval / 2` 加抖动）时接管。
 - 每条语句都有超时；starter 将其设为会话的续约间隔（`simba.jdbc.query-timeout`），超过之后引擎无论如何都会放弃该调用。
+  不使用 Spring 时，`JdbcLeaseBackend` 默认 5 秒（`DEFAULT_QUERY_TIMEOUT`，即默认的续约间隔）；修改续约间隔时，请把它作为
+  `queryTimeout` 传入。
 - 为 Simba 提供一个不会被应用耗尽的连接池：等待连接超过续约间隔的续约会被视为失败。
 
 ## Redis 7 {#redis-7}
