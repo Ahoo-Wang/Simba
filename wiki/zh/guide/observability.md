@@ -36,8 +36,9 @@ Spring Boot starter 基于快照构建 Actuator 端点和健康指示器，基�
 | `SessionRenewed(session, latency)` | 一次续约 (keep-alive) 成功 |
 | `SessionSuspended(session, cause)` | 一次续约 (keep-alive) 在本地截止时刻之前失败 |
 | `SessionExpired(session, reason)` | 会话结束：截止时刻已过，或后端报告其已过期 |
-| `Elected(name, token)` | 本节点获得了一个任期 |
-| `Revoked(name, token, reason)` | 一个任期结束 |
+| `SessionClosed(session)` | 客户端已关闭（未打开会话时 `session` 为 `null`）；只发布一次 |
+| `Elected(name, token, kind)` | 本节点获得了一个任期；`kind`（`ELECTION`、`LOCK`、`GROUP`）表示选举由哪个 API 启动，指标可以按 kind 打标签，而不必按数量无界的锁名打标签 |
+| `Revoked(name, token, reason, kind)` | 一个任期结束 |
 | `AcquireFailed(name, cause)` | 一次获取调用失败（不包括“被他人持有”，那是正常情况） |
 | `WorkCompleted(name, token, outcome, duration, cause)` | leader 任务的一次运行结束：`COMPLETED`、`FAILED` 或 `CANCELLED` |
 

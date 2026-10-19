@@ -38,8 +38,9 @@ published from the engine's loop: keep listeners fast and thread-safe; exception
 | `SessionRenewed(session, latency)` | A keep-alive succeeded |
 | `SessionSuspended(session, cause)` | A keep-alive failed before the local deadline |
 | `SessionExpired(session, reason)` | The session ended: deadline passed or the backend reported it expired |
-| `Elected(name, token)` | This node got a term |
-| `Revoked(name, token, reason)` | A term ended |
+| `SessionClosed(session)` | The client closed (`session` is `null` when none was open); published once |
+| `Elected(name, token, kind)` | This node got a term; `kind` (`ELECTION`, `LOCK`, `GROUP`) tells which API started the election, so metrics can label by kind instead of by unbounded lock names |
+| `Revoked(name, token, reason, kind)` | A term ended |
 | `AcquireFailed(name, cause)` | An acquire call failed (not "held by someone else", which is normal) |
 | `WorkCompleted(name, token, outcome, duration, cause)` | One run of leader work ended: `COMPLETED`, `FAILED` or `CANCELLED` |
 

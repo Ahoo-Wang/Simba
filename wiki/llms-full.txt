@@ -327,12 +327,13 @@ deadline = sentAt + remaining × (1 − drift) − margin
 
 `sentAt` is when the keep-alive was **sent**, not when the reply arrived, so a slow reply only shortens the deadline.
 As long as the two clocks run at rates within `1 ± drift` of each other, the local deadline passes before the backend
-can expire the session and give its leases to someone else.
+can expire the session and give its leases to someone else. Once the local deadline has passed, a renewal that arrives
+late never extends it: the session ends (`DEADLINE_PASSED`) and its terms stay ended.
 
 ## Leases, Terms and Tokens
 
-A **lease** is a backend record `name → (session, token)`. Lease names are 1–128 characters of `[A-Za-z0-9._:-]`
-on every backend, so a name means the same as a Redis key, a Zookeeper path and a JDBC column.
+A **lease** is a backend record `name → (session, token)`. Lease names are 1–128 characters of `[A-Za-z0-9._:-]`,
+other than `.` and `..`, on every backend, so a name means the same as a Redis key, a Zookeeper path and a JDBC column.
 
 A **term** is one period during which this node owns a lease. Winning the same name twice gives two different
 `Term` objects. A term carries:
@@ -905,7 +906,8 @@ list during a change; the assignment only decides who contends. Every member mus
 group name follows the lease name rules, and `"{group}.{partitions - 1}"` must fit in 128 characters.
 
 `runWhileLeader { term, partition -> }` is available too. `GroupTask.stop()` leaves the group and stops every
-partition, completing once each one handed over.
+partition, completing once each one handed over, including partitions an earlier view moved away that are still
+handing over.
 
 ## Spring Annotations
 
@@ -991,7 +993,7 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 
 | Method | Behavior |
 |---|---|
-| `acquire(timeout)` | Waits up to `timeout` (on the client's clock) for a term; throws `LockTimeoutException` when none was won in time. Interrupting the caller abandons the attempt and rethrows `InterruptedException`. |
+| `acquire(timeout)` | Waits up to `timeout` (on the client's clock) for a term; throws `LockTimeoutException` when none was won in time. A term that ends right after it was won does not end the wait: the lock contends again until the timeout. Interrupting the caller abandons the attempt and rethrows `InterruptedException`. |
 | `tryAcquire()` | One attempt: the term when this client wins the first answered attempt; `null` when another session or this client holds the lease, or when no attempt is answered within one lease duration (backend unreachable). |
 
 Within one client a name has **at most one holder**: a second `acquire` of the same name waits until the first is
@@ -1069,8 +1071,9 @@ published from the engine's loop: keep listeners fast and thread-safe; exception
 | `SessionRenewed(session, latency)` | A keep-alive succeeded |
 | `SessionSuspended(session, cause)` | A keep-alive failed before the local deadline |
 | `SessionExpired(session, reason)` | The session ended: deadline passed or the backend reported it expired |
-| `Elected(name, token)` | This node got a term |
-| `Revoked(name, token, reason)` | A term ended |
+| `SessionClosed(session)` | The client closed (`session` is `null` when none was open); published once |
+| `Elected(name, token, kind)` | This node got a term; `kind` (`ELECTION`, `LOCK`, `GROUP`) tells which API started the election, so metrics can label by kind instead of by unbounded lock names |
+| `Revoked(name, token, reason, kind)` | A term ended |
 | `AcquireFailed(name, cause)` | An acquire call failed (not "held by someone else", which is normal) |
 | `WorkCompleted(name, token, outcome, duration, cause)` | One run of leader work ended: `COMPLETED`, `FAILED` or `CANCELLED` |
 
@@ -1536,7 +1539,9 @@ Names follow the lease name rules: 1–128 characters of `[A-Za-z0-9._:-]`; anyt
 
 `data class SimbaConfig(leaseDuration = 15s, renewInterval = leaseDuration / 3, drift = 0.01, margin = 50ms,
 retryJitter = renewInterval / 2, minBackoff = 100ms)`. Construction validates `renewInterval × 2 ≤ leaseDuration` and
-`leaseDuration × (1 − drift) − margin > renewInterval`. See [Timing](/guide/correctness#timing).
+`leaseDuration × (1 − drift) − margin > renewInterval`. From Java, use `SimbaConfig.builder()` (unset values keep
+their defaults, derived ones follow the values set) or the overloaded constructors. See
+[Timing](/guide/correctness#timing).
 
 ## Elections — `me.ahoo.simba`
 
@@ -1586,7 +1591,7 @@ overruns skips the missed starts.
 | `token: Long` | Fencing token: `> 0`, constant within the term, strictly increasing across terms of the name |
 | `isValid: Boolean` | Not revoked and the session's local deadline has not passed |
 | `remaining(): Duration` | Time left before the local deadline; `ZERO` once the term ended |
-| `ensureValid(minRemaining = ZERO)` | Throws `LeaseExpiredException` unless valid for more than `minRemaining` |
+| `ensureValid(minRemaining)`, `ensureValid()` | Throws `LeaseExpiredException` unless valid for more than `minRemaining` (`ZERO` without an argument) |
 | `revoked: CompletionStage<RevokeReason>` | Completes exactly once, when the term is revoked |
 
 ### `RevokeReason`
@@ -1618,11 +1623,12 @@ See [Locks](/guide/locks).
 | Type | Members |
 |---|---|
 | `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`; exceptions are logged and ignored |
-| `SimbaEvent` | `SessionOpened`, `SessionRenewed`, `SessionSuspended`, `SessionExpired`, `Elected`, `Revoked`, `AcquireFailed`, `WorkCompleted` |
+| `SimbaEvent` | `SessionOpened`, `SessionRenewed`, `SessionSuspended`, `SessionExpired`, `SessionClosed`, `Elected`, `Revoked`, `AcquireFailed`, `WorkCompleted` |
+| `ElectionKind` | `ELECTION`, `LOCK`, `GROUP`: which API started an election (on `Elected`, `Revoked` and `ElectionSnapshot`) |
 | `WorkOutcome` | `COMPLETED`, `FAILED`, `CANCELLED` |
 | `SimbaSnapshot` | `session: SessionSnapshot`, `elections: List<ElectionSnapshot>`, `leaseDuration`, `healthy` |
 | `SessionSnapshot` | `id`, `status` (`OPENING`, `LIVE`, `SUSPENDED`, `CLOSED`), `validFor`, `notLiveFor` |
-| `ElectionSnapshot` | `name`, `status` (`CANDIDATE`, `LEADER`, `COOLDOWN`, `HANDOVER`), `token`, `remaining` |
+| `ElectionSnapshot` | `name`, `status` (`CANDIDATE`, `LEADER`, `COOLDOWN`, `HANDOVER`), `token`, `remaining`, `kind` |
 
 See [Observability](/guide/observability).
 
@@ -1653,8 +1659,8 @@ Rules every implementation follows (checked by [`LeaseBackendSpec`](/guide/testi
 - `release` frees only leases the session still owns with exactly the given token, so a stale release is a no-op;
 - hints only accelerate; losing one never affects correctness.
 
-Value types: `LeaseName` (1–128 characters of `[A-Za-z0-9._:-]`), `SessionId` (never reused), `Ticker` (monotonic
-nanoseconds). Implementations: `JdbcLeaseBackend`, `RedisLeaseBackend`, `ZookeeperLeaseBackend`,
+Value types: `LeaseName` (1–128 characters of `[A-Za-z0-9._:-]`, not `.` or `..`), `SessionId` (never reused) —
+both plain immutable classes with value equality, usable from Java — and `Ticker` (monotonic nanoseconds). Implementations: `JdbcLeaseBackend`, `RedisLeaseBackend`, `ZookeeperLeaseBackend`,
 `InMemoryLeaseBackend`; see [Backends](/guide/backends).
 
 ## Spring Boot — `me.ahoo.simba.spring.boot.starter`
