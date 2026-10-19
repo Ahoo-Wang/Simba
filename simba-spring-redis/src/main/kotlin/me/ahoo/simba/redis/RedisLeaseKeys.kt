@@ -75,7 +75,7 @@ internal object RedisSlots {
         for (index in start until end) {
             crc = crc xor ((bytes[index].toInt() and BYTE) shl BITS)
             repeat(BITS) {
-                crc = if (crc and HIGH_BIT != 0) (crc shl 1) xor POLYNOMIAL else crc shl 1
+                crc = if ((crc and HIGH_BIT) != 0) (crc shl 1) xor POLYNOMIAL else (crc shl 1)
             }
             crc = crc and MASK
         }
