@@ -13,6 +13,7 @@
 
 package me.ahoo.simba.zookeeper
 
+import me.ahoo.simba.SimbaException
 import me.ahoo.simba.spi.AcquireResult
 import me.ahoo.simba.spi.LeaseName
 import me.ahoo.simba.spi.SessionId
@@ -131,6 +132,36 @@ class ZookeeperLeaseBackendSecurityTest {
         }
     }
 
+    @Test
+    fun aProviderWithoutAnAclForAPathFallsBackToItsDefault() {
+        ZookeeperLeaseBackend(
+            server.connectString,
+            root = "/default-acl",
+            authInfo = listOf(AuthInfo("digest", SIMBA.toByteArray())),
+            aclProvider = DefaultOnly,
+        ).use { fallback ->
+            fallback.granted(fallback.openSession(lease).id, name())
+
+            assertThrows<KeeperException.NoAuthException> { anonymous.getChildren("/default-acl/leases", false) }
+        }
+    }
+
+    @Test
+    fun membersFailsWhenTheGroupPathCannotBeSynced() {
+        val stopped = TestingServer().apply { stop() }
+        try {
+            ZookeeperLeaseBackend(
+                stopped.connectString,
+                connectionTimeout = Duration.ofMillis(200)
+            ).use { unreachable ->
+                val error = assertThrows<Exception> { unreachable.members("group") }
+                (error is SimbaException || error is KeeperException).assert().isTrue()
+            }
+        } finally {
+            stopped.close()
+        }
+    }
+
     private fun secured(credentials: String): ZookeeperLeaseBackend = ZookeeperLeaseBackend(
         server.connectString,
         authInfo = listOf(AuthInfo("digest", credentials.toByteArray())),
@@ -154,6 +185,13 @@ class ZookeeperLeaseBackendSecurityTest {
         }
         connected.await(30, TimeUnit.SECONDS).assert().isTrue()
         return zooKeeper
+    }
+
+    /** Answers no per-path ACL, so the backend uses the default one. */
+    private object DefaultOnly : ACLProvider {
+        override fun getDefaultAcl(): List<ACL> = ZooDefs.Ids.CREATOR_ALL_ACL
+
+        override fun getAclForPath(path: String): List<ACL>? = null
     }
 
     private object CreatorOnly : ACLProvider {
