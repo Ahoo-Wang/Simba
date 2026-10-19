@@ -46,11 +46,12 @@ simba-testing (in-memory backend, virtual time, simulation)    simba-tck (LeaseB
 simba-example (per-backend demo app), simba-bom, simba-dependencies, code-coverage-report
 ```
 
-- `simba-dependencies` pins versions at build time only (Spring Boot BOM, kotlin-logging, Curator): library modules
-  take it through a non-published `versionPlatform` configuration, and their POM / module metadata carry the resolved
-  versions (`versionMapping`), so consumers get no Spring Boot constraints. Test and build tool versions (MockK,
+- `simba-dependencies` (never published) pins versions at build time only (Spring Boot BOM, kotlin-logging,
+  Curator): library modules take it through a non-published `versionPlatform` configuration, and their POM / module
+  metadata carry the resolved versions (`versionMapping`), so consumers get no Spring Boot constraints. Test and build tool versions (MockK,
   Hamcrest, Testcontainers, detekt) come from the version catalog in the root build.
-- Libraries are compiled for Kotlin API / language / stdlib 2.2 (`KOTLIN_BASELINE`), whatever compiler builds them.
+- Libraries are compiled for Kotlin API / language / stdlib 2.2 (`KOTLIN_BASELINE`), whatever compiler builds them;
+  `versionPlatform` pins kotlin-stdlib / kotlin-reflect strictly to it, so publications ask for 2.2, not Boot's newer one.
   Published jars carry `Automatic-Module-Name` (`me.ahoo.simba.<module>`), `META-INF/LICENSE`, and the Dokka HTML in
   the javadoc jar; POM name and description come from each module's `description`. `-PuseMavenLocal` adds
   `mavenLocal()` after Maven Central.
