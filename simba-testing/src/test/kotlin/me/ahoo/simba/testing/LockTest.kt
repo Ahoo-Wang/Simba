@@ -94,6 +94,8 @@ class LockTest {
         simba.acquires.clear()
         val waiting = async { second.lock(name.value).acquire(Duration.ofSeconds(5)) }
         simba.acquires.next()
+        // Let the held-by answer arrive first, so the release hint finds the waiter idle.
+        simba.settle()
         held.close()
 
         waiting.get(WAIT, TimeUnit.SECONDS).token.assert().isEqualTo(2L)

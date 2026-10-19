@@ -61,6 +61,15 @@ class PartitionGroupTest {
         }
     }
 
+    /**
+     * Moves past one candidate retry: a partition tried while its old owner was still handing it over answers
+     * held-by, and the release hint may arrive while that attempt is in flight (hints only accelerate).
+     */
+    private fun retryOnce() {
+        simba.settle()
+        simba.advance(simba.config.renewInterval)
+    }
+
     private fun expectExits(count: Int) {
         repeat(count) { simba.nextEvent<SimbaEvent.WorkCompleted>() }
         simba.settle()
@@ -97,6 +106,7 @@ class PartitionGroupTest {
         }
 
         second.stop().toCompletableFuture().get(WAIT, TimeUnit.SECONDS)
+        retryOnce()
         expectStarts("A", secondShare)
         first.partitions().assert().isEqualTo((0 until PARTITIONS).toSet())
         simba.backend.members(GROUP).size.assert().isEqualTo(1)
@@ -113,6 +123,7 @@ class PartitionGroupTest {
         expectStarts("B", second.partitions())
 
         first.close()
+        retryOnce()
         expectStarts("B", (0 until PARTITIONS).toSet() - second.partitions())
         second.partitions().size.assert().isEqualTo(PARTITIONS)
     }
