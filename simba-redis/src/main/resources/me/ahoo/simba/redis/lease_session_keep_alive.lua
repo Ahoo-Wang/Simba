@@ -21,9 +21,12 @@
 -- joined}. The caller extends the other indexed keys and the groups next.
 local sid = ARGV[1]
 local lease = tonumber(ARGV[2])
-if redis.call('PEXPIRE', KEYS[1], lease) == 0 then
+-- PTTL answers 0 in the millisecond the session expires, while Redis still keeps the key (it drops a key only once
+-- now > expiry): PEXPIRE alone would revive it. Acquire and join read the same boundary as expired.
+if redis.call('PTTL', KEYS[1]) <= 0 then
     return { -1 }
 end
+redis.call('PEXPIRE', KEYS[1], lease)
 redis.call('HSET', KEYS[1], 'lease', lease)
 redis.call('PEXPIRE', KEYS[2], lease)
 redis.call('PEXPIRE', KEYS[3], lease)

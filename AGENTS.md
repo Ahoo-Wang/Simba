@@ -160,7 +160,8 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   hash `simba:lease:{name}` = `{session, token, expires}` never expires and is never deleted (release clears
   `session`); `expires` is Redis `TIME`. Session hash `simba:session:{sid}` (PX) plus `:leases` / `:groups` index sets
   in the same slot (`:leases` is a zset of lease keys scored by the acquire attempt's Redis time); keep-alive, acquire
-  and join fail once it is gone. Leases expire on their own: a new term lasts as long as its session (a full session
+  and join fail once the session hash's `PTTL` is 0 (Redis still keeps the key in that millisecond, so a bare
+  `PEXPIRE` would revive it). Leases expire on their own: a new term lasts as long as its session (a full session
   lease on a Cluster), acquire by the holder extends it, and keep-alive extends and reports every indexed lease the
   session holds (never only `held`). Index entries leave only atomically on a single node, or on a Cluster once not
   held and unchanged for a lease. Close: delete session, free indexed leases and groups, drop indexes (retry-safe).
