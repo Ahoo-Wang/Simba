@@ -14,7 +14,10 @@
 dependencies {
     api(project(":simba-core"))
     testImplementation(project(":simba-test"))
+    testImplementation(project(":simba-tck"))
     testImplementation("com.zaxxer:HikariCP")
     testImplementation("com.mysql:mysql-connector-j")
+    testImplementation("org.postgresql:postgresql")
     testImplementation("org.testcontainers:testcontainers-mysql")
+    testImplementation("org.testcontainers:testcontainers-postgresql")
 }
