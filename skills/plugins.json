@@ -3,7 +3,7 @@
   "plugins": [
     {
       "name": "ahoo-simba-skills",
-      "description": "Skills for using and testing Simba, a JVM distributed mutex and leader-election library with JDBC/MySQL, Redis, and Zookeeper backends.",
+      "description": "Skills for using and testing Simba, a JVM leader-election and distributed-lock library with JDBC (MySQL, PostgreSQL), Redis, and Zookeeper backends.",
       "skills": {
         "include": [
           "*"

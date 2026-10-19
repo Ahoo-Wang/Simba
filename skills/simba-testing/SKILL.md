@@ -1,215 +1,98 @@
 ---
 name: simba-testing
-description: Guide for testing Simba distributed lock and leader-election code. Use when writing or reviewing tests for MutexContender, SimbaLocker, AbstractScheduler, backend TCK conformance via MutexContendServiceSpec, Redis/JDBC/Zookeeper integration tests, timing-sensitive lock behavior, or new Kotlin assertions in Simba-based code.
+description: Guide for testing code built on Simba 5 (leader election and distributed locks). Use when writing or reviewing tests for LeadershipListener callbacks, runWhileLeader / schedule work, partition groups, locks, @SimbaScheduled / @SimbaPartitioned beans, fencing-token resources (FencingSpec), LeaseBackend implementations (LeaseBackendSpec), or deterministic failover tests with InMemoryLeaseBackend and VirtualScheduler.
 ---
 
 # Testing Simba-Based Code
 
-## Test Strategy Overview
+## Choose the Layer
 
-Simba testing has three layers:
-1. **Unit tests** — mock the `MutexContendServiceFactory`, test your business logic in isolation
-2. **TCK (Technology Compatibility Kit)** — extend `MutexContendServiceSpec` to verify a backend implementation
-3. **Integration tests** — run against a real backend (Redis, MySQL, Zookeeper)
-
-Choose the simplest layer that gives confidence. Most application code only needs unit tests with mocks. Backend implementors need TCK + integration tests.
-
-Before writing a test, decide:
-- **Application behavior**: mock `MutexContendServiceFactory`, capture the contender, and pass ownership changes to `notifyOwner`.
-- **Backend implementation**: extend `MutexContendServiceSpec` and run against the real backend.
-- **Scheduler behavior**: verify leadership gating separately from the business logic in `work()`.
-
-## Unit Tests with MockK
-
-For application code that injects `MutexContendServiceFactory`, call the component under test and mock only the factory seam:
+| You test | Use |
+|---|---|
+| Application code that takes a `Simba` | `InMemoryLeaseBackend` (module `simba-testing`) on real time |
+| Failover, expiry, timing | `InMemoryLeaseBackend` + `VirtualScheduler` (virtual time, opt-in API) |
+| A resource that checks fencing tokens | `FencingSpec` (module `simba-tck`) |
+| A `LeaseBackend` implementation | `LeaseBackendSpec` (module `simba-tck`) |
+| Real infrastructure | Testcontainers (MySQL, PostgreSQL, Redis) or Curator `TestingServer` (Zookeeper) |
 
 ```kotlin
-import io.mockk.every
-import io.mockk.mockk
-import io.mockk.verify
-import me.ahoo.simba.core.MutexContendService
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.core.MutexContender
-import me.ahoo.simba.core.MutexOwner
-import me.ahoo.simba.core.MutexState
+testImplementation("me.ahoo.simba:simba-testing")
+testImplementation("me.ahoo.simba:simba-tck")
+```
 
-class MyComponentTest {
-    private val mockFactory = mockk<MutexContendServiceFactory>()
-    private val mockService = mockk<MutexContendService>(relaxed = true)
+Do not mock `Simba`, `Election` or `Term` when the in-memory backend can drive the real engine.
 
-    @BeforeEach
-    fun setup() {
-        every { mockFactory.createMutexContendService(any()) } returns mockService
-    }
+## In-Memory Backend
 
-    @Test
-    fun `should start contend service`() {
-        val myComponent = MyComponent(mockFactory)
-        myComponent.start()
-
-        verify(exactly = 1) { mockService.start() }
-    }
+```kotlin
+val backend = InMemoryLeaseBackend()
+val config = SimbaConfig(leaseDuration = Duration.ofSeconds(3), renewInterval = Duration.ofSeconds(1))
+Simba.builder().backend(backend).config(config).build().use { simba ->
+    val elected = LinkedBlockingQueue<Term>()
+    simba.election("job").start(object : LeadershipListener {
+        override fun onElected(term: Term) { elected += term }
+        override fun onRevoked(term: Term, reason: RevokeReason) = Unit
+    })
+    val term = elected.poll(5, TimeUnit.SECONDS)!!
+    backend.owner(term.name)!!.token.assert().isEqualTo(term.token)
 }
 ```
 
-### Simulating Leadership Changes
+`backend.owner(name)` and `backend.token(name)` inspect the backend. In Spring Boot tests, declare
+`@Bean fun leaseBackend(): LeaseBackend = InMemoryLeaseBackend()`; the starter builds `Simba` over it.
 
-To test code that reacts to `onAcquired`/`onReleased`, capture the contender and pass states through its real `notifyOwner` dispatch:
+## Virtual Time
 
 ```kotlin
-@Test
-fun `should react to leadership change`() {
-    val contenderSlot = slot<MutexContender>()
-    every { mockFactory.createMutexContendService(capture(contenderSlot)) } returns mockService
+@OptIn(InternalSimbaApi::class)
+val scheduler = VirtualScheduler()
+val backend = InMemoryLeaseBackend(scheduler)
+val simba = Simba.builder()
+    .backend(backend)
+    .config(config)
+    .scheduler(scheduler)
+    .ioExecutor(Runnable::run)
+    .callbackExecutor(Runnable::run)
+    .seed(0)
+    .build()
 
-    // Create your service/component that uses Simba
-    val myComponent = MyComponent(mockFactory)
-    myComponent.start()
+scheduler.advance(Duration.ofSeconds(4)) { simba.awaitIdle() }   // fire due timers, settle between them
+```
 
-    // Simulate acquiring leadership
-    val contender = contenderSlot.captured
-    val owner = MutexOwner(contender.contenderId)
-    contender.notifyOwner(MutexState(MutexOwner.NONE, owner))
+Leader work still runs on virtual threads: wait for it through queues. `scheduler`, `awaitIdle` and `Scheduler` are
+`@InternalSimbaApi` (opt-in, no compatibility guarantee).
 
-    // Assert your component's behavior
-    myComponent.isLeader.assert().isTrue()
+## FencingSpec
 
-    // Simulate losing leadership
-    contender.notifyOwner(MutexState(owner, MutexOwner.NONE))
-
-    myComponent.isLeader.assert().isFalse()
+```kotlin
+class LedgerFencingTest : FencingSpec() {
+    override fun write(resource: String, fencingToken: Long) = ledger.settle(resource, fencingToken)
+    override fun highestToken(resource: String) = ledger.fencingToken(resource)
+    override fun leaseBackend(): LeaseBackend = InMemoryLeaseBackend()   // optional: real lock terms
 }
 ```
 
-### SimbaLocker Unit Tests
+Checks increasing and equal tokens accepted, lower rejected, racing writers, and a stale lock term rejected.
 
-Mock the factory and verify the locker lifecycle:
+## LeaseBackendSpec
 
 ```kotlin
-import me.ahoo.simba.locker.SimbaLocker
-
-@Test
-fun `locker should stop running service on close`() {
-    val mockService = mockk<MutexContendService>(relaxed = true)
-    every { mockFactory.createMutexContendService(any()) } returns mockService
-    every { mockService.running } returns true
-
-    val locker = SimbaLocker("test-lock", mockFactory)
-    locker.close()
-
-    verify { mockService.stop() }
+class MyLeaseBackendTest : LeaseBackendSpec() {
+    override fun createBackend(): LeaseBackend = MyLeaseBackend(store)
+    // override val clock: ClockControl? — when the backend's clock is injectable
+    // override val shortLease, lease, timeout, leasesExpireIndependently
 }
 ```
 
-Stub `running` as true because `close()` calls `stop()` only for an active contend service.
+Every test uses fresh names, so the store can be shared.
 
-## TCK — Extending MutexContendServiceSpec
+## Pitfalls
 
-When implementing a new Simba backend, extend the TCK to verify correctness:
-
-```kotlin
-import me.ahoo.simba.test.MutexContendServiceSpec
-
-class MyBackendMutexContendServiceTest : MutexContendServiceSpec() {
-    override val mutexContendServiceFactory: MutexContendServiceFactory =
-        MyBackendMutexContendServiceFactory(/* dependencies */)
-}
-```
-
-This gives you five standard tests:
-1. **`start()`** — acquire, verify owner, stop, verify released
-2. **`restart()`** — stop and restart, verify full lifecycle repeats
-3. **`guard()`** — acquire, wait 3s, verify owner hasn't changed (TTL renewal works)
-4. **`multiContend()`** — 10 contenders compete, exactly one owner at any time
-5. **`schedule()`** — AbstractScheduler lifecycle, work executes on leader
-
-### Backend-Specific Test Requirements
-
-| Backend | External dependency | Notes |
-|---------|-------------------|-------|
-| Redis | Docker | `RedisFixture` starts `redis:7.4-alpine` through Testcontainers |
-| JDBC | Docker | `MySqlFixture` starts `mysql:8.4` through Testcontainers, initialized with `simba-jdbc/src/init-script/init-simba-mysql.sql` |
-| Zookeeper | None | Uses Curator's `TestingServer` (embedded) |
-
-Repository backend tests obtain connections only from `MySqlFixture` / `RedisFixture`; never hardcode hosts or credentials.
-
-## AbstractScheduler Tests
-
-Test that scheduled work runs only on the leader:
-
-```kotlin
-import io.mockk.capture
-import io.mockk.every
-import io.mockk.mockk
-import io.mockk.slot
-import me.ahoo.simba.core.MutexContendService
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.core.MutexContender
-import me.ahoo.simba.core.MutexOwner
-import me.ahoo.simba.core.MutexState
-import me.ahoo.simba.schedule.AbstractScheduler
-import me.ahoo.simba.schedule.ScheduleConfig
-import me.ahoo.test.asserts.assert
-import org.junit.jupiter.api.Test
-import java.time.Duration
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
-
-@Test
-fun `scheduler should run work only when leader`() {
-    val contenderSlot = slot<MutexContender>()
-    val mockService = mockk<MutexContendService>(relaxed = true)
-    val mockFactory = mockk<MutexContendServiceFactory>()
-    every { mockFactory.createMutexContendService(capture(contenderSlot)) } returns mockService
-    val leader = AtomicBoolean(false)
-    val leaderWork = CountDownLatch(1)
-    val outsideLeadershipWork = CountDownLatch(1)
-    val scheduler = object : AbstractScheduler("test-scheduler", mockFactory) {
-        override val config = ScheduleConfig.delay(Duration.ZERO, Duration.ofMillis(100))
-        override val worker = "test"
-        override fun work() {
-            if (leader.get()) leaderWork.countDown() else outsideLeadershipWork.countDown()
-        }
-    }
-
-    scheduler.start()
-    val contender = contenderSlot.captured
-    val owner = MutexOwner(contender.contenderId)
-    try {
-        outsideLeadershipWork.await(200, TimeUnit.MILLISECONDS).assert().isFalse()
-        leader.set(true)
-        contender.notifyOwner(MutexState(MutexOwner.NONE, owner))
-        leaderWork.await(5, TimeUnit.SECONDS).assert().isTrue()
-        contender.notifyOwner(MutexState(owner, MutexOwner.NONE))
-        leader.set(false)
-        outsideLeadershipWork.await(200, TimeUnit.MILLISECONDS).assert().isFalse()
-    } finally {
-        if (leader.getAndSet(false)) {
-            contender.notifyOwner(MutexState(owner, MutexOwner.NONE))
-        }
-        scheduler.stop()
-    }
-}
-```
-
-## Assertion Style
-
-Use `fluent-assert` for new Kotlin assertions:
-```kotlin
-import me.ahoo.test.asserts.assert
-
-value.assert().isEqualTo(expected)
-collection.assert().hasSize(3)
-bool.assert().isTrue()
-```
-
-Do not churn existing Hamcrest/AssertJ assertions solely for style. When adding or touching assertions, prefer `.assert()` and keep the local test readable.
-
-## Common Test Pitfalls
-
-1. **Timing-dependent tests**: Distributed lock tests are inherently timing-sensitive. Use generous timeouts (5-30s) and prefer `CountDownLatch` / `CompletableFuture` over new `Thread.sleep` calls.
-2. **Shared mutex names**: Each test should use a unique mutex name to avoid cross-test interference. Use `"test-mutex-${UUID.randomUUID()}"`.
-3. **Resource cleanup**: Always stop/close services in `@AfterEach` to avoid leaked threads and held locks.
-4. **Mocking `MutexContendService` vs `MutexContendServiceFactory`**: Mock the factory (the DI seam), not the service directly. The factory is what application code injects.
-5. **Testing `AbstractScheduler` without Simba**: If you only need to test the `work()` method, call it directly. The scheduler pattern is about leadership gating, not the work itself.
+- Never `sleep`; wait on queues, latches or futures (or advance virtual time).
+- Assert on the `Term` the callback/work received, never on shared "current leader" state.
+- Close clients (`use {}`) so sessions and virtual threads end with the test.
+- `renewInterval × 2 ≤ leaseDuration` and `leaseDuration × (1 − drift) − margin > renewInterval`, or `SimbaConfig`
+  throws.
+- Simba's own engine changes must keep `SimulationSpec` green; replay with
+  `./gradlew simba-testing:test -Psimba.simulation.seed=N`.
+- Assertions in new tests use FluentAssert `.assert()`.

@@ -1,291 +1,179 @@
 ---
 name: simba
-description: Guide for using the Simba distributed mutex and leader-election library in JVM projects. Use when creating distributed locks, implementing leader-only work, configuring Simba backends (JDBC/MySQL, Redis, Zookeeper), writing MutexContender implementations, SimbaScheduler / @SimbaScheduled leader-only jobs or AbstractScheduler subclasses, using SimbaLocker, integrating Simba with Spring Boot, choosing backends, or tuning TTL/transition settings. For test-focused work, use the simba-testing skill as well.
+description: Guide for using Simba 5, the JVM leader-election and distributed-lock library, in applications. Use when adding leader election, leader-only work (runWhileLeader, schedule, @SimbaScheduled), partitioned work (group, @SimbaPartitioned), distributed locks (lock / LockTerm), configuring the JDBC (MySQL, PostgreSQL), Redis or Zookeeper backend, integrating with Spring Boot, using fencing tokens, tuning session timing, or migrating from Simba 4.x. For test-focused work, use the simba-testing skill as well.
 ---
 
-# Simba — Distributed Mutex Library
+# Simba 5 — Sessions, Leases and Terms
 
-Simba provides distributed mutex (leader election) for JVM applications with three pluggable backends: JDBC/MySQL, Redis (Spring Data Redis), and Zookeeper (Apache Curator).
+Simba gives JVM applications leader election and distributed locks over a backend they already run: MySQL 8 or
+PostgreSQL 14+ (`simba-jdbc`), Redis 7 (`simba-redis` + `simba-spring-redis`) or Zookeeper (`simba-zookeeper`).
+Java 21+. Full docs: https://simba.ahoo.me/.
+
+## Model in Five Lines
+
+1. One `Simba` client per process opens **one session** on the backend and keeps it alive every `renewInterval`.
+2. Elections, locks and partition groups contend for **leases** (names of 1–128 chars `[A-Za-z0-9._:-]`) attached to
+   that session; the session expiring frees them all.
+3. Winning a lease gives a **`Term`**: `name`, `token` (fencing token, strictly increasing per name), `isValid`,
+   `remaining()`, `ensureValid(min)`, `revoked`.
+4. Every `onElected(term)` is followed by exactly one `onRevoked(term, reason)`.
+5. A term is a *weakly consistent* view. Never promise "no split-brain": a paused process can still write after its
+   term ended. Resources that must reject stale writers check `term.token` (accept `>=` highest, reject lower,
+   atomically with the write).
 
 ## How to Use This Skill
 
-Start by identifying four things:
-1. Which backend the project already runs: Redis, JDBC/MySQL, or Zookeeper.
-2. Which usage pattern fits the job: `MutexContender`, `SimbaLocker`, or `SimbaScheduler` (`AbstractScheduler` for the subclassing style).
-3. Who owns lifecycle: explicit `start()`/`stop()`, Kotlin `.use {}`, Java try-with-resources, or Spring `SmartLifecycle`.
-4. Whether the task is usage/configuration work or test work. For test-heavy tasks, also use `simba-testing`.
+Identify:
+1. The backend the project already runs (JDBC, Redis or Zookeeper). Any is fine; for strict fencing prefer JDBC or
+   Zookeeper (Redis tokens can go back after a failover).
+2. The pattern: callbacks (`election.start`), work per term (`runWhileLeader`), periodic leader work (`schedule`,
+   `@SimbaScheduled`), partitions (`group`, `@SimbaPartitioned`), or a lock around a step (`lock`).
+3. Spring Boot or plain JVM.
 
-Read `references/backend-internals.md` only when debugging backend behavior, explaining Lua/SQL/Curator internals, or tuning failure and handoff semantics.
+Read `references/backend-internals.md` only to debug backend behavior or explain storage, keys and paths.
 
-## Backend Selection
-
-Help the developer pick the right backend based on their infrastructure:
-
-| Backend | Module | Best when |
-|---------|--------|-----------|
-| **Redis** | `simba-spring-redis` | Already using Redis. Best performance — Lua scripts + Pub/Sub for near-real-time notification. Recommended default. |
-| **JDBC/MySQL** | `simba-jdbc` | No Redis available. Uses polling with optimistic locking. Requires MySQL init script. |
-| **Zookeeper** | `simba-zookeeper` | Already using Zookeeper/Curator. Delegates to Curator's `LeaderLatch`. Simplest backend. |
-
-Decision heuristic: If the project has Redis, use Redis. If it has Zookeeper/Curator, use Zookeeper. If neither, use JDBC. If multiple are available, prefer Redis for its Pub/Sub-based notification (lower latency than polling).
-
-## Gradle Dependencies
-
-Import the Simba BOM first so every module resolves to the same released version. The Spring examples assume Spring Boot 4.1 dependency management is enabled.
+## Dependencies
 
 ```kotlin
-implementation(platform("me.ahoo.simba:simba-bom:4.6.0"))
+implementation(platform("me.ahoo.simba:simba-bom:${simbaVersion}"))
+implementation("me.ahoo.simba:simba-spring-boot-starter")
+
+// one backend:
+implementation("me.ahoo.simba:simba-jdbc")              // + spring-boot-starter-jdbc + driver; create tables once
+implementation("me.ahoo.simba:simba-spring-redis")      // + spring-boot-starter-data-redis
+implementation("me.ahoo.simba:simba-zookeeper")         // + simba.zookeeper.connect-string
 ```
 
-Use a Gradle feature capability from `simba-spring-boot-starter` so the application pulls only one backend.
+JDBC tables: run `me/ahoo/simba/jdbc/init-simba-mysql.sql` or `init-simba-postgresql.sql` (on the `simba-jdbc`
+classpath) once, e.g. via `spring.sql.init.schema-locations`. With several backend modules, set
+`simba.backend=jdbc|redis|zookeeper`.
 
-For **Redis**:
-```kotlin
-implementation("me.ahoo.simba:simba-spring-boot-starter") {
-    capabilities {
-        requireCapability("me.ahoo.simba:spring-redis-support")
-    }
-}
-```
+## Spring Boot
 
-For **JDBC**:
-```kotlin
-implementation("me.ahoo.simba:simba-spring-boot-starter") {
-    capabilities {
-        requireCapability("me.ahoo.simba:jdbc-support")
-    }
-}
-implementation("org.springframework.boot:spring-boot-starter-jdbc")
-runtimeOnly("com.mysql:mysql-connector-j")
-```
-
-For **Zookeeper**:
-```kotlin
-implementation("me.ahoo.simba:simba-spring-boot-starter") {
-    capabilities {
-        requireCapability("me.ahoo.simba:zookeeper-support")
-    }
-}
-```
-
-The Zookeeper setup must also provide and start a `CuratorFramework` bean.
-
-For non-Spring projects, keep the BOM and depend on one backend module directly:
-```kotlin
-implementation("me.ahoo.simba:simba-spring-redis")
-// or
-implementation("me.ahoo.simba:simba-jdbc")
-// or
-implementation("me.ahoo.simba:simba-zookeeper")
-```
-
-Configure the backend client manually: a `DataSource` and driver for JDBC, Spring Data Redis infrastructure for Redis, or `CuratorFramework` for Zookeeper.
-
-## Three Usage Patterns
-
-Simba offers three abstractions, from low-level to high-level. Guide the developer to the simplest one that fits their use case.
-
-### Pattern 1: MutexContender (callback-based leader election)
-
-Use when: the application needs to react to leadership changes (start/stop work when gaining/losing leadership).
-
-The developer creates a class extending `AbstractMutexContender` and overrides `onAcquired` / `onReleased`:
-
-```kotlin
-import me.ahoo.simba.core.AbstractMutexContender
-import me.ahoo.simba.core.MutexState
-
-class MyContender : AbstractMutexContender(mutex = "my-task") {
-    override fun onAcquired(mutexState: MutexState) {
-        // This instance is now the leader — start doing work
-    }
-
-    override fun onReleased(mutexState: MutexState) {
-        // Lost leadership — stop doing work
-    }
-}
-```
-
-Then create and start the service:
-```kotlin
-val contendService = mutexContendServiceFactory.createMutexContendService(MyContender())
-contendService.start()
-// ... later
-contendService.stop()
-```
-
-Key points to explain:
-- `mutex` is the logical lock name. All contenders for the same mutex compete for one lock.
-- `contenderId` defaults to `"{counter}:{pid}@{hostAddress}"` via `ContenderIdGenerator.HOST`. Override to use `ContenderIdGenerator.UUID` or a custom ID.
-- For JDBC, keep `mutex` at most 66 characters and `contenderId` at most 128 characters to fit the schema.
-- For Redis, never include the `@@` wire delimiter in a custom `contenderId`; owner-event parsing requires exactly two fields.
-- `onAcquired` / `onReleased` notifications are serialized. Normal notifications use the configured `handleExecutor`; JDBC/Redis factory defaults use `ForkJoinPool.commonPool()`, while Spring Boot auto-configuration uses the dedicated `simbaHandleExecutor` bean (replace it by defining a bean with that name), while a direct executor may run them on the caller thread. When stopping an owned service, `onReleased` may run on the executor or the `stop()` caller, and `stop()` waits for it to complete. Keep callbacks short and do not rely on thread affinity.
-- The service must be started with `start()` and stopped with `stop()` when done.
-
-### Pattern 2: SimbaLocker (RAII-style blocking lock)
-
-Use when: the developer needs a simple "acquire lock, do work, release" pattern — especially inside `@Scheduled` methods or one-off tasks.
-
-```kotlin
-import me.ahoo.simba.locker.SimbaLocker
-import java.time.Duration
-
-SimbaLocker("my-lock", mutexContendServiceFactory).use { locker ->
-    locker.acquire(Duration.ofSeconds(5))  // throws TimeoutException if lock not acquired
-    // do work while holding the lock
-}
-// close() is called automatically by use{}, releasing the lock
-```
-
-Or with explicit try/finally:
-```kotlin
-import me.ahoo.simba.locker.SimbaLocker
-import java.time.Duration
-
-val locker = SimbaLocker("my-lock", mutexContendServiceFactory)
-try {
-    locker.acquire(Duration.ofSeconds(5))
-    // do work
-} finally {
-    locker.close()
-}
-```
-
-Key points:
-- `acquire(timeout)` blocks the current thread until the lock is acquired or timeout expires (throws `TimeoutException`).
-- `acquire()` blocks indefinitely.
-- `close()` releases the lock. Always use try-with-resources / `.use {}` to guarantee release.
-- Internally creates a `MutexContendService`; the thread parks until `onAcquired` fires.
-
-### Pattern 3: SimbaScheduler (leader-only periodic task)
-
-Use when: the application needs a periodic task that should run on exactly one instance at a time.
-
-```kotlin
-import me.ahoo.simba.schedule.ScheduleConfig
-import me.ahoo.simba.schedule.SimbaScheduler
-
-val scheduler = SimbaScheduler(
-    mutex = "my-scheduled-task",
-    contendServiceFactory = mutexContendServiceFactory,
-    config = ScheduleConfig.delay(Duration.ZERO, Duration.ofMinutes(1))
-) { context ->
-    // Runs only while this node leads; pass context.fencingToken to protected resources.
-    context.ensureLease() // throws LeaseExpiredException once the lease is gone; check before each step
-    doWork(context.fencingToken)
-}
-scheduler.start()
-// on shutdown
-scheduler.close()
-```
-
-The subclassing style below (`AbstractScheduler`) has the same semantics.
-
-```kotlin
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.schedule.AbstractScheduler
-import me.ahoo.simba.schedule.ScheduleConfig
-import java.time.Duration
-
-class MyScheduler(mutexContendServiceFactory: MutexContendServiceFactory) :
-    AbstractScheduler(mutex = "my-scheduled-task", mutexContendServiceFactory) {
-
-    override val config = ScheduleConfig.delay(
-        initialDelay = Duration.ZERO,
-        period = Duration.ofSeconds(30)
-    )
-    override val worker: String = "my-scheduler"
-
-    override fun work() {
-        // This runs only on the leader instance, at the configured period
-    }
-}
-```
-
-Then start/stop it:
-```kotlin
-val scheduler = MyScheduler(mutexContendServiceFactory)
-scheduler.start()
-// ... later
-scheduler.stop()
-```
-
-For Spring Boot, annotate a bean method; the starter starts it after refresh and stops it on shutdown:
-```kotlin
-import me.ahoo.simba.schedule.ScheduleContext
-import me.ahoo.simba.spring.boot.starter.scheduling.SimbaScheduled
-import org.springframework.stereotype.Service
-
-@Service
-class MyJobs {
-    @SimbaScheduled(mutex = "my-task", fixedDelay = "30s")
-    fun work(context: ScheduleContext) { /* ... */ }
-}
-```
-`SimbaScheduler` beans are started and stopped by the starter as well; do not implement `SmartLifecycle` by hand.
-
-Key points:
-- `ScheduleConfig.delay(initial, period)` = fixed-delay (waits `period` after each execution ends).
-- `ScheduleConfig.rate(initial, period)` = fixed-rate (fires every `period` regardless of execution duration).
-- `work()` runs on a `ScheduledThreadPoolExecutor` — it should be reasonably fast or handle its own threading.
-- Leadership changes automatically cancel and reschedule the work.
-
-## Spring Boot Auto-Configuration
-
-When `simba-spring-boot-starter` is on the classpath, a `MutexContendServiceFactory` bean is auto-configured based on which backend module is present.
-
-Configuration properties:
+The starter creates one `Simba` bean. Properties:
 
 ```yaml
 simba:
-  enabled: true                    # master switch (default: true)
-  redis:
-    enabled: true                  # enable Redis backend (default: true)
-    ttl: 10s                       # lock TTL — owner must renew before this (default: 10s)
-    transition: 6s                 # grace period after TTL — owner gets priority to renew (default: 6s)
+  backend: redis                 # only with several backend modules
+  session:
+    lease-duration: 15s          # failover bound after a crash
+    renew-interval: 5s           # default lease/3, at most lease/2
+    drift: 0.01
+    margin: 50ms
   jdbc:
-    enabled: true                  # enable JDBC backend (default: true)
-    initial-delay: 0s              # delay before first contention attempt (default: 0s)
-    ttl: 10s                       # lock TTL (default: 10s)
-    transition: 6s                 # transition/grace period (default: 6s)
+    dialect: mysql               # detected when unset
+  redis:
+    wait-replicas: 0             # >0: WAIT for replicas on new terms (not on Cluster)
   zookeeper:
-    enabled: true                  # enable Zookeeper backend (default: true)
+    connect-string: localhost:2181
 ```
 
-Use one backend per application. With a single backend module nothing else is needed; with several active modules set `simba.backend: jdbc|redis|zookeeper` (or disable the others with `simba.<backend>.enabled: false`), otherwise startup fails listing the active backends.
+Leader-only and partitioned methods:
 
-### TTL and Transition Tuning
+```java
+@SimbaScheduled(name = "report", fixedDelay = "1m")          // method () or (Term)
+public void generate(Term term) { reportService.generate(term.getToken()); }
 
-The dual-timestamp model is central to Simba's design:
+@SimbaPartitioned(group = "billing", partitions = 16, fixedDelay = "1m")   // method (Term, int)
+public void bill(Term term, int partition) { billing.run(partition, term.getToken()); }
+```
 
-- **TTL (soft expiry)**: The lock's nominal expiration. The current owner should renew before TTL expires. Shorter TTL = faster failure detection but more renewal overhead.
-- **Transition (hard expiry)**: A grace period after TTL. During the transition window, only the current owner can renew. After transition, any contender can compete. This prevents unnecessary leadership churn when the owner is briefly slow.
+Exactly one of `fixedDelay` / `fixedRate`; `initialDelay` counts from each term's start. Names must be unique per
+application. Actuator: endpoint `simba` (snapshot) and health indicator `simba` (`DOWN` when the session was not live
+for longer than the lease). Micrometer: `simba.session.renew`, `simba.session.state`, `simba.leadership`,
+`simba.revocations`, `simba.work`.
 
-Guidelines:
-- `transition` should be less than `ttl` (typically 50-70% of TTL).
-- For Redis backend: TTL/transition are set on the Redis key via `PX` (milliseconds).
-- For JDBC backend: stored as `ttl_at` and `transition_at` columns in the `simba_mutex` table.
-- For Zookeeper: TTL/transition are not used — Curator's `LeaderLatch` handles lifecycle.
+## Plain JVM
 
-## JDBC Backend Setup
+```kotlin
+val simba = Simba.builder()
+    .backend(JdbcLeaseBackend.mysql(dataSource))          // JdbcLeaseBackend.postgres(...)
+    // .backend(RedisLeaseBackend(SpringRedisScripting(connectionFactory)))
+    // .backend(ZookeeperLeaseBackend("zk:2181"))
+    .config(SimbaConfig(leaseDuration = Duration.ofSeconds(15)))
+    .listener { event -> log.debug { "$event" } }        // SimbaEventListener
+    .build()
+// simba.close() revokes every term and frees every lease at once; close the backend afterwards.
+```
 
-The JDBC backend requires a `simba_mutex` table. Provide the init script at:
-`simba-jdbc/src/init-script/init-simba-mysql.sql`
+## Patterns
 
-Requires a `DataSource` bean in the Spring context.
+### Callbacks
 
-## Testing Pointer
+```kotlin
+val election = simba.election("dispatcher")
+election.start(object : LeadershipListener {
+    override fun onElected(term: Term) = dispatcher.start(term.token)
+    override fun onRevoked(term: Term, reason: RevokeReason) = dispatcher.stop()
+})
+election.stepDown(Duration.ofSeconds(30))   // give up, stay out for 30 s, keep contending afterwards
+election.stop().toCompletableFuture().join() // completes after the last onRevoked
+```
 
-For tests, use the `simba-testing` skill. In short:
-- Application code usually mocks `MutexContendServiceFactory` and captures the created `MutexContender`.
-- Backend implementations should extend `simba-test`'s `MutexContendServiceSpec`.
-- New Kotlin assertions should use `import me.ahoo.test.asserts.assert` and the `.assert()` extension.
+Callbacks run serially per election; keep them short. `start` twice for the same name on one client throws.
 
-## Common Pitfalls
+### Work per term
 
-1. **Forgetting to stop the service**: Always call `stop()` or `close()` — otherwise the contender keeps polling/subscribing and may hold the lock.
-2. **Blocking callbacks**: Long-running callbacks delay later notifications for that service. Queued callbacks occupy a shared worker with the default executor or block the producer with a direct executor; release callbacks can delay `stop()` regardless of which thread executes them.
-3. **Multiple backends active**: Startup fails until `simba.backend` names one of them or the others are disabled.
-4. **Clock skew with JDBC**: The JDBC backend uses DB server time (`MutexOwner.observedAt` from `current_timestamp(3)`) to avoid clock skew across application nodes. Ensure all nodes point to the same DB.
-5. **Redis release vs expiration**: Explicit release broadcasts `released` on the mutex channel, so every live contender contends immediately. Natural key expiration publishes nothing; contenders retry on their existing schedule around hard expiry.
-6. **Zookeeper path conflicts**: The Zookeeper backend creates paths at `/simba/{mutex}`. Don't use the same mutex name for unrelated locks.
+```kotlin
+val task = simba.election("ingest").runWhileLeader { term ->
+    while (term.isValid) sink.write(source.next(), fencingToken = term.token)
+}
+task.close()   // stop: interrupt work, wait for it (max term.remaining()), release, onRevoked
+```
+
+### Schedule
+
+```kotlin
+simba.election("report").schedule(Schedule.fixedRate(Duration.ofMinutes(1))) { term ->
+    report.generate(fencingToken = term.token)
+}
+```
+
+One virtual thread per term, `ensureValid()` before each run, failures logged and published, loop continues.
+
+### Partitions
+
+```kotlin
+simba.group("billing", 16).schedule(Schedule.fixedDelay(Duration.ofMinutes(1))) { term, partition -> ... }
+```
+
+Members are the group's live sessions; rendezvous hashing assigns partitions; partition `p` is lease `billing.p`.
+Every member must use the same partition count.
+
+### Lock
+
+```kotlin
+simba.lock("invoice-42").acquire(Duration.ofSeconds(5)).use { term ->   // LockTimeoutException on timeout
+    term.ensureValid(Duration.ofSeconds(2))
+    store.write(invoice, fencingToken = term.token)
+}
+simba.lock("invoice-42").tryAcquire()?.use { ... }                    // one attempt, null if held
+```
+
+`LockTerm` is the credential, not thread-bound; closing releases. A lock lost early (deadline, expiry, take-over) is
+released for good, never re-acquired.
+
+## Rules to Follow
+
+- Pass `term.token` to every write on a shared resource; check it atomically there (`update ... where token <= ?`).
+- Work must stop on interruption or when `term.isValid` turns false; ignoring interruption delays handover.
+- Use `term.ensureValid(expectedStepDuration)` before long steps.
+- One `Simba` per process; several only to isolate lease groups from each other's renewal failures.
+- Never read a term from shared state: use the `Term` passed to the callback or work block.
+- Do not use the same name for a lock and an election (they share one lease).
+
+## Timing
+
+`SimbaConfig(leaseDuration = 15s, renewInterval = lease/3, drift = 0.01, margin = 50ms, retryJitter = renew/2,
+minBackoff = 100ms)`. Local deadline = `sentAt + remaining × (1 − drift) − margin`. Constraints: `renewInterval × 2 ≤
+leaseDuration` and `leaseDuration × (1 − drift) − margin > renewInterval`. Crash failover ≈ `leaseDuration` + next
+candidate attempt (`renewInterval / 2` + jitter); clean stop on Redis/Zookeeper is taken over at once.
+
+## Migrating from 4.x
+
+Not compatible (API, properties, storage): stop every 4.x node before starting 5.0. `MutexContender` →
+`LeadershipListener`; `SimbaLocker` → `lock(name)`; `SimbaScheduler` / `@SimbaScheduled(mutex)` →
+`election.schedule` / `@SimbaScheduled(name)` with `Term`; `SimbaPartitionedScheduler` → `group(...)` /
+`@SimbaPartitioned`; `relinquish` → `stepDown`; `ContendObserver` → `SimbaEventListener`;
+`ttl`/`transition` → `simba.session.*`. On JDBC drop the 4.x `simba_member` table before running the 5.x script.
+Guide: https://simba.ahoo.me/guide/migration.
