@@ -21,12 +21,13 @@ import org.junit.jupiter.api.Test
 import org.springframework.boot.autoconfigure.AutoConfigurations
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
 import org.springframework.data.redis.connection.RedisConnectionFactory
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory
 
 class SimbaRedisAutoConfigurationTest {
     private val contextRunner = ApplicationContextRunner()
         .withConfiguration(AutoConfigurations.of(SimbaRedisAutoConfiguration::class.java))
         .withPropertyValues("simba.backend=redis")
-        .withBean(RedisConnectionFactory::class.java, { mockk(relaxed = true) })
+        .withBean(RedisConnectionFactory::class.java, { mockk<LettuceConnectionFactory>(relaxed = true) })
 
     @Test
     fun `a connection factory gets a redis lease backend`() {
