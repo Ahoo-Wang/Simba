@@ -65,7 +65,8 @@ class ZookeeperLeaseBackendFailureTest {
         assertThrows<IllegalArgumentException> { ZookeeperLeaseBackend(server.connectString, root = "simba") }
         assertThrows<IllegalArgumentException> { backend.openSession(Duration.ZERO) }
         assertThrows<IllegalArgumentException> { backend.acquire(session, List(65) { name() }.toSet()) }
-        listOf("", "a/b", ".", "..").forEach { group ->
+        // Group names follow the LeaseName rules, as on every backend.
+        listOf("", "a/b", ".", "..", "a b", "{g}", "g".repeat(LeaseName.MAX_LENGTH + 1)).forEach { group ->
             assertThrows<IllegalArgumentException> { backend.members(group) }
             assertThrows<IllegalArgumentException> { backend.join(session, group) }
         }

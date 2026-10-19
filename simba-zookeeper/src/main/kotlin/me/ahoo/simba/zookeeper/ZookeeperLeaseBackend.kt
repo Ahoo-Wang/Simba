@@ -25,8 +25,12 @@ import me.ahoo.simba.spi.LeaseName
 import me.ahoo.simba.spi.SessionExpiredException
 import me.ahoo.simba.spi.SessionGrant
 import me.ahoo.simba.spi.SessionId
+import org.apache.curator.framework.AuthInfo
 import org.apache.curator.framework.CuratorFramework
 import org.apache.curator.framework.CuratorFrameworkFactory
+import org.apache.curator.framework.api.ACLProvider
+import org.apache.curator.framework.api.BackgroundCallback
+import org.apache.curator.framework.imps.DefaultACLProvider
 import org.apache.curator.retry.ExponentialBackoffRetry
 import org.apache.zookeeper.AsyncCallback
 import org.apache.zookeeper.CreateMode
@@ -35,6 +39,8 @@ import org.apache.zookeeper.WatchedEvent
 import org.apache.zookeeper.Watcher
 import org.apache.zookeeper.ZooDefs
 import org.apache.zookeeper.ZooKeeper
+import org.apache.zookeeper.client.ZKClientConfig
+import org.apache.zookeeper.data.ACL
 import org.apache.zookeeper.data.Stat
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
@@ -45,6 +51,7 @@ import java.util.concurrent.ExecutionException
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -71,14 +78,30 @@ import java.util.concurrent.atomic.AtomicLong
  * (Curator's `SUSPENDED`), [keepAlive] and [acquire] fail, so the caller's own deadline runs out; when Zookeeper
  * reports the session expired (`LOST`), the session answers [KeepAliveResult.Expired].
  *
+ * Security: every client (each session's and the reader's) authenticates with [authInfo] and is built with
+ * [clientConfig]; every node the backend creates (leases, members, and the parents it creates) gets the ACL of
+ * [aclProvider]. With the default open ACL any client of the ensemble can delete or pre-create lease nodes and forge
+ * members: in a shared ensemble, authenticate (e.g. `digest`) and use an ACL such as [ZooDefs.Ids.CREATOR_ALL_ACL].
+ * Parents that already exist keep their ACL; the ACL of `{root}/leases` and `{root}/groups/{group}` decides who may
+ * create or delete their children.
+ *
+ * [members] reads through a separate client, so it first `sync`s the group path: a member that just joined through a
+ * session client is always in the view.
+ *
  * @param connectString Zookeeper connect string, shared by every session client and the client [members] reads with.
  * @param root parent path of the lease and group nodes.
  * @param connectionTimeout how long [openSession] waits for a new session.
+ * @param authInfo authentication (scheme and credentials) every client adds before its first request.
+ * @param aclProvider ACL of each node the backend creates, by path.
+ * @param clientConfig configuration of every client (TLS, SASL, ...); `null` for the defaults.
  */
 class ZookeeperLeaseBackend @JvmOverloads constructor(
     private val connectString: String,
     root: String = DEFAULT_ROOT,
     private val connectionTimeout: Duration = Duration.ofSeconds(DEFAULT_CONNECTION_TIMEOUT_SECONDS),
+    authInfo: List<AuthInfo> = emptyList(),
+    private val aclProvider: ACLProvider = DefaultACLProvider(),
+    private val clientConfig: ZKClientConfig? = null,
 ) : LeaseBackend {
     companion object {
         private val log = KotlinLogging.logger {}
@@ -96,6 +119,7 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         internal fun sessionIdOf(zookeeperSessionId: Long): SessionId = SessionId("%016x".format(zookeeperSessionId))
     }
 
+    private val authInfo = authInfo.toList()
     private val root = root.trimEnd('/')
     private val leasesPath = "${this.root}/leases"
     private val groupsPath = "${this.root}/groups"
@@ -112,6 +136,9 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         .connectString(connectString)
         .connectionTimeoutMs(connectionTimeout.toMillis().toInt())
         .retryPolicy(ExponentialBackoffRetry(RETRY_BASE_MILLIS, RETRY_COUNT))
+        .authorization(authInfo)
+        .aclProvider(aclProvider)
+        .apply { clientConfig?.let(::zkClientConfig) }
         .build()
         .apply { start() }
 
@@ -148,7 +175,14 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         ensureOpen()
         val startedAt = System.nanoTime()
         val watcher = SessionWatcher()
-        val zooKeeper = ZooKeeper(connectString, lease.toMillis().coerceIn(1, Int.MAX_VALUE.toLong()).toInt(), watcher)
+        val timeout = lease.toMillis().coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
+        val zooKeeper = if (clientConfig == null) {
+            ZooKeeper(connectString, timeout, watcher)
+        } else {
+            ZooKeeper(connectString, timeout, watcher, clientConfig)
+        }
+        // Queued before any request and resent on every reconnect.
+        authInfo.forEach { zooKeeper.addAuthInfo(it.scheme, it.auth) }
         val connected = try {
             watcher.connected.await(connectionTimeout.toMillis(), TimeUnit.MILLISECONDS)
         } catch (error: InterruptedException) {
@@ -205,7 +239,6 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
 
     override fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult> {
         require(names.size <= MAX_BATCH) { "At most $MAX_BATCH names per acquire, was ${names.size}." }
-        names.forEach(::leasePath)
         val live = sessions[session] ?: throw SessionExpiredException(session)
         return live.expiringOn {
             live.ensureConnected()
@@ -249,15 +282,15 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
             live.ensureConnected()
             repeat(MAX_ATTEMPTS) {
                 try {
-                    live.zooKeeper.create(path, EMPTY, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL)
+                    live.zooKeeper.create(path, EMPTY, aclFor(path), CreateMode.EPHEMERAL)
                     publish(BackendHint.MembersChanged(group))
                     return@expiringOn
                 } catch (_: KeeperException.NodeExistsException) {
                     return@expiringOn
                 } catch (_: KeeperException.NoNodeException) {
                     // The group container is missing or was just reaped.
-                    live.zooKeeper.ensure(groupsPath, CreateMode.PERSISTENT)
-                    live.zooKeeper.ensure(groupPath(group), CreateMode.CONTAINER)
+                    live.zooKeeper.ensure(groupsPath, CreateMode.PERSISTENT, ::aclFor)
+                    live.zooKeeper.ensure(groupPath(group), CreateMode.CONTAINER, ::aclFor)
                 }
             }
             throw SimbaException("Group [$group] kept disappearing while joining.")
@@ -280,6 +313,7 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
 
     override fun members(group: String): List<SessionId> {
         val path = groupPath(group)
+        sync(path)
         repeat(MAX_ATTEMPTS) {
             try {
                 return reader.children.usingWatcher(groupWatcher).forPath(path).map(::SessionId).sortedBy { it.value }
@@ -312,22 +346,31 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
     /** The Zookeeper client behind [session], for tests that break it. */
     internal fun zooKeeperOf(session: SessionId): ZooKeeper? = sessions[session]?.zooKeeper
 
+    /** Lets the reader's server catch up with the leader, so it reads every write acknowledged before. */
+    private fun sync(path: String) {
+        val synced = CompletableFuture<Int>()
+        reader.sync().inBackground(BackgroundCallback { _, event -> synced.complete(event.resultCode) }).forPath(path)
+        val code = try {
+            synced.get(connectionTimeout.toMillis(), TimeUnit.MILLISECONDS)
+        } catch (error: TimeoutException) {
+            throw SimbaException("Zookeeper sync of [$path] timed out after $connectionTimeout.", error)
+        }
+        if (code != KeeperException.Code.OK.intValue() && code != KeeperException.Code.NONODE.intValue()) {
+            throw KeeperException.create(KeeperException.Code.get(code), path)
+        }
+    }
+
+    private fun aclFor(path: String): List<ACL> = aclProvider.getAclForPath(path) ?: aclProvider.defaultAcl
+
     private fun ensureOpen() {
         check(!closed) { "ZookeeperLeaseBackend is closed." }
     }
 
-    /** The node of [name]; validated up front, so a batch never fails half-sent on a path the client rejects. */
-    private fun leasePath(name: LeaseName): String {
-        require(name.value != "." && name.value != "..") { "Lease name [$name] is not a valid Zookeeper node name." }
-        return "$leasesPath/${name.value}"
-    }
+    /** [LeaseName] already excludes `/`, `.` and `..`, so every name is one valid node name. */
+    private fun leasePath(name: LeaseName): String = "$leasesPath/${name.value}"
 
-    private fun groupPath(group: String): String {
-        require(group.isNotEmpty() && '/' !in group && group != "." && group != "..") {
-            "Group [$group] must be a non-empty Zookeeper node name."
-        }
-        return "$groupsPath/$group"
-    }
+    /** Group names follow the [LeaseName] rules, as on every backend. */
+    private fun groupPath(group: String): String = "$groupsPath/${LeaseName(group).value}"
 
     private fun memberPath(group: String, session: SessionId): String = "${groupPath(group)}/${session.value}"
 
@@ -514,7 +557,7 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
                 names.associateWith { name ->
                     val path = leasePath(name)
                     candidates[name] = epoch
-                    zooKeeper.createAsync(path, data) to zooKeeper.existsAsync(path, leaseWatcher)
+                    zooKeeper.createAsync(path, data, aclFor(path)) to zooKeeper.existsAsync(path, leaseWatcher)
                 }
             }
             val retry = HashSet<LeaseName>()
@@ -540,7 +583,7 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
                 }
             }
             if (missingParent) {
-                zooKeeper.ensure(leasesPath, CreateMode.PERSISTENT)
+                zooKeeper.ensure(leasesPath, CreateMode.PERSISTENT, ::aclFor)
             }
             return retry
         }
@@ -563,10 +606,10 @@ private fun ZooKeeper.existsAsync(path: String, watcher: Watcher?): CompletableF
     }
 }
 
-private fun ZooKeeper.createAsync(path: String, data: ByteArray): CompletableFuture<KeeperException.Code> {
+private fun ZooKeeper.createAsync(path: String, data: ByteArray, acl: List<ACL>): CompletableFuture<KeeperException.Code> {
     val reply = CompletableFuture<KeeperException.Code>()
     val callback = AsyncCallback.StringCallback { rc, _, _, _ -> reply.complete(KeeperException.Code.get(rc)) }
-    create(path, data, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL, callback, null)
+    create(path, data, acl, CreateMode.EPHEMERAL, callback, null)
     return reply
 }
 
@@ -584,8 +627,8 @@ private fun <T> CompletableFuture<T>.await(): T = try {
     throw error.cause ?: error
 }
 
-/** Creates [path] with [mode], and its missing ancestors as persistent nodes. */
-private fun ZooKeeper.ensure(path: String, mode: CreateMode) {
+/** Creates [path] with [mode], and its missing ancestors as persistent nodes, each with the ACL [aclFor] its path. */
+private fun ZooKeeper.ensure(path: String, mode: CreateMode, aclFor: (String) -> List<ACL>) {
     val segments = path.split('/').filter { it.isNotEmpty() }
     segments.indices.forEach { index ->
         val prefix = segments.take(index + 1).joinToString("/", prefix = "/")
@@ -593,7 +636,7 @@ private fun ZooKeeper.ensure(path: String, mode: CreateMode) {
             create(
                 prefix,
                 ByteArray(0),
-                ZooDefs.Ids.OPEN_ACL_UNSAFE,
+                aclFor(prefix),
                 if (index == segments.lastIndex) mode else CreateMode.PERSISTENT
             )
         } catch (_: KeeperException.NodeExistsException) {

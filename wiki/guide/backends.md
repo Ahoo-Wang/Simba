@@ -173,6 +173,30 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 - The session timeout requested is `leaseDuration`; the ensemble clamps it to `[minSessionTimeout,
   maxSessionTimeout]` (by default 2 to 20 ticks). Failover after a crash takes the negotiated timeout.
 - `simba.zookeeper.connection-timeout` bounds how long opening a session may take.
+- Group names follow the `LeaseName` rules (1–128 characters of `[A-Za-z0-9._:-]`, not `.` or `..`), as on every
+  backend. `members` syncs the group path first, so a join that just returned is always in the view.
+
+### Security
+
+By default the nodes get `OPEN_ACL_UNSAFE`: any client of the ensemble can delete or pre-create lease nodes and forge
+group members. On a shared ensemble, authenticate and restrict the ACL:
+
+```kotlin
+val backend = ZookeeperLeaseBackend(
+    "zk1:2181,zk2:2181,zk3:2181",
+    authInfo = listOf(AuthInfo("digest", "simba:secret".toByteArray())),
+    aclProvider = myAclProvider, // e.g. ZooDefs.Ids.CREATOR_ALL_ACL for every path
+    clientConfig = ZKClientConfig(), // TLS or SASL settings, optional
+)
+```
+
+- Every client (each session's and the one `members` reads with) adds `authInfo` and is built with `clientConfig`.
+- Every node the backend creates gets the ACL of `aclProvider`, including the parents it creates. Parents that already
+  exist keep their ACL, and the ACL of `{root}/leases` and `{root}/groups/{group}` decides who may create or delete
+  leases and members: create them with the backend's identity, or set their ACL yourself.
+- Spring Boot: `simba.zookeeper.auth.scheme` / `simba.zookeeper.auth.credentials` and `simba.zookeeper.acl`
+  (`auto` gives creator-only nodes once credentials are set); an `ACLProvider` bean replaces the ACL and a
+  `ZKClientConfig` bean configures every client (see [Configuration](./configuration.md)).
 
 ## Selecting a Backend in Spring Boot
 

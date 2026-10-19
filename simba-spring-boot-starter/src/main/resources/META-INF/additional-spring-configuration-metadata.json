@@ -115,6 +115,26 @@
       "defaultValue": "15s"
     },
     {
+      "name": "simba.zookeeper.auth.scheme",
+      "type": "java.lang.String",
+      "description": "Authentication scheme every Zookeeper client adds, e.g. digest.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.zookeeper.ZookeeperProperties$Auth",
+      "defaultValue": "digest"
+    },
+    {
+      "name": "simba.zookeeper.auth.credentials",
+      "type": "java.lang.String",
+      "description": "Auth data of the scheme (UTF-8), e.g. user:password for digest. Unset: no authentication.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.zookeeper.ZookeeperProperties$Auth"
+    },
+    {
+      "name": "simba.zookeeper.acl",
+      "type": "me.ahoo.simba.spring.boot.starter.zookeeper.ZookeeperProperties$Acl",
+      "description": "ACL of the nodes the backend creates: auto (creator with credentials, else open), open or creator. An ACLProvider bean takes precedence.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.zookeeper.ZookeeperProperties",
+      "defaultValue": "auto"
+    },
+    {
       "name": "simba.metrics.enabled",
       "type": "java.lang.Boolean",
       "description": "Whether Simba records Micrometer metrics when a MeterRegistry bean exists.",
@@ -144,6 +164,23 @@
         {
           "value": "zookeeper",
           "description": "Zookeeper backend (ephemeral nodes)."
+        }
+      ]
+    },
+    {
+      "name": "simba.zookeeper.acl",
+      "values": [
+        {
+          "value": "auto",
+          "description": "creator when simba.zookeeper.auth.credentials is set, otherwise open."
+        },
+        {
+          "value": "open",
+          "description": "OPEN_ACL_UNSAFE: any client of the ensemble may change Simba's nodes."
+        },
+        {
+          "value": "creator",
+          "description": "CREATOR_ALL_ACL: only the authenticated identity that created a node may use it."
         }
       ]
     }
