@@ -15,9 +15,11 @@ package me.ahoo.simba.engine
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.LeadershipListener
+import me.ahoo.simba.event.SimbaEvent
 import me.ahoo.simba.event.SimbaEventListener
 import me.ahoo.simba.spi.LeaseBackend
 import me.ahoo.simba.spi.LeaseName
+import me.ahoo.simba.spi.SessionId
 import me.ahoo.simba.spi.Ticker
 import me.ahoo.simba.util.SequentialExecutor
 import me.ahoo.simba.util.Threads
@@ -28,11 +30,12 @@ import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Runs [step] on a single event-loop thread and executes its effects: backend calls on [ioExecutor] with a timeout
- * of one renew interval, timers on the loop, and callbacks on one serial dispatcher per election over
- * [callbackExecutor]. The engine state is only touched by the loop thread.
+ * of one renew interval, timers on the loop (or on [scheduler]), callbacks on one serial dispatcher per election
+ * over [callbackExecutor], and group views on the loop. The engine state is only touched by the loop thread.
  */
 @OptIn(InternalSimbaApi::class)
 internal class EngineShell(
@@ -43,6 +46,7 @@ internal class EngineShell(
     private val callbackExecutor: Executor,
     private val eventListeners: List<SimbaEventListener>,
     seed: Long,
+    scheduler: Scheduler? = null,
 ) {
     companion object {
         private val log = KotlinLogging.logger {}
@@ -56,9 +60,12 @@ internal class EngineShell(
         removeOnCancelPolicy = true
         executeExistingDelayedTasksAfterShutdownPolicy = false
     }
+    private val timers: Scheduler = scheduler ?: LoopScheduler()
     private var state = EngineState.initial(config, seed)
     private val terms = TermRegistry(ticker)
     private val dispatchers = HashMap<LeaseName, Dispatcher>()
+    private val groupViews = HashMap<String, (SessionId?, List<SessionId>) -> Unit>()
+    private val handled = AtomicLong()
     private val hintSubscription = backend.subscribe { hint -> post(Event.Hint(hint)) }
 
     /**
@@ -75,15 +82,119 @@ internal class EngineShell(
         post(Event.Boot)
     }
 
-    fun start(name: LeaseName, listener: LeadershipListener) {
+    /** Timers on the loop with [ticker]. */
+    private inner class LoopScheduler : Scheduler {
+        override fun nanoTime(): Long = ticker.nanoTime()
+
+        override fun schedule(at: Long, task: Runnable) {
+            try {
+                loop.schedule(task, at - ticker.nanoTime(), TimeUnit.NANOSECONDS)
+            } catch (error: RejectedExecutionException) {
+                log.debug(error) { "Simba engine is closed; timer runs at once." }
+                task.run()
+            }
+        }
+    }
+
+    /**
+     * Starts the election: with [work], its terms carry work that reports [workExited]; [probe] completes when the
+     * first answered attempt does not elect this node.
+     */
+    fun start(
+        name: LeaseName,
+        listener: LeadershipListener,
+        work: Boolean = false,
+        probe: CompletableFuture<Void>? = null,
+    ) {
         onLoop {
             val dispatcher = dispatcher(name)
             dispatcher.listener = listener
             dispatcher.active = true
             dispatcher.starts++
-            handle(Event.Start(name))
+            handle(Event.Start(name, work, probe))
         }
     }
+
+    /** The work bound to term [term] of [name] exited; [event], if any, is published in the same loop task. */
+    fun workExited(name: LeaseName, term: Long, event: SimbaEvent? = null) {
+        onLoop {
+            event?.let(::publishNow)
+            handle(Event.WorkExited(name, term))
+        }
+    }
+
+    /** Publishes [event] to the listeners from the loop, in order with the engine's own events. */
+    fun publish(event: SimbaEvent) {
+        onLoop { publishNow(event) }
+    }
+
+    /** Joins [group]; [onView] receives every changed view on the loop thread and must not block. */
+    fun join(group: String, onView: (SessionId?, List<SessionId>) -> Unit) {
+        onLoop {
+            groupViews[group] = onView
+            handle(Event.Join(group))
+        }
+    }
+
+    fun leave(group: String) {
+        onLoop {
+            groupViews.remove(group)
+            handle(Event.Leave(group))
+        }
+    }
+
+    /** Runs [task] once the ticker reaches [at]; at once when the engine is closed. */
+    fun schedule(at: Long, task: Runnable) {
+        timers.schedule(at, task)
+    }
+
+    /**
+     * Completes, with the number of loop tasks handled so far, once the loop has nothing queued. Meaningful only with
+     * an external [Scheduler] (the loop then holds no delayed timers) and a direct I/O executor; tests use it to let
+     * engines settle before moving virtual time: two rounds with the same counts mean nothing ran in between.
+     */
+    fun idle(): CompletableFuture<Long> {
+        val idle = CompletableFuture<Long>()
+        fun check() {
+            if (loop.queue.isEmpty() || !submit(::check)) {
+                idle.complete(handled.get())
+            }
+        }
+        if (!submit(::check)) {
+            idle.complete(handled.get())
+        }
+        return idle
+    }
+
+    /** Runs [action] on the loop without counting it as handled. */
+    private fun submit(action: () -> Unit): Boolean =
+        try {
+            loop.execute(action)
+            true
+        } catch (_: RejectedExecutionException) {
+            false
+        }
+
+    /** Elections, dispatchers and groups kept by the engine; for tests of bounded state. */
+    fun footprint(): CompletableFuture<Footprint> =
+        CompletableFuture<Footprint>().also { footprint ->
+            val posted = onLoop {
+                footprint.complete(
+                    Footprint(
+                        elections = state.elections.size,
+                        works = state.works.size,
+                        pending = state.pending.size,
+                        dispatchers = dispatchers.size,
+                        groups = state.groups.size + groupViews.size,
+                        terms = terms.active.size,
+                        abandoned = (state.session as? SessionState.Active)?.abandoned?.size ?: 0,
+                    )
+                )
+            }
+            if (!posted) {
+                footprint.complete(Footprint(0, 0, 0, 0, 0, 0, 0))
+            }
+        }
 
     fun stop(name: LeaseName): CompletableFuture<Void> {
         val done = CompletableFuture<Void>()
@@ -153,6 +264,7 @@ internal class EngineShell(
     private fun onLoop(action: () -> Unit): Boolean {
         try {
             loop.execute {
+                handled.incrementAndGet()
                 try {
                     action()
                 } catch (error: Throwable) {
@@ -175,7 +287,7 @@ internal class EngineShell(
     private fun execute(effect: Effect) {
         when (effect) {
             is Effect.Call -> call(effect)
-            is Effect.Arm -> schedule(effect.at - ticker.nanoTime()) { handle(Event.Timer(effect.id)) }
+            is Effect.Arm -> timers.schedule(effect.at) { post(Event.Timer(effect.id)) }
             is Effect.Deadline -> terms.deadline(effect)
             is Effect.Elected -> {
                 val term = terms.elected(effect)
@@ -196,12 +308,23 @@ internal class EngineShell(
                 }
             }
 
-            is Effect.Publish -> eventListeners.forEach { listener ->
+            is Effect.Publish -> publishNow(effect.event)
+            is Effect.Members -> groupViews[effect.group]?.let { onView ->
                 try {
-                    listener.onEvent(effect.event)
+                    onView(effect.session, effect.members)
                 } catch (error: Throwable) {
-                    log.warn(error) { "SimbaEventListener failed on ${effect.event}." }
+                    log.warn(error) { "Group view of [${effect.group}] failed." }
                 }
+            }
+        }
+    }
+
+    private fun publishNow(event: SimbaEvent) {
+        eventListeners.forEach { listener ->
+            try {
+                listener.onEvent(event)
+            } catch (error: Throwable) {
+                log.warn(error) { "SimbaEventListener failed on $event." }
             }
         }
     }
@@ -213,19 +336,13 @@ internal class EngineShell(
                 post(Event.Reply(effect.requestId, result))
             }
         }
-        schedule(config.renewInterval) { reply(BackendResult.Failed(TimeoutException("${effect.request} timed out."))) }
+        timers.schedule(ticker.nanoTime() + config.renewInterval) {
+            reply(BackendResult.Failed(TimeoutException("${effect.request} timed out.")))
+        }
         try {
             ioExecutor.execute { reply(backend.execute(effect.request)) }
         } catch (error: RejectedExecutionException) {
             reply(BackendResult.Failed(error))
-        }
-    }
-
-    private fun schedule(delayNanos: Long, action: () -> Unit) {
-        try {
-            loop.schedule(action, delayNanos, TimeUnit.NANOSECONDS)
-        } catch (error: RejectedExecutionException) {
-            log.debug(error) { "Simba engine is closed; timer dropped." }
         }
     }
 
@@ -248,3 +365,14 @@ internal class EngineShell(
         }
     }
 }
+
+/** What an [EngineShell] keeps; every count returns to zero once nothing is started. */
+internal data class Footprint(
+    val elections: Int,
+    val works: Int,
+    val pending: Int,
+    val dispatchers: Int,
+    val groups: Int,
+    val terms: Int,
+    val abandoned: Int,
+)

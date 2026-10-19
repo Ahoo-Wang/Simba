@@ -50,6 +50,10 @@ data class EngineConfig(
 /**
  * The whole engine state. Immutable; only [step] produces a new one.
  *
+ * [works] names the elections whose terms carry work (ADR 0010 contract 3): stopping or stepping down such a term
+ * waits in [ElectionState.Handover] before releasing its lease. [groups] are the groups this client joins. A
+ * non-empty [closing] holds the close requests waiting for the last handover.
+ *
  * Ids of requests, timers and terms come from one counter ([nextId]), so comparing two ids tells which was created
  * first.
  */
@@ -61,6 +65,9 @@ data class EngineState(
     val session: SessionState,
     val elections: Map<LeaseName, ElectionState>,
     val pending: Map<Long, Pending>,
+    val works: Set<LeaseName> = emptySet(),
+    val groups: Map<String, GroupState> = emptyMap(),
+    val closing: List<CompletableFuture<Void>> = emptyList(),
 ) {
     companion object {
         fun initial(config: EngineConfig, seed: Long): EngineState =
@@ -101,17 +108,65 @@ sealed interface SessionState {
     ) : SessionState
 
     /** Closed; completes [done] when [request] (the session close) replies. */
-    data class Closed(val request: Long?, val done: CompletableFuture<Void>?) : SessionState
+    data class Closed(val request: Long?, val done: List<CompletableFuture<Void>>) : SessionState
 }
 
 @InternalSimbaApi
 sealed interface ElectionState {
-    /** Contending: [attempt] is the acquire in flight, [retryTimer] the next attempt; both null means idle. */
-    data class Candidate(val attempt: Long?, val retryTimer: Long?) : ElectionState
+    /**
+     * Contending: [attempt] is the acquire in flight, [retryTimer] the next attempt; both null means idle. [probe]
+     * completes when the first answered attempt does not elect this node.
+     */
+    data class Candidate(
+        val attempt: Long?,
+        val retryTimer: Long?,
+        val probe: CompletableFuture<Void>? = null,
+    ) : ElectionState
 
-    /** Holding term [term] (also the id-order of its adoption) with fencing token [token]. */
-    data class Leader(val term: Long, val token: Long) : ElectionState
+    /**
+     * Holding term [term] (also the id-order of its adoption) with fencing token [token]; [working] while the work
+     * bound to the term has not exited.
+     */
+    data class Leader(val term: Long, val token: Long, val working: Boolean = false) : ElectionState
 
     /** Not contending until [timer] fires. */
     data class Cooldown(val timer: Long) : ElectionState
+
+    /**
+     * Term [term] was revoked by a stop or step-down while its work was running: the lease, owned by [session] with
+     * [token], is released once the work exits or [timer] fires at [deadline] (the session's local deadline when
+     * the handover began), whichever comes first. Then [next] applies and [done] completes.
+     */
+    data class Handover(
+        val term: Long,
+        val token: Long,
+        val session: SessionId,
+        val deadline: Long,
+        val timer: Long,
+        val next: AfterHandover,
+        val done: List<CompletableFuture<Void>>,
+    ) : ElectionState
 }
+
+/** What an election does once its [ElectionState.Handover] ends. */
+@InternalSimbaApi
+sealed interface AfterHandover {
+    /** The election was stopped: it is removed. */
+    data object Stop : AfterHandover
+
+    /** Contend again at [at] (monotonic nanoseconds): the end of a cooldown, or a restart after a stop. */
+    data class Resume(val at: Long) : AfterHandover
+}
+
+/**
+ * Membership of one group: [joined] is the session the group was joined with, [request] the join or members
+ * request in flight, [refreshTimer] the next refresh, and [session] / [members] the view published last.
+ */
+@InternalSimbaApi
+data class GroupState(
+    val joined: SessionId? = null,
+    val request: Long? = null,
+    val refreshTimer: Long? = null,
+    val session: SessionId? = null,
+    val members: List<SessionId>? = null,
+)

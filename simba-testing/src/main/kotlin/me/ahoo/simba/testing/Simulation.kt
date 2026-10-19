@@ -15,6 +15,7 @@ package me.ahoo.simba.testing
 
 import me.ahoo.simba.RevokeReason
 import me.ahoo.simba.SimbaConfig
+import me.ahoo.simba.engine.BackendRequest
 import me.ahoo.simba.engine.BackendResult
 import me.ahoo.simba.engine.Effect
 import me.ahoo.simba.engine.EngineConfig
@@ -41,6 +42,9 @@ import java.util.concurrent.TimeoutException
  * @param quietMaxDelay delay ceiling of the quiet phase.
  * @param clockRateSpread node clock rates are drawn from `[1 − spread, 1 + spread]`; the engine is only safe while
  *   the spread does not exceed [SimbaConfig.drift], which is what the checker's self-test relies on.
+ * @param workShare share of starts whose terms carry work; such work exits on its own with probability
+ *   [selfExitShare] within [maxWork], and otherwise within [maxWork] after its term is revoked (often after the
+ *   handover timed out).
  */
 data class SimulationParams(
     val config: SimbaConfig = SimbaConfig(
@@ -64,6 +68,9 @@ data class SimulationParams(
     val meanOperationInterval: Duration = Duration.ofSeconds(2),
     val faultPhase: Duration = Duration.ofSeconds(60),
     val quietPhase: Duration = Duration.ofSeconds(30),
+    val workShare: Double = 0.5,
+    val selfExitShare: Double = 0.3,
+    val maxWork: Duration = config.leaseDuration.multipliedBy(2),
 ) {
     /**
      * I4 bound, measured from the start of the quiet phase: fault-phase messages land within two delays, a cooldown
@@ -82,6 +89,8 @@ data class SimulationResult(
     val names: Int,
     val tasks: Long,
     val elections: Int,
+    val handovers: Int,
+    val handoverTimeouts: Int,
     val revocations: Map<RevokeReason, Int>,
     val highestTokens: Map<LeaseName, Long>,
     val sessions: Int,
@@ -103,7 +112,10 @@ class SimulationFailure(val seed: Long, message: String, trace: String) :
  * - **I2 monotonic**: tokens of a name strictly increase in the order terms are created;
  * - **I3 pairing**: per node and name, `onElected` and `onRevoked` alternate for the same term; no callback after a
  *   stop completed (until the next start) or after close; at the end no term is open;
- * - **I4 liveness**: during the quiet phase, after [SimulationParams.livenessBound], every name has a valid term.
+ * - **I4 liveness**: during the quiet phase, after [SimulationParams.livenessBound], every name has a valid term;
+ * - **I5 handover** (ADR 0010 contract 3): a term stopped or stepped down while its work runs keeps its lease (no
+ *   release, no session close) until the work exited or the session's local deadline at the time of the stop
+ *   passed.
  *
  * Everything random comes from [seed], so a failing seed replays exactly.
  */
@@ -131,9 +143,18 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
 
     private val lastToken = HashMap<LeaseName, Long>()
     private var elections = 0
+    private var handovers = 0
+    private var handoverTimeouts = 0
     private val revocations = HashMap<RevokeReason, Int>()
 
     private class Task(val at: Long, val seq: Long, val action: () -> Unit)
+
+    /** Work bound to [term]; [handoverUntil] is set (local time) when a stop or step-down revoked it while running. */
+    private class Work(val term: EngineTerm) {
+        var exited = false
+        var handoverUntil: Long? = null
+        var timedOut = false
+    }
 
     private inner class Node(val index: Int) {
         val ticker = DriftingTicker(
@@ -148,9 +169,13 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
         val unresolved = HashSet<Long>()
         val started = HashSet<LeaseName>()
         val stopFutures = HashSet<CompletableFuture<Void>>()
+        val starts = HashMap<LeaseName, Int>()
+        val stopEpochs = HashMap<CompletableFuture<Void>, Int>()
         val stopped = HashSet<LeaseName>()
         val openTerms = HashMap<LeaseName, EngineTerm>()
         val waiting = ArrayList<CompletableFuture<Void>>()
+        val workNames = HashSet<LeaseName>()
+        val works = HashMap<Long, Work>()
         var closeRequested = false
         var closed = false
 
@@ -181,6 +206,8 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
             names = names.size,
             tasks = tasks,
             elections = elections,
+            handovers = handovers,
+            handoverTimeouts = handoverTimeouts,
             revocations = revocations.toMap(),
             highestTokens = names.associateWith { backend.token(it) },
             sessions = sessionCounter,
@@ -245,8 +272,15 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
     }
 
     private fun process(node: Node, event: Event) {
-        if (event is Event.Start) {
-            node.stopped -= event.name
+        when (event) {
+            is Event.Start -> {
+                node.stopped -= event.name
+                node.starts.merge(event.name, 1, Int::plus)
+                if (event.work) node.workNames += event.name else node.workNames -= event.name
+            }
+
+            is Event.Stop -> node.stopEpochs[event.done] = node.starts[event.name] ?: 0
+            else -> Unit
         }
         val (next, effects) = step(node.state, event, node.ticker.nanoTime())
         node.state = next
@@ -261,11 +295,18 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
             is Effect.Arm -> schedule(node.ticker.baseTimeOf(effect.at)) { deliver(node, Event.Timer(effect.id)) }
             is Effect.Deadline -> node.terms.deadline(effect)
             is Effect.Elected -> elected(node, node.terms.elected(effect))
-            is Effect.Revoked -> revoked(node, node.terms.revoked(effect), effect.reason)
+            is Effect.Revoked -> {
+                val remaining = node.terms.active.first { it.id == effect.term }.remaining().toNanos()
+                revoked(node, node.terms.revoked(effect), effect.reason, remaining)
+            }
+
             is Effect.Complete -> {
                 if (effect.done in node.stopFutures) {
                     node.stopFutures -= effect.done
-                    effect.name?.let { node.stopped += it }
+                    // A handover may complete a stop after the election was started again: only a stop with no
+                    // later start leaves the election stopped.
+                    val epoch = node.stopEpochs.remove(effect.done)
+                    effect.name?.takeIf { epoch == (node.starts[it] ?: 0) }?.let { node.stopped += it }
                 }
                 if (node.closeRequested && effect.name == null) {
                     node.closed = true
@@ -274,10 +315,12 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
             }
 
             is Effect.Publish -> events.merge(effect.event.javaClass.simpleName, 1, Int::plus)
+            is Effect.Members -> Unit
         }
     }
 
     private fun call(node: Node, effect: Effect.Call) {
+        checkHandover(node, effect.request)
         node.unresolved += effect.requestId
         after(engineConfig.renewInterval) {
             if (node.unresolved.remove(effect.requestId)) {
@@ -298,8 +341,30 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
 
     private fun start(node: Node, name: LeaseName) {
         if (node.started.add(name)) {
-            deliver(node, Event.Start(name))
+            deliver(node, Event.Start(name, work = random.nextDouble() < params.workShare))
         }
+    }
+
+    /** Starts the work of [term] when its election carries work; some work exits on its own. */
+    private fun startWork(node: Node, term: EngineTerm) {
+        if (term.name !in node.workNames) {
+            return
+        }
+        val work = Work(term)
+        node.works[term.id] = work
+        if (random.nextDouble() < params.selfExitShare) {
+            after(random.nextLong(0, params.maxWork.toNanos())) { exitWork(node, work) }
+        }
+    }
+
+    private fun exitWork(node: Node, work: Work) {
+        if (work.exited) {
+            return
+        }
+        work.exited = true
+        node.works -= work.term.id
+        record { "${millis(clock.nanoTime())} $node work of ${work.term} exited" }
+        deliver(node, Event.WorkExited(work.term.name, work.term.id))
     }
 
     private fun pauseSomeone() {
@@ -380,6 +445,7 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
         }
         node.openTerms[term.name]?.let { fail("I3: $node elected $term while $it is still open") }
         node.openTerms[term.name] = term
+        startWork(node, term)
         if (term.token <= 0) {
             fail("I2: $node elected non-positive token $term")
         }
@@ -390,8 +456,15 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
         lastToken[term.name] = term.token
     }
 
-    private fun revoked(node: Node, term: EngineTerm, reason: RevokeReason) {
+    private fun revoked(node: Node, term: EngineTerm, reason: RevokeReason, remaining: Long) {
         revocations.merge(reason, 1, Int::plus)
+        node.works[term.id]?.let { work ->
+            if (reason == RevokeReason.STOPPED || reason == RevokeReason.STEPPED_DOWN) {
+                handovers++
+                work.handoverUntil = node.ticker.nanoTime() + remaining
+            }
+            after(random.nextLong(0, params.maxWork.toNanos())) { exitWork(node, work) }
+        }
         if (node.closed) {
             fail("I3: $node revoked $term after close")
         }
@@ -419,6 +492,29 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
                 if (owner == null || owner.session != term.session || owner.token != term.token) {
                     fail("I1: $node holds valid $term of session ${term.session} but the backend owner is $owner")
                 }
+            }
+        }
+    }
+
+    /** I5: a release or session close must not free the lease of a handover whose work runs and has time left. */
+    private fun checkHandover(node: Node, request: BackendRequest) {
+        val now = node.ticker.nanoTime()
+        for (work in node.works.values) {
+            val until = work.handoverUntil ?: continue
+            val term = work.term
+            val frees = when (request) {
+                is BackendRequest.Release -> request.session == term.session && request.leases[term.name] == term.token
+                is BackendRequest.CloseSession -> request.session == term.session
+                else -> false
+            }
+            if (frees && now - until >= 0) {
+                if (!work.timedOut) {
+                    work.timedOut = true
+                    handoverTimeouts++
+                }
+            } else if (frees) {
+                val left = Duration.ofNanos(until - now)
+                fail("I5: $node sent $request while the work of $term still runs, $left before its handover timeout")
             }
         }
     }

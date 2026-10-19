@@ -34,6 +34,33 @@ sealed interface SimbaEvent {
     data class Revoked(val name: LeaseName, val token: Long, val reason: RevokeReason) : SimbaEvent
 
     data class AcquireFailed(val name: LeaseName, val cause: Throwable) : SimbaEvent
+
+    /**
+     * One run of leader work finished: the whole block of `runWhileLeader`, or one execution of a schedule. Work
+     * failures never affect the election; they are logged and reported here with their [cause].
+     *
+     * @param token the fencing token of the term the work ran in.
+     * @param duration how long the run took, on the client's monotonic clock.
+     */
+    data class WorkCompleted(
+        val name: LeaseName,
+        val token: Long,
+        val outcome: WorkOutcome,
+        val duration: Duration,
+        val cause: Throwable? = null,
+    ) : SimbaEvent
+}
+
+/** How a run of leader work ended. */
+enum class WorkOutcome {
+    /** Returned normally. */
+    COMPLETED,
+
+    /** Threw while its term was still valid. */
+    FAILED,
+
+    /** Ended by the end of its term: threw after the term was revoked, or found it expired. */
+    CANCELLED,
 }
 
 /** Receives [SimbaEvent]s; exceptions are logged and ignored. */
