@@ -152,7 +152,18 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
   A term is revoked before its lease is released; releases carry the token, so a late one is a no-op.
 - Keep-alive replies list the leases the session owns: a term adopted before the request but missing from the reply is
   revoked (`TAKEN_OVER`); an owned lease nobody holds or is acquiring is released.
-- Engine changes must keep `SimulationSpec` (I1–I4 over 10⁴ seeds) green; replay a failure with
+- Handover (ADR 0010 contract 3): an election started with work (`runWhileLeader`, `schedule`, groups) keeps the
+  lease of a stopped or stepped-down term in `ElectionState.Handover` until `Event.WorkExited` for that term or the
+  session's local deadline at the stop, whichever comes first; terms without work release at once. A step-down
+  cooldown counts from the step-down. Terms lost otherwise (deadline, take-over, expiry) are not waited for.
+- User primitives (phase 5a, beside 4.x): work runs once per term on a task of the client's work executor (virtual
+  threads), interrupted on revocation; failures become `SimbaEvent.WorkCompleted` and never touch the election.
+  `lock(name)` returns a `LockTerm` (the credential; one holder per name per client; a term lost other than by
+  release is not re-acquired). `group(name, n)`: the engine joins the group with every session and publishes member
+  views (`Effect.Members`); partition leases are `{group}.{p}`, assigned by `PartitionAssignment` over session ids.
+- Tests of the threaded client run on virtual time: `VirtualScheduler` plus direct I/O and callback executors, and
+  `awaitIdle()` between timers (see `VirtualSimba` in simba-testing tests); never sleep.
+- Engine changes must keep `SimulationSpec` (I1–I5 over 10⁴ seeds) green; replay a failure with
   `./gradlew simba-testing:test -Psimba.simulation.seed=N`.
 - Every `LeaseBackend` passes `simba-tck`'s `LeaseBackendSpec` (phase 2): the SPI KDoc rules, one per test. A backend
   with an injectable clock overrides `clock`; otherwise time-based tests poll until the backend's own lease ran out.
