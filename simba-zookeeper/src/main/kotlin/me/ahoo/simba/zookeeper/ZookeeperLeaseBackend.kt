@@ -412,11 +412,17 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
                 check?.cancel(false)
             }
             sessions.remove(id, this)
+            // ZooKeeper.close() swallows a pending interrupt: close uninterrupted and restore the flag afterwards.
+            var interrupted = Thread.interrupted()
             try {
                 zooKeeper.close()
             } catch (error: InterruptedException) {
-                Thread.currentThread().interrupt()
+                interrupted = true
                 log.warn(error) { "Interrupted while closing Zookeeper session [$id]." }
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt()
+                }
             }
         }
 
