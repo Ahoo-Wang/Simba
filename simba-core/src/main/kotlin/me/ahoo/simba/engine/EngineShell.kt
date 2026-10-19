@@ -36,6 +36,7 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.ThreadFactory
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -61,11 +62,37 @@ internal class EngineShell(
         private val log = KotlinLogging.logger {}
         private val dispatching = ThreadLocal<Boolean>()
 
-        /** `true` on a thread currently running a leadership callback. */
+        private val loopOf = ThreadLocal<EngineShell>()
+
+        /** `true` on a thread currently running a leadership callback or delivering events. */
         fun isDispatching(): Boolean = dispatching.get() == true
+
+        /** `true` on the event loop thread of any shell. */
+        fun isLoopThread(): Boolean = loopOf.get() != null
+
+        /**
+         * Throws [IllegalStateException] on an event loop thread: [what] would block the loop, and the loop is what
+         * it waits for. Callbacks run there only with a direct callback executor.
+         */
+        fun checkNotOnLoop(what: String) {
+            check(!isLoopThread()) { "$what would block the Simba event loop it runs on; call it from another thread." }
+        }
     }
 
-    private val loop = ScheduledThreadPoolExecutor(1, Threads.defaultFactory("simba-engine", daemon = true)).apply {
+    /** Marks the loop thread with its shell, so that [isLoopThread] and on-loop reads can tell. */
+    private fun loopFactory(): ThreadFactory {
+        val base = Threads.defaultFactory("simba-engine", daemon = true)
+        return ThreadFactory { runnable ->
+            base.newThread {
+                loopOf.set(this)
+                runnable.run()
+            }
+        }
+    }
+
+    private fun onThisLoop(): Boolean = loopOf.get() === this
+
+    private val loop = ScheduledThreadPoolExecutor(1, loopFactory()).apply {
         removeOnCancelPolicy = true
         executeExistingDelayedTasksAfterShutdownPolicy = false
     }
@@ -172,6 +199,7 @@ internal class EngineShell(
      * engines settle before moving virtual time: two rounds with the same counts mean nothing ran in between.
      */
     fun idle(): CompletableFuture<Long> {
+        checkNotOnLoop("awaitIdle()")
         val idle = CompletableFuture<Long>()
         fun check() {
             if (loop.queue.isEmpty() || !submit(::check)) {
@@ -190,8 +218,17 @@ internal class EngineShell(
     /** Elections, dispatchers and groups kept by the engine; for tests of bounded state. */
     fun footprint(): CompletableFuture<Footprint> =
         CompletableFuture<Footprint>().also { footprint ->
-            val posted = onLoop {
-                footprint.complete(
+            if (onThisLoop()) {
+                footprint.complete(footprintNow())
+                return@also
+            }
+            val posted = onLoop { footprint.complete(footprintNow()) }
+            if (!posted) {
+                footprint.complete(Footprint(0, 0, 0, 0, 0, 0, 0))
+            }
+        }
+
+    private fun footprintNow(): Footprint =
                     Footprint(
                         elections = state.elections.size,
                         works = state.works.size,
@@ -201,16 +238,15 @@ internal class EngineShell(
                         terms = terms.active.size,
                         abandoned = (state.session as? SessionState.Active)?.abandoned?.size ?: 0,
                     )
-                )
-            }
-            if (!posted) {
-                footprint.complete(Footprint(0, 0, 0, 0, 0, 0, 0))
-            }
-        }
 
     /** The session and every election as of now; a closed snapshot once the loop stopped. */
     fun snapshot(): CompletableFuture<SimbaSnapshot> =
         CompletableFuture<SimbaSnapshot>().also { snapshot ->
+            if (onThisLoop()) {
+                // Read in place: posting to the loop and waiting would wait for this very task.
+                snapshot.complete(snapshotNow())
+                return@also
+            }
             val posted = onLoop { snapshot.complete(snapshotNow()) }
             if (!posted) {
                 val session = SessionSnapshot(
@@ -326,7 +362,7 @@ internal class EngineShell(
         return drained.thenCompose { executors ->
             val all = (executors + events).map { executor ->
                 val drainedOne = CompletableFuture<Void>()
-                executor.execute { drainedOne.complete(null) }
+                executor.executeOr({ drainedOne.complete(null) }) { drainedOne.complete(null) }
                 drainedOne
             }
             CompletableFuture.allOf(*all.toTypedArray())
@@ -384,11 +420,21 @@ internal class EngineShell(
                 if (dispatcher == null) {
                     effect.done.complete(null)
                 } else {
-                    dispatcher.executor.execute { effect.done.complete(null) }
+                    // A rejecting callback executor must not leave the future, nor the effects after it, pending.
+                    dispatcher.executor.executeOr({ effect.done.complete(null) }) { effect.done.complete(null) }
                 }
             }
 
-            is Effect.Publish -> publishNow(effect.event)
+            is Effect.Publish -> {
+                (effect.event as? SimbaEvent.SessionLeaseShortened)?.let { short ->
+                    log.warn {
+                        "Session [${short.session}] is granted only ${short.remaining} by the backend, less than the " +
+                            "renew interval ${config.renewInterval.let(Duration::ofNanos)} needs: renewing every " +
+                            "${short.renewEvery} instead. Raise the backend's session limit or lower the lease."
+                    }
+                }
+                publishNow(effect.event)
+            }
             is Effect.Members -> groupViews[effect.group]?.let { onView ->
                 try {
                     onView(effect.session, effect.members)
@@ -421,10 +467,8 @@ internal class EngineShell(
                 dispatching.remove()
             }
         }
-        try {
-            events.execute(deliver)
-        } catch (error: RejectedExecutionException) {
-            log.warn(error) { "Callback executor rejected $event; delivering it inline." }
+        events.executeOr(deliver) {
+            log.warn { "Callback executor rejected $event; delivering it inline." }
             deliver.run()
         }
     }
@@ -458,7 +502,7 @@ internal class EngineShell(
     private fun dispatch(name: LeaseName, callback: (LeadershipListener) -> Unit) {
         val dispatcher = dispatcher(name)
         val listener = dispatcher.listener ?: return
-        dispatcher.executor.execute {
+        val run = Runnable {
             dispatching.set(true)
             try {
                 callback(listener)
@@ -467,6 +511,17 @@ internal class EngineShell(
             } finally {
                 dispatching.remove()
             }
+        }
+        dispatcher.executor.executeOr(run) { log.warn { "Callback executor rejected a callback of [$name]; skipped." } }
+    }
+
+    /** Runs [task] on this executor, or [rejected] on the calling thread when the delegate rejects it. */
+    private fun SequentialExecutor.executeOr(task: Runnable, rejected: () -> Unit) {
+        try {
+            execute(task)
+        } catch (error: RejectedExecutionException) {
+            log.debug(error) { "Callback executor rejected a task." }
+            rejected()
         }
     }
 }

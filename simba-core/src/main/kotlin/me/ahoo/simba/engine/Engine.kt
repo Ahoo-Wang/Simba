@@ -249,6 +249,8 @@ private class Transition(state: EngineState, private val now: Long) {
                 else -> remove(name)
             }
         }
+        // The membership ends with the session; views must not keep reporting partitions after close.
+        groups.forEach { (group, state) -> publishView(group, state, null, emptyList()) }
         groups.clear()
         closing = closing + done
         closeIfDrained()
@@ -389,17 +391,19 @@ private class Transition(state: EngineState, private val now: Long) {
             session = SessionState.Opening(request = null, retryTimer = arm(now + retryDelay()))
             return
         }
+        val every = renewEvery(grant.remaining)
         session = SessionState.Active(
             id = grant.id,
             validUntil = validUntil,
             suspended = false,
             keepAlive = null,
-            renewTimer = arm(now + config.renewInterval),
+            renewTimer = arm(now + every),
             deadlineTimer = arm(validUntil),
             abandoned = emptyMap(),
         )
         effects += Effect.Deadline(grant.id, validUntil)
         effects += Effect.Publish(SimbaEvent.SessionOpened(grant.id))
+        noteShortLease(grant.remaining, every)
         elections.keys.toList().forEach(::tryAcquire)
         groups.keys.toList().forEach(::joinGroup)
     }
@@ -432,12 +436,14 @@ private class Transition(state: EngineState, private val now: Long) {
             return
         }
         val validUntil = later(current.validUntil, sentAt + config.localValidity(alive.remaining))
+        val every = renewEvery(alive.remaining)
         session = current.copy(
             validUntil = validUntil,
             suspended = false,
             keepAlive = null,
-            renewTimer = arm(later(now, sentAt + config.renewInterval)),
+            renewTimer = arm(later(now, sentAt + every)),
         )
+        noteShortLease(alive.remaining, every)
         if (validUntil != current.validUntil) {
             effects += Effect.Deadline(current.id, validUntil)
         }
@@ -831,6 +837,28 @@ private class Transition(state: EngineState, private val now: Long) {
         }
     }
 
+    /**
+     * The keep-alive period for a backend-reported [remaining]: the configured renew interval, or a third of the
+     * local validity when the backend grants less than the configured lease and two keep-alives at that interval no
+     * longer fit (for example a Zookeeper server capping the session timeout below the lease).
+     */
+    private fun renewEvery(remaining: Duration): Long {
+        val validity = config.localValidity(remaining)
+        if (remaining >= config.leaseDuration || validity >= 2 * config.renewInterval) {
+            return config.renewInterval
+        }
+        return (validity / RENEWALS_PER_VALIDITY).coerceAtLeast(1)
+    }
+
+    /** Publishes `SessionLeaseShortened` once per session when [every] is below the configured renew interval. */
+    private fun noteShortLease(remaining: Duration, every: Long) {
+        val current = session as? SessionState.Active ?: return
+        if (every < config.renewInterval && !current.leaseShortened) {
+            session = current.copy(leaseShortened = true)
+            effects += Effect.Publish(SimbaEvent.SessionLeaseShortened(current.id, remaining, Duration.ofNanos(every)))
+        }
+    }
+
     private fun kindOf(name: LeaseName): ElectionKind = kinds[name] ?: ElectionKind.ELECTION
 
     /** The later of two monotonic instants, compared by difference so that a wrapping clock stays ordered. */
@@ -868,6 +896,7 @@ private class Transition(state: EngineState, private val now: Long) {
     // endregion
 
     private companion object {
+        const val RENEWALS_PER_VALIDITY = 3
         const val GOLDEN_GAMMA = -7046029254386353131L
         const val MIX_1 = -4658895280553007687L
         const val MIX_2 = -7723592293110705685L
