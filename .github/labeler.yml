@@ -8,7 +8,7 @@
       - any-glob-to-any-file: ["simba-jdbc/**"]
 "module: redis":
   - changed-files:
-      - any-glob-to-any-file: ["simba-spring-redis/**"]
+      - any-glob-to-any-file: ["simba-redis/**", "simba-spring-redis/**"]
 "module: zookeeper":
   - changed-files:
       - any-glob-to-any-file: ["simba-zookeeper/**"]
@@ -20,7 +20,7 @@
       - any-glob-to-any-file: ["simba-example/**"]
 "area: test":
   - changed-files:
-      - any-glob-to-any-file: ["simba-test/**", "**/src/test/**"]
+      - any-glob-to-any-file: ["simba-testing/**", "simba-tck/**", "**/src/test/**"]
 "area: docs":
   - changed-files:
       - any-glob-to-any-file: ["wiki/**", "docs/**", "skills/**", "**/*.md", "llms.txt"]
