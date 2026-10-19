@@ -57,6 +57,24 @@ simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
 `DistributedLock` implementations other than the client's inherit default methods that run the blocking call on a
 virtual thread and interrupt it on cancellation.
 
+### Coroutines
+
+`simba-coroutines` (since 5.1, depends on `kotlinx-coroutines-core`; `simba-core` does not) adapts the async calls:
+
+```kotlin
+simba.lock("invoice-42").withLock(Duration.ofSeconds(5)) { term ->
+    invoiceStore.write(invoice, fencingToken = term.token)
+}
+```
+
+| Function | Behavior |
+|---|---|
+| `DistributedLock.awaitAcquire(timeout)` | Suspends until a term is won; throws `LockTimeoutException`. Cancelling the coroutine abandons the attempt and releases a term it already won. |
+| `DistributedLock.awaitTryAcquire()` | `tryAcquireAsync` as a suspending call: the term or `null`. |
+| `DistributedLock.withLock(timeout) { term -> }` | Acquires, runs the block and releases the term afterwards, also on failure or cancellation. The term can still end before the block returns: pass `term.token` to the protected resource. |
+| `Term.awaitRevoked()` | Suspends until the term is revoked and returns the `RevokeReason`; cancelling the wait does not affect the term. |
+| `SimbaEventFlow` | A `SimbaEventListener` to register with `Simba.builder().listener(...)`; `events` is a hot `SharedFlow<SimbaEvent>` that drops the oldest events for a collector more than `bufferCapacity` behind. |
+
 Within one client a name has **at most one holder**: a second `acquire` of the same name waits until the first is
 released (or its own timeout passes). A lock and an election of the same name share one lease, so do not use one
 name for both.

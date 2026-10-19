@@ -55,6 +55,24 @@ simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
 
 客户端之外的 `DistributedLock` 实现会继承默认方法：它们在虚拟线程上调用阻塞版本，取消时中断该线程。
 
+### 协程 {#coroutines}
+
+`simba-coroutines`（5.1 起，依赖 `kotlinx-coroutines-core`；`simba-core` 不依赖它）把异步调用适配为协程：
+
+```kotlin
+simba.lock("invoice-42").withLock(Duration.ofSeconds(5)) { term ->
+    invoiceStore.write(invoice, fencingToken = term.token)
+}
+```
+
+| 函数 | 行为 |
+|---|---|
+| `DistributedLock.awaitAcquire(timeout)` | 挂起直到赢得任期；超时抛出 `LockTimeoutException`。取消协程会放弃本次尝试，并释放已经赢得的任期。 |
+| `DistributedLock.awaitTryAcquire()` | 挂起版的 `tryAcquireAsync`：返回任期或 `null`。 |
+| `DistributedLock.withLock(timeout) { term -> }` | 获取锁、运行代码块，之后释放任期，失败或取消时也会释放。任期仍可能在代码块返回前结束：请把 `term.token` 传给受保护的资源。 |
+| `Term.awaitRevoked()` | 挂起直到任期被撤销，返回 `RevokeReason`；取消等待不影响任期本身。 |
+| `SimbaEventFlow` | 一个 `SimbaEventListener`，用 `Simba.builder().listener(...)` 注册；`events` 是热的 `SharedFlow<SimbaEvent>`，收集者落后超过 `bufferCapacity` 个事件时丢弃最旧的事件。 |
+
 在一个客户端内，同一名称**最多只有一个持有者**：对同一名称的第二次 `acquire` 会等到第一次被释放（或它自己的超时到期）。
 同名的锁和选举共享一个租约，因此不要把同一个名称同时用于两者。
 

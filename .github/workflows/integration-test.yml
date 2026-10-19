@@ -33,11 +33,12 @@ jobs:
           server-id: github
           settings-path: ${{ github.workspace }}
 
-      # The engine, the in-memory backend with the simulation, the TCK and the starter need no external service.
+      # The engine, the in-memory backend with the simulation, the TCK, the coroutine adapters and the starter need no
+      # external service.
       - name: Test Simba-Core
         run: >-
           ./gradlew simba-core:clean simba-core:check simba-testing:check simba-tck:check
-          simba-spring-boot-starter:check
+          simba-coroutines:check simba-spring-boot-starter:check
 
       - name: Upload test reports
         if: failure()

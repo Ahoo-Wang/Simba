@@ -117,6 +117,12 @@ simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
     .thenCompose { term -> invoiceStore.writeAsync(invoice, term.token).whenComplete { _, _ -> term.releaseAsync() } }
 ```
 
+使用 `simba-coroutines`（5.1 起）可以写成挂起调用：
+
+```kotlin
+simba.lock("invoice-42").withLock(Duration.ofSeconds(5)) { term -> invoiceStore.write(invoice, term.token) }
+```
+
 ### 可观测性
 
 `simba.snapshot()` 展示本节点的会话与每个选举；starter 额外提供 Micrometer 指标、`simba` Actuator 端点和 `simba` 健康检查。

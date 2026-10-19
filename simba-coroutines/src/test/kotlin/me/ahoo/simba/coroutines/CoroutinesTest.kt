@@ -1,0 +1,212 @@
+/*
+ * Copyright [2021-present] [ahoo wang <ahoowang@qq.com> (https://github.com/Ahoo-Wang)].
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package me.ahoo.simba.coroutines
+
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import me.ahoo.simba.LockTimeoutException
+import me.ahoo.simba.RevokeReason
+import me.ahoo.simba.Simba
+import me.ahoo.simba.SimbaConfig
+import me.ahoo.simba.engine.InternalSimbaApi
+import me.ahoo.simba.event.SimbaEvent
+import me.ahoo.simba.spi.AcquireResult
+import me.ahoo.simba.spi.LeaseBackend
+import me.ahoo.simba.spi.LeaseName
+import me.ahoo.simba.spi.SessionId
+import me.ahoo.simba.testing.InMemoryLeaseBackend
+import me.ahoo.simba.testing.VirtualScheduler
+import me.ahoo.test.asserts.assert
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Test
+import java.time.Duration
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+
+/** The coroutine adapters over threaded clients on virtual time (direct I/O and callbacks). */
+@OptIn(InternalSimbaApi::class)
+class CoroutinesTest {
+    private val scheduler = VirtualScheduler()
+    private val sessions = AtomicInteger()
+    private val backend = InMemoryLeaseBackend(scheduler) { SessionId("session-${sessions.incrementAndGet()}") }
+    private val acquires = LinkedBlockingQueue<Set<LeaseName>>()
+    private val recording = object : LeaseBackend by backend {
+        override fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult> {
+            acquires += names
+            return backend.acquire(session, names)
+        }
+    }
+    private val clients = ArrayList<Simba>()
+    private val scope = CoroutineScope(Dispatchers.Default)
+    private val name = LeaseName("invoice-42")
+
+    private fun client(configure: Simba.Builder.() -> Unit = {}): Simba =
+        Simba.builder()
+            .backend(recording)
+            .config(
+                SimbaConfig(
+                    leaseDuration = Duration.ofSeconds(3),
+                    renewInterval = Duration.ofSeconds(1),
+                    margin = Duration.ofMillis(20),
+                    retryJitter = Duration.ZERO,
+                ),
+            )
+            .scheduler(scheduler)
+            .ioExecutor(Runnable::run)
+            .callbackExecutor(Runnable::run)
+            .seed(clients.size.toLong())
+            .apply(configure)
+            .build()
+            .also {
+                clients += it
+                settle()
+            }
+
+    private fun settle() {
+        var last: List<Long>? = null
+        while (true) {
+            val handled = clients.map { it.awaitIdle() }
+            if (handled == last) {
+                return
+            }
+            last = handled
+        }
+    }
+
+    private fun advance(duration: Duration) {
+        scheduler.advance(duration, ::settle)
+    }
+
+    private fun Simba.isIdle(): Boolean = footprint().filterValues { it != 0 }.isEmpty()
+
+    private fun <T> await(block: suspend () -> T): T = runBlocking { withTimeout(WAIT_MILLIS) { block() } }
+
+    @AfterEach
+    fun close() {
+        scope.cancel()
+        clients.forEach { it.closeAsync() }
+        clients.forEach {
+            settle()
+            it.closeAsync().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
+    fun `withLock runs the block with the term and releases it afterwards`() {
+        val client = client()
+        val token = await { client.lock(name.value).withLock(Duration.ofSeconds(1)) { term -> term.token } }
+
+        token.assert().isEqualTo(1L)
+        settle()
+        backend.owner(name).assert().isNull()
+        client.isIdle().assert().isTrue()
+    }
+
+    @Test
+    fun `withLock releases the term when the block throws`() {
+        val client = client()
+        val failure = runCatching {
+            await { client.lock(name.value).withLock(Duration.ofSeconds(1)) { error("boom") } }
+        }.exceptionOrNull()
+
+        failure.assert().isInstanceOf(IllegalStateException::class.java)
+        settle()
+        backend.owner(name).assert().isNull()
+    }
+
+    @Test
+    fun `awaitAcquire throws LockTimeoutException once the timeout passes on the client clock`() {
+        val first = client()
+        val second = client()
+        val held = await { first.lock(name.value).awaitAcquire(Duration.ofSeconds(1)) }
+        acquires.clear()
+        val waiting = scope.async { second.lock(name.value).awaitAcquire(Duration.ofSeconds(2)) }
+        acquires.poll(WAIT_SECONDS, TimeUnit.SECONDS).assert().isNotNull()
+
+        advance(Duration.ofSeconds(2))
+        runCatching { await { waiting.await() } }.exceptionOrNull()
+            .assert().isInstanceOf(LockTimeoutException::class.java)
+        held.close()
+    }
+
+    @Test
+    fun `awaitTryAcquire returns null while another session holds the lease`() {
+        val first = client()
+        val second = client()
+        val held = await { first.lock(name.value).awaitAcquire(Duration.ofSeconds(1)) }
+
+        await { second.lock(name.value).awaitTryAcquire() }.assert().isNull()
+        held.close()
+    }
+
+    @Test
+    fun `cancelling a waiting awaitAcquire abandons the attempt`() {
+        val first = client()
+        val second = client()
+        val held = await { first.lock(name.value).awaitAcquire(Duration.ofSeconds(1)) }
+        acquires.clear()
+        val waiting = scope.async { second.lock(name.value).awaitAcquire(Duration.ofSeconds(5)) }
+        acquires.poll(WAIT_SECONDS, TimeUnit.SECONDS).assert().isNotNull()
+        settle()
+
+        await { waiting.cancel() }
+        settle()
+        second.isIdle().assert().isTrue()
+        held.close()
+        advance(Duration.ofSeconds(1))
+        backend.owner(name).assert().isNull()
+    }
+
+    @Test
+    fun `awaitRevoked returns the reason once the term ends and cancelling it leaves the term alone`() {
+        val client = client()
+        val term = await { client.lock(name.value).awaitAcquire(Duration.ofSeconds(1)) }
+        val abandoned = scope.async { term.awaitRevoked() }
+        await { abandoned.cancel() }
+        term.isValid.assert().isTrue()
+
+        val revoked = scope.async { term.awaitRevoked() }
+        term.close()
+        await { revoked.await() }.assert().isEqualTo(RevokeReason.STOPPED)
+    }
+
+    @Test
+    fun `SimbaEventFlow publishes the client's events to collectors`() {
+        val flow = SimbaEventFlow()
+        val subscribed = CompletableDeferred<Unit>()
+        val elected = scope.async {
+            flow.events.onSubscription { subscribed.complete(Unit) }.filterIsInstance<SimbaEvent.Elected>().first()
+        }
+        await { subscribed.await() }
+        val client = client { listener(flow) }
+        val term = await { client.lock(name.value).awaitAcquire(Duration.ofSeconds(1)) }
+
+        await { elected.await() }.name.assert().isEqualTo(name)
+        term.close()
+    }
+
+    companion object {
+        const val WAIT_SECONDS = 5L
+        const val WAIT_MILLIS = WAIT_SECONDS * 1000
+    }
+}

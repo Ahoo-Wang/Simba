@@ -18,5 +18,6 @@ dependencies {
     constraints {
         api(libs.kotlin.logging)
         api(libs.curator.framework)
+        api(libs.kotlinx.coroutines.core)
     }
 }

@@ -121,6 +121,12 @@ simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
     .thenCompose { term -> invoiceStore.writeAsync(invoice, term.token).whenComplete { _, _ -> term.releaseAsync() } }
 ```
 
+With `simba-coroutines` (since 5.1), the same as a suspending call:
+
+```kotlin
+simba.lock("invoice-42").withLock(Duration.ofSeconds(5)) { term -> invoiceStore.write(invoice, term.token) }
+```
+
 ### Observability
 
 `simba.snapshot()` shows the session and every election of the node; the starter adds Micrometer metrics, the

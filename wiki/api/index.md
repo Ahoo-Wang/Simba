@@ -126,6 +126,20 @@ See [Locks](/guide/locks).
 
 See [Observability](/guide/observability).
 
+## Coroutines — `me.ahoo.simba.coroutines`
+
+Module `simba-coroutines` (since 5.1).
+
+| Type | Contract |
+|---|---|
+| `DistributedLock.awaitAcquire(timeout): LockTerm` | Suspending `acquireAsync`; cancellation abandons the attempt and releases a won term |
+| `DistributedLock.awaitTryAcquire(): LockTerm?` | Suspending `tryAcquireAsync` |
+| `DistributedLock.withLock(timeout, block: suspend (LockTerm) -> R): R` | Acquires, runs `block`, releases the term afterwards (also on failure or cancellation) |
+| `Term.awaitRevoked(): RevokeReason` | Suspends until the term is revoked; cancelling the wait leaves the term alone |
+| `SimbaEventFlow(bufferCapacity = 1024)` | `SimbaEventListener` whose `events: SharedFlow<SimbaEvent>` republishes events; drops the oldest for a slow collector |
+
+See [Locks](/guide/locks#coroutines).
+
 ## Backend SPI — `me.ahoo.simba.spi`
 
 ```kotlin

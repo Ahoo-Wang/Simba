@@ -10,7 +10,7 @@
 - [Backends](wiki/guide/backends.md) — JDBC (simba_session, simba_lease, simba_member), Redis keys and token regression after failover, Zookeeper paths, simba.backend selection
 - [Spring Boot](wiki/guide/configuration.md) — simba.* properties, starter beans, shutdown order, Simba.builder() without Spring
 - [Leader Work and Partitions](wiki/guide/leader-work.md) — runWhileLeader, Schedule, partition groups, @SimbaScheduled, @SimbaPartitioned
-- [Locks](wiki/guide/locks.md) — lock(name), acquire / tryAcquire (and async variants), LockTerm as the credential, early loss
+- [Locks](wiki/guide/locks.md) — lock(name), acquire / tryAcquire (async and coroutine variants), LockTerm as the credential, early loss
 - [Observability](wiki/guide/observability.md) — snapshot(), SimbaEvent, Micrometer metrics, alert rules, simba Actuator endpoint, health indicator
 - [Testing](wiki/guide/testing.md) — InMemoryLeaseBackend, VirtualScheduler, Simulation, FencingSpec, LeaseBackendSpec
 - [Upgrading](wiki/guide/upgrading.md) — Versioning policy and upgrades within 5.x

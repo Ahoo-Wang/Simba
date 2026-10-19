@@ -26,13 +26,13 @@ This file records what is not obvious from the code. Describe the code as it is;
 
 | Module check | Needs |
 |---|---|
-| `simba-core`, `simba-testing`, `simba-tck`, `simba-zookeeper`, `simba-spring-boot-starter` | Nothing (Zookeeper tests use embedded Curator `TestingServer`) |
+| `simba-core`, `simba-testing`, `simba-tck`, `simba-coroutines`, `simba-zookeeper`, `simba-spring-boot-starter` | Nothing (Zookeeper tests use embedded Curator `TestingServer`) |
 | `simba-example` | Docker for `-PexampleBackend=jdbc` (`mysql:8.4`) and `redis` (`redis:7.4-alpine`); nothing for `zookeeper` |
 | `simba-redis` (tests also cover `simba-spring-redis`) | Docker: Testcontainers `redis:7.4-alpine` (`RedisFixture`) |
 | `simba-jdbc` | Docker: Testcontainers `mysql:8.4` and `postgres:17` (`LeaseDatabaseFixture`, schema from `simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-*.sql`) |
 
 CI (`.github/workflows/integration-test.yml`; job names are required checks, keep them): `Simba Core Test` (core,
-testing, tck, starter), `Simba Spring Redis Test` (simba-redis and simba-spring-redis), `Simba Zookeeper Test`,
+testing, tck, coroutines, starter), `Simba Spring Redis Test` (simba-redis and simba-spring-redis), `Simba Zookeeper Test`,
 `Simba Jdbc Test`, `Simba Example (jdbc|redis|zookeeper)`, `Simba Test (JDK 25)`. Wiki commands are in
 `wiki/AGENTS.md`.
 
@@ -43,11 +43,12 @@ testing, tck, starter), `Simba Spring Redis Test` (simba-redis and simba-spring-
 ```
 simba-core  ←  simba-jdbc | simba-redis ← simba-spring-redis | simba-zookeeper  ←  simba-spring-boot-starter
 simba-testing (in-memory backend, virtual time, simulation)    simba-tck (LeaseBackendSpec, FencingSpec)
+simba-coroutines (suspending lock calls, withLock, SimbaEventFlow, Term.awaitRevoked; kotlinx-coroutines-core)
 simba-example (per-backend demo app), simba-bom, simba-dependencies, code-coverage-report
 ```
 
 - `simba-dependencies` is published as every library's platform: only the Spring Boot BOM and runtime constraints
-  (kotlin-logging, Curator). Test and build tool versions (MockK, Hamcrest, Testcontainers, detekt) come from the
+  (kotlin-logging, Curator, kotlinx-coroutines). Test and build tool versions (MockK, Hamcrest, Testcontainers, detekt) come from the
   version catalog in the root build and are not transitive.
 - `simba-example` tests start the app with `SpringApplication` on the backend of `-PexampleBackend` (MySQL or Redis
   through Testcontainers, embedded Zookeeper).
@@ -64,6 +65,7 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   not depend on Spring. `simba-spring-redis` only adapts Spring Data Redis (`SpringRedisScripting`).
 - `simba-tck`: `LeaseBackendSpec` every backend must pass, and `FencingSpec`, the kit users run against their own
   token-checking resource (optionally with real terms of a backend).
+- `simba-coroutines` is the only module that depends on kotlinx-coroutines; `simba-core` must not.
 - `simba-testing`: `InMemoryLeaseBackend`, `VirtualClock`, `VirtualScheduler`, `Simulation` for users' unit tests.
 
 ### Layers (top to bottom)
