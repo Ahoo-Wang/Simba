@@ -47,11 +47,13 @@ simba-coroutines (suspending lock calls, withLock, SimbaEventFlow, Term.awaitRev
 simba-example (per-backend demo app), simba-bom, simba-dependencies, code-coverage-report
 ```
 
-- `simba-dependencies` pins versions at build time only (Spring Boot BOM, kotlin-logging, Curator,
-  kotlinx-coroutines): library modules take it through a non-published `versionPlatform` configuration, and their POM
-  / module metadata carry the resolved versions (`versionMapping`), so consumers get no Spring Boot constraints. Test and build tool versions (MockK,
-  Hamcrest, Testcontainers, detekt) come from the version catalog in the root build.
-- Libraries are compiled for Kotlin API / language / stdlib 2.2 (`KOTLIN_BASELINE`), whatever compiler builds them.
+- `simba-dependencies` (never published) pins versions at build time only (Spring Boot BOM, kotlin-logging,
+  Curator, kotlinx-coroutines): library modules take it through a non-published `versionPlatform` configuration, and
+  their POM / module metadata carry the resolved versions (`versionMapping`), so consumers get no Spring Boot
+  constraints. Test and build tool versions (MockK, Hamcrest, Testcontainers, detekt) come from the version catalog in
+  the root build.
+- Libraries are compiled for Kotlin API / language / stdlib 2.2 (`KOTLIN_BASELINE`), whatever compiler builds them;
+  `versionPlatform` pins kotlin-stdlib / kotlin-reflect strictly to it, so publications ask for 2.2, not Boot's newer one.
   Published jars carry `Automatic-Module-Name` (`me.ahoo.simba.<module>`), `META-INF/LICENSE`, and the Dokka HTML in
   the javadoc jar; POM name and description come from each module's `description`. `-PuseMavenLocal` adds
   `mavenLocal()` after Maven Central.
@@ -67,10 +69,12 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   with `javap`), Kotlin default arguments get an overload or builder (`SimbaConfig.builder()`,
   `Term.ensureValid()`), blocking methods declare `@Throws(InterruptedException::class)`. `JavaInteropTest`
   implements `LeaseBackend` in Java.
-- Public value types (`SimbaConfig`, `SimbaEvent.*`, the snapshots, `SimulationParams`, `SimulationResult`,
-  `InMemoryLeaseBackend.Owner`) are plain classes with hand-written `equals` / `hashCode` / `toString`, never data
-  classes: no `copy` or `componentN`, so properties can be added compatibly. `SimbaConfig` has no public
-  constructor, only `builder()` / `toBuilder()`.
+- Public value types (`SimbaConfig`, `SimbaEvent.*`, the snapshots, the SPI results and hints `Capabilities`,
+  `SessionGrant`, `KeepAliveResult.Live`, `AcquireResult.*`, `BackendHint.*`, and `SimulationParams`,
+  `SimulationResult`, `InMemoryLeaseBackend.Owner`) are plain classes with hand-written `equals` / `hashCode` /
+  `toString`, never data classes: no `copy` or `componentN`, so properties can be added compatibly. `SimbaConfig`
+  and `SimulationParams` have no positional public constructor, only `builder()` / `toBuilder()` (and the defaults
+  `SimulationParams()`).
 - `simba-redis` holds the Redis backend and its Lua scripts behind the driver-neutral `RedisScripting` port; it must
   not depend on Spring. `simba-spring-redis` only adapts Spring Data Redis (`SpringRedisScripting`).
 - `simba-tck`: `LeaseBackendSpec` every backend must pass, and `FencingSpec`, the kit users run against their own
@@ -120,7 +124,8 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
 
 ### Threading
 - The engine state is touched only by the loop thread. Backend calls run on the I/O executor (default: a virtual
-  thread per call) with a timeout of one renew interval; at most one keep-alive per session and one acquire per
+  thread per call) with a timeout of the renew period in effect (`Effect.Call.timeout`: shorter than the renew
+  interval when the backend grants less than the lease); at most one keep-alive per session and one acquire per
   election are in flight.
 - Callbacks run on one serial dispatcher per election over the callback executor (default virtual threads); the
   engine never waits for a callback except through the futures of `stop()` / `stepDown()`. `close()` and
@@ -144,8 +149,12 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
 - Events are delivered in order on one serial dispatcher over the callback executor, never on the loop, and
   `close()` waits for them; listener failures are logged and ignored. On a loop thread (reachable only with a direct
   callback executor) `snapshot()` / `footprint()` read in place and blocking calls (`acquire`, blocking `close()`,
-  `awaitIdle()`) throw `IllegalStateException` instead of deadlocking. A rejecting callback executor never strands a
-  future: completions run on the caller, callbacks are skipped with a warning, events are delivered inline.
+  `awaitIdle()`) throw `IllegalStateException` instead of deadlocking, and every stage the client returns is a
+  `LoopGuardedStage` whose `toCompletableFuture()` throws there while pending (the client itself uses the raw
+  futures). A rejecting callback executor never strands a future: completions run on the caller, events are
+  delivered inline; a rejected `onElected` reports the work exited and steps the election down for one lease
+  duration, and that term's `onRevoked` is never delivered (pairing holds). `Simba.awaitEvents()`
+  (`@InternalSimbaApi`) waits for event delivery in tests.
 - Renewal adapts to the backend: when it grants less than `leaseDuration` and two keep-alives at `renewInterval` no
   longer fit in the local validity (e.g. Zookeeper's `maxSessionTimeout`), the session renews every third of that
   validity and `SessionLeaseShortened` is published once. Closing publishes empty group views.
@@ -193,13 +202,15 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   A name is a keep-alive candidate from before its create is sent (under the session's send lock, so a keep-alive read
   sent earlier cannot drop it); keep-alive reports candidates the session owns and forgets the others. Releases of a
   session are serialized (the czxid check and the delete are not atomic). Lease paths of a batch are validated before
-  any request; `members` on a missing group leaves an exists watch. A closed backend opens no session.
+  any request; `members` syncs the group path, then leaves a children watch (an exists watch on a missing group). A
+  closed backend opens no session. Group names follow the `LeaseName` rules. Every client adds `authInfo` and uses
+  `clientConfig`; every node the backend creates gets `aclProvider`'s ACL (default open; existing parents keep theirs).
 
 ### Starter
 - Properties: `simba.enabled`, `simba.backend`, `simba.session.{lease-duration,renew-interval,drift,margin}`,
   `simba.jdbc.{enabled,dialect,query-timeout}`, `simba.redis.{enabled,wait-replicas,wait-timeout,route-by-slot}`,
-  `simba.zookeeper.{enabled,connect-string,root,connection-timeout}`, `simba.scheduling.enabled`,
-  `simba.metrics.enabled`.
+  `simba.zookeeper.{enabled,connect-string,root,connection-timeout,auth.scheme,auth.credentials,acl}`,
+  `simba.scheduling.enabled`, `simba.metrics.enabled`.
 - Each backend auto-configuration activates on `simba.enabled`, `simba.<backend>.enabled` (both default `true`) and
   `simba.backend` (unset, or naming it), and defines the `LeaseBackend` bean unless the application has one.
   `SimbaAutoConfiguration` fails startup when several backends are active without `simba.backend`, and builds the one

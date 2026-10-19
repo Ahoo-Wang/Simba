@@ -100,6 +100,8 @@ sealed interface SessionState {
      * @param keepAlive the keep-alive in flight, if any; otherwise [renewTimer] schedules the next one.
      * @param abandoned per name, the highest token this session released or refused; never adopted again.
      * @param leaseShortened `SessionLeaseShortened` was published for this session.
+     * @param renewEvery the keep-alive period in effect when it differs from the configured renew interval; also the
+     *   timeout of every backend call, so a stuck call cannot outlast the retries the period leaves.
      */
     data class Active(
         val id: SessionId,
@@ -110,6 +112,7 @@ sealed interface SessionState {
         val deadlineTimer: Long,
         val abandoned: Map<LeaseName, Long>,
         val leaseShortened: Boolean = false,
+        val renewEvery: Long? = null,
     ) : SessionState
 
     /** Closed; completes [done] when [request] (the session close) replies. */

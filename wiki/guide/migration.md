@@ -12,7 +12,10 @@ all three backends. It is **not compatible** with 4.x in source, in binary, or o
 - the JDBC tables, Redis keys and Zookeeper paths are different, so a 4.x node and a 5.x node do not see each other's
   leases and would both lead;
 - the configuration properties and the Spring beans are different;
-- Java 21 is required.
+- Java 21 is required, and the starter needs Spring Boot 4.1 or later;
+- the Redis backend is split: `simba-redis` alone only defines the `RedisScripting` port and cannot run. Depend on
+  `simba-spring-redis` (Spring Data Redis with Lettuce, which brings `simba-redis`), or implement `RedisScripting` for
+  another client.
 
 You therefore cannot roll the upgrade node by node. **Stop every node that contends for the same names, then start
 them on 5.0.** If a short double run would be harmful, make sure no 4.x node is running before the first 5.0 node
@@ -79,7 +82,7 @@ start the 5.x tokens above it (for JDBC, by inserting `simba_lease` rows with a 
 | `MicrometerContendObserver` | `MicrometerSimbaEventListener` |
 | `SimbaServiceTracker` (Actuator) | Removed: the endpoint reads `simba.snapshot()` |
 | `ScheduledWork` / `PartitionedWork` | `LeaderWork` (`run(term)`) / `PartitionWork` (`run(term, partition)`) |
-| `me.ahoo.simba.core.LeaseExpiredException` | `me.ahoo.simba.LeaseExpiredException`, thrown by `Term.ensureValid` |
+| `me.ahoo.simba.core.LeaseExpiredException` | `me.ahoo.simba.TermExpiredException`, thrown by `Term.ensureValid` |
 
 Behavior that changed:
 
@@ -94,6 +97,20 @@ Behavior that changed:
 - **Zookeeper leases are bounded** like the others: `remaining()` has the same meaning on all three backends, and
   FIFO fairness of `LeaderLatch` is gone.
 - **Leader work runs on virtual threads**, one per term; there is no thread pool per scheduler.
+
+### Removed Internals
+
+These 4.x public types were implementation details; 5.0 has no replacement to code against. Configure a backend
+(`JdbcLeaseBackend`, `RedisLeaseBackend`, `ZookeeperLeaseBackend`) and use `Simba` instead:
+
+| Module | 4.x types | 5.0 |
+|---|---|---|
+| `simba-core` | `AbstractMutexContendService`, `LeaseContendService`, `ContendPeriod`, `ContendExecutors`, `ContendOutcome` | The engine (internal); executors are set on `Simba.builder()`, outcomes are `SimbaEvent`s |
+| `simba-core` | `UUIDContenderIdGenerator`, `HostContenderIdGenerator` | None: the backend issues a `SessionId` per session |
+| `simba-jdbc` | `JdbcMutexContendService`, `JdbcMutexOwnerRepository`, `JdbcMemberRegistry`, `NotFoundMutexOwnerException` | `JdbcLeaseBackend` |
+| `simba-spring-redis` | `SpringRedisMutexContendService`, `SpringRedisMemberRegistry`, `OwnerEvent` | `RedisLeaseBackend` over `SpringRedisScripting`; release hints replace the owner events |
+| `simba-zookeeper` | `ZookeeperMutexContendService`, `ZookeeperMemberRegistry` | `ZookeeperLeaseBackend` |
+| `simba-spring-boot-starter` | `SimbaSpringRedisAutoConfiguration` | `SimbaRedisAutoConfiguration` |
 
 ## Property Mapping
 

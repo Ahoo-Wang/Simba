@@ -33,7 +33,12 @@ interface Election {
     /** Starts contending; throws [IllegalStateException] when already started. */
     fun start(listener: LeadershipListener)
 
-    /** Stops contending; completes after the last `onRevoked` ran. Completes at once when not started. */
+    /**
+     * Stops contending; completes after the last `onRevoked` ran. Completes at once when not started. On the event
+     * loop (a callback run by a direct callback executor) chain on the stage: converting it with
+     * `toCompletableFuture()` throws [IllegalStateException] while it is pending, since waiting would block the loop.
+     * The same holds for every stage the client returns.
+     */
     fun stop(): CompletionStage<Void>
 
     /**

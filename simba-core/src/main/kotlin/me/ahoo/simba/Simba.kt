@@ -166,7 +166,10 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
 
     internal fun dispatcherCount(): Int = shell.footprint().join().dispatchers
 
-    /** Revokes every term, closes the session and stops the engine; completes after the last callback ran. */
+    /**
+     * Revokes every term, closes the session and stops the engine; completes after the last callback and event ran.
+     * Like every stage the client returns, it cannot be waited for on the event loop (see [Election.stop]).
+     */
     fun closeAsync(): CompletionStage<Void> {
         if (closing.compareAndSet(false, true)) {
             shell.close().whenComplete { _, error ->
@@ -179,7 +182,7 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
                 if (error == null) closed.complete(null) else closed.completeExceptionally(error)
             }
         }
-        return closed.minimalCompletionStage()
+        return closed.loopGuarded()
     }
 
     /** [closeAsync] and wait, except inside a leadership callback or leader work, where waiting would wait for itself. */
@@ -259,12 +262,12 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
             check(startRun(name, Run(), listener, kind)) { "Election [$name] is already started." }
         }
 
-        override fun stop(): CompletionStage<Void> = stopRun(name, null).minimalCompletionStage()
+        override fun stop(): CompletionStage<Void> = stopRun(name, null).loopGuarded()
 
         override fun stepDown(cooldown: Duration): CompletionStage<Void> {
             require(!cooldown.isNegative) { "cooldown must not be negative." }
             checkOpen()
-            return shell.stepDown(name, saturatedNanos(cooldown)).minimalCompletionStage()
+            return shell.stepDown(name, saturatedNanos(cooldown)).loopGuarded()
         }
 
         override fun runWhileLeader(executor: Executor?, work: LeaderWork): LeaderTask =
@@ -276,7 +279,10 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
 
     /** Stops only its own run: closing it after another run took the name leaves that run alone. */
     private inner class ElectionTask(override val election: Election, private val run: Run) : LeaderTask {
-        override fun stop(): CompletionStage<Void> = stopRun(election.name, run).minimalCompletionStage()
+        override fun stop(): CompletionStage<Void> = stopNow().loopGuarded()
+
+        /** The stop as a plain future, for the client's own use on the loop (group views). */
+        fun stopNow(): CompletableFuture<Void> = stopRun(election.name, run)
 
         override fun close() {
             join(stop())
@@ -446,7 +452,7 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
     ) : LockTerm, Term by term {
         private val released by lazy { release() }
 
-        override fun releaseAsync(): CompletionStage<Void> = released.minimalCompletionStage()
+        override fun releaseAsync(): CompletionStage<Void> = released.loopGuarded()
 
         override fun close() {
             join(releaseAsync())
@@ -500,7 +506,7 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
                     PartitionAssignment.partitionsOf(session.value, group.partitions, members.map { it.value })
                 }
                 (tasks.keys - mine).forEach { partition ->
-                    tasks.remove(partition)?.stop()?.toCompletableFuture()?.let { handover ->
+                    tasks.remove(partition)?.let(::stopNow)?.let { handover ->
                         handingOver += handover
                         handover.whenComplete { _, _ -> synchronized(lock) { handingOver -= handover } }
                     }
@@ -520,14 +526,14 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
 
         override fun stop(): CompletionStage<Void> {
             val all = synchronized(lock) {
-                stopped?.let { return it.minimalCompletionStage() }
-                val stops = tasks.values.map { it.stop().toCompletableFuture() } + handingOver
+                stopped?.let { return it.loopGuarded() }
+                val stops = tasks.values.map(::stopNow) + handingOver
                 tasks.clear()
                 CompletableFuture.allOf(*stops.toTypedArray()).also { stopped = it }
             }
             shell.leave(group.name)
             all.whenComplete { _, _ -> groups.remove(group.name) }
-            return all.minimalCompletionStage()
+            return all.loopGuarded()
         }
 
         override fun close() {
@@ -536,6 +542,10 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
     }
 
     private fun partitionName(group: String, partition: Int): String = "$group.$partition"
+
+    /** Stops [task] and returns its stop as a plain future, never a [LoopGuardedStage]. */
+    private fun stopNow(task: LeaderTask): CompletableFuture<Void> =
+        (task as? ElectionTask)?.stopNow() ?: task.stop().toCompletableFuture()
 
     // endregion
 
@@ -597,4 +607,27 @@ internal fun awaitAny(vararg futures: CompletableFuture<*>?) {
     } catch (error: ExecutionException) {
         throw IllegalStateException("Simba is closed.", error.cause ?: error)
     }
+}
+
+/**
+ * The stage of [this] future for callers: a [LoopGuardedStage], so that waiting for it on the event loop fails fast
+ * instead of blocking the loop it waits for.
+ */
+internal fun <T> CompletableFuture<T>.loopGuarded(): CompletionStage<T> = LoopGuardedStage(this)
+
+/**
+ * A read-only stage of [future]. On an event loop thread (a callback or listener run by a direct callback executor)
+ * [toCompletableFuture] throws [IllegalStateException] while the future is pending: the usual `join()` on it would
+ * block the loop that has to complete it. Chain on the stage there instead.
+ */
+internal class LoopGuardedStage<T>(private val future: CompletableFuture<T>) :
+    CompletionStage<T> by future.minimalCompletionStage() {
+    override fun toCompletableFuture(): CompletableFuture<T> {
+        check(future.isDone || !EngineShell.isLoopThread()) {
+            "Waiting for this stage on the Simba event loop would block the loop that completes it; chain on it instead."
+        }
+        return future.minimalCompletionStage().toCompletableFuture()
+    }
+
+    override fun toString(): String = "LoopGuardedStage($future)"
 }
