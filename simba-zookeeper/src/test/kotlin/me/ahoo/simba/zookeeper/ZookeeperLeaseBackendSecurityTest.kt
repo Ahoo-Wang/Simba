@@ -102,6 +102,15 @@ class ZookeeperLeaseBackendSecurityTest {
     }
 
     @Test
+    fun aMissingAncestorUnderAParentTheBackendMayNotCreateInIsRefused() {
+        anonymous.setACL("/", listOf(ACL(ZooDefs.Perms.READ, ZooDefs.Ids.ANYONE_ID_UNSAFE)), -1)
+        val session = backend.openSession(lease).id
+
+        assertThrows<KeeperException.NoAuthException> { backend.join(session, "group-${UUID.randomUUID()}") }
+        assertThrows<KeeperException.NoAuthException> { backend.acquire(session, setOf(name())) }
+    }
+
+    @Test
     fun existingAncestorsUnderAParentTheBackendMayNotCreateInAreKept() {
         anonymous.create("/simba", ByteArray(0), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT)
         anonymous.create("/simba/groups", ByteArray(0), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT)
