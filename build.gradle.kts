@@ -209,7 +209,8 @@ configure(publishProjects) {
                 }
                 pom {
                     name.set(project.name)
-                    description.set(project.description ?: getPropertyOf("description"))
+                    // Lazily: the module scripts that set `description` run after this root configuration.
+                    description.set(provider { project.description ?: getPropertyOf("description") })
                     url.set(getPropertyOf("website"))
                     issueManagement {
                         system.set("GitHub")
