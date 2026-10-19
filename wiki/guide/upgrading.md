@@ -5,10 +5,21 @@ description: Simba's versioning policy, how to upgrade within 5.x, and where to 
 
 # Upgrading
 
-Simba follows [Semantic Versioning](https://semver.org/). Breaking changes of the public API (`me.ahoo.simba`,
-`me.ahoo.simba.partition`, `me.ahoo.simba.event`, `me.ahoo.simba.spi`), the `simba.*` properties, the JDBC schema,
-the Redis keys and the Zookeeper paths only happen in a major version. Types marked `@InternalSimbaApi` (the engine,
-`Simba.Builder.scheduler`, `Simba.awaitIdle`) carry no such guarantee.
+Simba follows [Semantic Versioning](https://semver.org/). Breaking changes of the following only happen in a major
+version:
+
+| Area | Covered |
+|---|---|
+| Core API | Public types of `me.ahoo.simba`, `me.ahoo.simba.partition`, `me.ahoo.simba.event`, `me.ahoo.simba.spi` |
+| Backends | Public classes of `simba-jdbc`, `simba-redis`, `simba-spring-redis`, `simba-zookeeper` (`JdbcLeaseBackend`, `Dialect`, `RedisLeaseBackend`, `RedisScripting`, `SpringRedisScripting`, `ZookeeperLeaseBackend`, ...) |
+| Spring Boot starter | Public types and annotations (`@SimbaScheduled`, `@SimbaPartitioned`, the `*Properties` classes, `SimbaLifecycle`, `MicrometerSimbaEventListener`, `SimbaEndpoint`, `SimbaHealthIndicator`), the `simba.*` properties, bean names and conditions |
+| Test kits | `simba-testing` (`InMemoryLeaseBackend`, `VirtualClock`, `VirtualScheduler`, `Simulation`) and `simba-tck` (`LeaseBackendSpec`, `FencingSpec`) |
+| Observability | Metric names and tag keys, the Actuator endpoint's and the health indicator's JSON fields |
+| Storage | The JDBC schema, the Redis keys and messages, the Zookeeper paths |
+
+New fields, tags, enum constants and events may be added in a minor version: read JSON and handle `when` over Simba
+enums and events tolerantly. Types marked `@InternalSimbaApi` (the engine, `Simba.Builder.scheduler`,
+`Simba.awaitIdle`) and anything `internal` carry no guarantee.
 
 ## From 4.x
 

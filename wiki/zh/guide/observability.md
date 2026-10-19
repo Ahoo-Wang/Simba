@@ -18,7 +18,7 @@ Spring Boot starter 基于快照构建 Actuator 端点和健康指示器，基�
 | `session.status` | `OPENING`、`LIVE`、`SUSPENDED` 或 `CLOSED` |
 | `session.validFor` | 距会话本地截止时刻的剩余时间 |
 | `session.notLiveFor` | 会话不处于 `LIVE` 的时长（从启动起，或从上次存活起）；存活时为零 |
-| `elections[]` | 每个已启动的选举（包括锁、调度和分区）：`name`、`status`、`token`、`remaining` |
+| `elections[]` | 每个已启动的选举（包括锁、调度和分区）：`name`、`status`、`token`、`remaining`、`kind`（`ELECTION`、`LOCK` 或 `GROUP`：由哪个 API 启动） |
 | `leaseDuration` | 配置的会话租约 |
 | `healthy` | `notLiveFor ≤ leaseDuration` |
 
@@ -133,8 +133,8 @@ management:
     "notLiveForMillis": 0
   },
   "elections": [
-    { "name": "report", "status": "LEADER", "token": 42, "remainingMillis": 13870 },
-    { "name": "billing.3", "status": "CANDIDATE", "token": 0, "remainingMillis": 0 }
+    { "name": "report", "status": "LEADER", "token": 42, "remainingMillis": 13870, "kind": "ELECTION" },
+    { "name": "billing.3", "status": "CANDIDATE", "token": 0, "remainingMillis": 0, "kind": "GROUP" }
   ]
 }
 ```
@@ -144,7 +144,8 @@ management:
 ## 健康指示器 {#health-indicator}
 
 一旦会话不处于存活状态的时间超过 `leaseDuration`，`simba` 健康指示器即为 `DOWN`：此时本节点在任何后端上都既无法保持任期，
-也无法赢得任期。不是 leader 属于健康状态。
+也无法赢得任期。不是 leader 属于健康状态。`leading` 列出本节点作为 leader 的选举和分区；锁只计数（`locksHeld`），
+因为锁名来自数据。
 
 ```json
 {
@@ -155,7 +156,8 @@ management:
     "validFor": "13870ms",
     "notLiveFor": "0ms",
     "leaseDuration": "15000ms",
-    "leading": ["report"]
+    "leading": ["report"],
+    "locksHeld": 1
   }
 }
 ```

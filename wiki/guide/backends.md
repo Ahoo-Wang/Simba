@@ -84,9 +84,18 @@ Lease and group names are case-sensitive (binary collations on MySQL, `"C"` on P
 - A release does not notify anyone: after a clean stop, candidates take over at their next attempt
   (`renewInterval / 2` plus jitter).
 - Each statement has a timeout; the starter sets it to the session renew interval (`simba.jdbc.query-timeout`), after
-  which the engine gives up on the call anyway.
+  which the engine gives up on the call anyway. Without Spring, `JdbcLeaseBackend` defaults to 5 s
+  (`DEFAULT_QUERY_TIMEOUT`, the default renew interval); pass your renew interval as `queryTimeout` when you change it.
 - Give Simba a connection pool that is not starved by the application: a keep-alive that waits for a connection
   longer than the renew interval counts as failed.
+- Tokens and session expiries are only as durable as the database's commits. A failover to an asynchronous MySQL
+  replica, or the promotion of a PostgreSQL standby that had not received the latest WAL, can lose recent token
+  increments and keep-alives, exactly like a [Redis failover](#token-regression-after-a-failover): a token can go back.
+  Keep fencing strict across failovers with synchronous replication (MySQL semi-synchronous replication or Group
+  Replication, PostgreSQL `synchronous_commit` with synchronous standbys).
+- Leases are measured with the database server's wall clock. A step of that clock (an NTP step, a VM migration)
+  shortens or lengthens every lease at once, which is not the rate drift that `simba.session.drift` covers; see
+  [Failure Modes](/guide/correctness#failure-modes).
 
 ## Redis 7
 
@@ -132,7 +141,8 @@ accept a write from a node whose term is newer in time but lower in token, or re
   replicas acknowledged it with `WAIT`, otherwise the acquisition fails. This narrows the window; it does not close it,
   and it is not available on a Cluster.
 - Enable persistence (AOF) so a restart of a single node does not reset tokens.
-- When fencing must be strict, use JDBC or Zookeeper.
+- When fencing must hold across failovers, use JDBC on synchronous replication or Zookeeper (quorum commits).
+- Leases are measured with Redis `TIME`: a step of the Redis hosts' clocks shortens or lengthens every lease at once.
 
 ## Zookeeper
 
@@ -173,6 +183,9 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 - The session timeout requested is `leaseDuration`; the ensemble clamps it to `[minSessionTimeout,
   maxSessionTimeout]` (by default 2 to 20 ticks). Failover after a crash takes the negotiated timeout.
 - `simba.zookeeper.connection-timeout` bounds how long opening a session may take.
+- Writes commit through a quorum, so a leader change keeps every token; tokens can only go back if the ensemble's data
+  is lost or restored from an older snapshot. Session timeouts are tracked with the servers' elapsed time, so a wall
+  clock step on an ensemble host does not shorten them.
 - Group names follow the `LeaseName` rules (1–128 characters of `[A-Za-z0-9._:-]`, not `.` or `..`), as on every
   backend. `members` syncs the group path first, so a join that just returned is always in the view.
 

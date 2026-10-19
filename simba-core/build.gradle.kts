@@ -10,6 +10,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+description = "Simba core: the client API (elections, locks, leader work, partition groups), the lease engine and the LeaseBackend SPI"
+
 dependencies {
     api("io.github.oshai:kotlin-logging-jvm")
 }

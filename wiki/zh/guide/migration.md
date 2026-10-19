@@ -64,6 +64,15 @@ Fencing token 会重新开始：5.x 的 token 来自新的存储，从 `1` 开�
 | `MutexContendServiceSpec`、`LockSpec`、`MemberRegistrySpec`（`simba-test`） | `LeaseBackendSpec`（`simba-tck`） |
 | `FencingSpec`（`simba-test`） | `FencingSpec`（`simba-tck`） |
 | — | `simba-testing`：`InMemoryLeaseBackend`、`VirtualScheduler`、`Simulation` |
+| `Simba`（4.x 的常量对象 `SIMBA`、`SIMBA_PREFIX`） | `Simba` 现在是客户端类（`Simba.builder()`）；这些常量已删除 |
+| `MutexRetriever`、`MutexRetrievalService`、`AbstractMutexRetrievalService`（观察者） | 没有对应物：节点只能看到自己的任期。用 `simba.snapshot()` 查询本节点的选举，或读取后端存储（见[后端](/zh/guide/backends)）查看谁持有租约 |
+| `Locker`（`SimbaLocker` 的接口） | `DistributedLock`（`simba.lock(name)`），其 `acquire` 返回 `LockTerm` |
+| `LeaseConfig`（`ttl`、`transition`） | `SimbaConfig`（`leaseDuration`、`renewInterval`、`drift`、`margin`），每个客户端一个 |
+| `ContenderIdGenerator` | 已删除：后端为每个会话分配一个 `SessionId` |
+| `MicrometerContendObserver` | `MicrometerSimbaEventListener` |
+| `SimbaServiceTracker`（Actuator） | 已删除：端点读取 `simba.snapshot()` |
+| `ScheduledWork` / `PartitionedWork` | `LeaderWork`（`run(term)`）/ `PartitionWork`（`run(term, partition)`） |
+| `me.ahoo.simba.core.LeaseExpiredException` | `me.ahoo.simba.LeaseExpiredException`，由 `Term.ensureValid` 抛出 |
 
 行为上的变化：
 

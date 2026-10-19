@@ -33,6 +33,8 @@ Behavior:
 - Release: `update simba_lease set session_id = '' where name = ? and session_id = ? and token = ?`.
 - Members: `simba_member` joined with live sessions. `purgeExpired()` cleans leftover expired sessions, automatically at most once per `purgeInterval` (default 1 min) after `openSession` / `keepAlive`.
 - No hints: candidates take over released leases at their next attempt.
+- Per-statement `queryTimeout`: default 5 s (`DEFAULT_QUERY_TIMEOUT`, the default renew interval); the starter passes
+  the configured renew interval. Zero waits indefinitely.
 
 ## Redis (`RedisLeaseBackend` over `RedisScripting`; Lua in `simba-redis/src/main/resources/me/ahoo/simba/redis/`)
 

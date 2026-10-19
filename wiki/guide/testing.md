@@ -17,6 +17,9 @@ testImplementation("me.ahoo.simba:simba-testing:${simbaVersion}")
 testImplementation("me.ahoo.simba:simba-tck:${simbaVersion}")
 ```
 
+The examples assert with [FluentAssert](https://github.com/Ahoo-Wang/FluentAssert) (`.assert()`), which `simba-tck`
+brings in; with `simba-testing` alone, add `me.ahoo.test:fluent-assert-core` or use your own assertion library.
+
 ## In-Memory Backend
 
 `InMemoryLeaseBackend` implements the full `LeaseBackend` contract in memory (sessions, leases with never-resetting
