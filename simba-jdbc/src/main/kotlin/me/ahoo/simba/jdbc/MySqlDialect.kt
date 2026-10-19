@@ -21,12 +21,16 @@ package me.ahoo.simba.jdbc
 object MySqlDialect : Dialect {
     override val name: String = "MySQL"
 
-    override val now: String = "cast(unix_timestamp(current_timestamp(3)) * 1000 as signed)"
+    /**
+     * UTC epoch milliseconds, independent of the session `time_zone`: `unix_timestamp` converts from that zone and
+     * jumps by an hour at a daylight saving transition. `utc_timestamp` is evaluated once per statement.
+     */
+    override val now: String = "(timestampdiff(microsecond, '1970-01-01', utc_timestamp(6)) div 1000)"
 
     override val initScript: String = "me/ahoo/simba/jdbc/init-simba-mysql.sql"
 
     private val takeOver: String =
-        "simba_lease.session_id <> req.req_session and not ${live("simba_lease.session_id")}"
+        "simba_lease.session_id <> req.req_session and ${notLiveLocked("simba_lease.session_id")}"
 
     override val acquire: String =
         """
