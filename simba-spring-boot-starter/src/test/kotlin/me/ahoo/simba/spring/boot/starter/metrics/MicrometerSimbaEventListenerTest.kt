@@ -58,9 +58,29 @@ class MicrometerSimbaEventListenerTest {
         listener.onEvent(SimbaEvent.Revoked(name, 1, RevokeReason.TAKEN_OVER))
         registry.get(MicrometerSimbaEventListener.LEADERSHIP).tag("name", "orders").gauge().value()
             .assert().isEqualTo(0.0)
-        registry.get(MicrometerSimbaEventListener.REVOCATIONS).tags("name", "orders", "reason", "taken_over")
+        registry.get(MicrometerSimbaEventListener.REVOCATIONS).tag("reason", "taken_over")
             .counter().count().assert().isEqualTo(1.0)
+        registry.get(MicrometerSimbaEventListener.REVOCATIONS).counter().id.getTag("name").assert().isNull()
         listener.onEvent(SimbaEvent.AcquireFailed(name, IllegalStateException("down")))
+    }
+
+    @Test
+    fun `a stopped term removes the name's gauge`() {
+        listener.onEvent(SimbaEvent.Elected(name, 1))
+        listener.onEvent(SimbaEvent.Revoked(name, 1, RevokeReason.STOPPED))
+        registry.find(MicrometerSimbaEventListener.LEADERSHIP).tag("name", "orders").gauge().assert().isNull()
+        registry.get(MicrometerSimbaEventListener.REVOCATIONS).tag("reason", "stopped")
+            .counter().count().assert().isEqualTo(1.0)
+
+        listener.onEvent(SimbaEvent.Elected(name, 2))
+        registry.get(MicrometerSimbaEventListener.LEADERSHIP).tag("name", "orders").gauge().value()
+            .assert().isEqualTo(1.0)
+    }
+
+    @Test
+    fun `a stop of a name never elected is only counted`() {
+        listener.onEvent(SimbaEvent.Revoked(name, 1, RevokeReason.STOPPED))
+        registry.find(MicrometerSimbaEventListener.LEADERSHIP).gauges().assert().isEmpty()
     }
 
     @Test

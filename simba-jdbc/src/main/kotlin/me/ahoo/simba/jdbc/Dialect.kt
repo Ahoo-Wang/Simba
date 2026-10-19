@@ -62,3 +62,14 @@ private val RETRYABLE_SQL_STATES = setOf("40001", "40P01")
 /** Liveness of the session whose id is the expression [session], as of [now]. */
 internal fun Dialect.live(session: String): String =
     "exists (select 1 from simba_session s where s.session_id = $session and s.expires_at > $now)"
+
+/**
+ * Whether the holder [session] (an expression) is not live, judged on its latest committed row: the row is read with a
+ * shared lock, so the take-over serializes with a keep-alive of that session instead of reading the statement's
+ * snapshot. Without the lock, a take-over could read a snapshot from before the holder's concurrent renewal commits,
+ * and both would then believe they own the lease until the holder's next keep-alive. A missing row (free lease, or a
+ * session closed or purged) has expiry `0`. Only the key filters the locking read, so the lock is taken (and waited
+ * for) even when the snapshot shows the session expired.
+ */
+internal fun Dialect.notLiveLocked(session: String): String =
+    "coalesce((select h.expires_at from simba_session h where h.session_id = $session for share), 0) <= $now"

@@ -32,7 +32,8 @@ create table if not exists simba_session
 (
     session_id char(32) character set ascii collate ascii_bin not null primary key,
     expires_at bigint                                        not null comment 'database time, epoch ms',
-    metadata   varchar(1024)                                 not null default ''
+    metadata   varchar(1024)                                 not null default '',
+    index idx_session_expires (expires_at)
 );
 
 create table if not exists simba_lease
@@ -45,7 +46,7 @@ create table if not exists simba_lease
 
 create table if not exists simba_member
 (
-    group_name varchar(128)                                  not null,
+    group_name varchar(128) character set utf8mb4 collate utf8mb4_bin not null,
     session_id char(32) character set ascii collate ascii_bin not null,
     primary key (group_name, session_id),
     index idx_member_session (session_id)
@@ -58,15 +59,18 @@ create table if not exists simba_member
 | `simba_lease` | 曾被获取过的租约名称 | 永不删除，因此 token 永不重置；释放会把 `session_id` 置为 `''` 并保留 token |
 | `simba_member` | 组成员 | 仅在其会话存活期间有效 |
 
-租约名称区分大小写（MySQL 上为二进制排序规则，PostgreSQL 上为 `"C"`）。
+租约名称和组名都区分大小写（MySQL 上为二进制排序规则，PostgreSQL 上为 `"C"`）。
 
 ### 工作原理 {#how-it-works}
 
 - 只有当 `session_id` 所指会话的 `expires_at` 在未来时，租约才属于该会话。获取是一条 upsert：当行空闲或其会话已过期时占有该行，并把
   `token` 加一。在 MySQL 上，`token` 的赋值在 `SET` 中排在最前，因为 MySQL 按从左到右的顺序、使用已更新的值求值 `SET`。
-- 每次时间比较都使用数据库自身的时钟（`now`，以 epoch 毫秒表示，在一条语句内不变），因此应用主机的时钟从不影响结果。
-- 过期会话被惰性清理：过期会话的租约对下一个获取者空闲，发现自己会话已过期的续约会将其删除。`JdbcLeaseBackend.purgeExpired()`
-  删除剩余的部分；如果大量短生命周期的进程留下了残余行，请不时调用它。
+- 接管时以共享锁（`for share`）读取持有者的会话行，因此在任何隔离级别下都与该会话的续约串行化：并发提交的续约要么胜出，要么在同一次续约
+  回复中看到租约已被接管。
+- 每次时间比较都使用数据库自身的时钟（`now`：UTC epoch 毫秒，在一条语句内不变，且不受连接时区影响），因此应用主机的时钟从不影响结果。
+- 过期会话被惰性清理：过期会话的租约对下一个获取者空闲，发现自己会话已过期的续约会将其删除。其余部分（崩溃进程留下的会话）由
+  `purgeExpired()` 删除：它在 `openSession` 或 `keepAlive` 之后运行，每个 `purgeInterval`（默认一分钟）至多一次，每次至多 1000
+  个会话，沿 `idx_session_expires` 索引查找。
 
 ### 运维说明 {#operating-notes}
 
@@ -77,7 +81,8 @@ create table if not exists simba_member
 ## Redis 7 {#redis-7}
 
 模块 `simba-redis`（与驱动无关，Lua 脚本位于 `RedisScripting` 端口之后）和 `simba-spring-redis`
-（`SpringRedisScripting`，Spring Data Redis 适配器）：
+（`SpringRedisScripting`，Spring Data Redis 适配器）。`SpringRedisScripting` 需要 Spring Boot 默认的 Lettuce 客户端：
+使用 Jedis 时订阅会阻塞调用线程，也无法使用 `WAIT`，因此 starter 遇到非 Lettuce 的 `RedisConnectionFactory` 会启动失败：
 
 ```kotlin
 val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
@@ -134,7 +139,9 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 - 一个 Simba 会话就是一个 Zookeeper 会话：后端为每个会话打开一个专用的 Zookeeper 客户端（不使用共享的 Curator 客户端），并且从不把它重连到另一个会话。
   `SessionId` 是以 16 位十六进制数字表示的 Zookeeper 会话 id。
 - Token 是租约节点的 `czxid`：由于 zxid 是全局的，它在任期之间严格递增，但不连续。
-- 释放会删除该节点；候选者 watch 该节点并立即接管。组成员的变化同样会被 watch。
+- 释放会删除该节点；候选者 watch 该节点并立即接管。组成员的变化同样会被 watch，包括尚不存在的组被创建。
+- 名字从发出 create 的那一刻起就被视为"可能拥有"：即使 create 已在服务端成功而回复丢失（连接断开、超时），下一次续约在核实节点持有者后
+  仍会报告该租约，由引擎释放。同一会话的释放逐个执行。
 - Zookeeper 客户端会自行发送心跳，因此一个本地看门狗会关闭在租约时长内没有被续约的会话：停止续约的节点永远不会仅靠心跳保住自己的租约。
 - 剩余时间为 `min(leaseDuration, 协商后的会话超时)`。客户端断开连接期间，续约和获取都会失败，因此本地截止时刻会耗尽；当 Zookeeper
   报告会话过期时，会话为 `Expired`。

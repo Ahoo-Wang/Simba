@@ -42,7 +42,7 @@ import java.util.concurrent.locks.LockSupport;
 public class ExampleApp implements CommandLineRunner {
 
     public static void main(String[] args) {
-        SpringApplication.run(ExampleApp.class);
+        SpringApplication.run(ExampleApp.class, args);
     }
 
     private final Simba simba;

@@ -35,7 +35,8 @@ create table if not exists simba_session
 (
     session_id char(32) character set ascii collate ascii_bin not null primary key,
     expires_at bigint                                        not null comment 'database time, epoch ms',
-    metadata   varchar(1024)                                 not null default ''
+    metadata   varchar(1024)                                 not null default '',
+    index idx_session_expires (expires_at)
 );
 
 create table if not exists simba_lease
@@ -48,7 +49,7 @@ create table if not exists simba_lease
 
 create table if not exists simba_member
 (
-    group_name varchar(128)                                  not null,
+    group_name varchar(128) character set utf8mb4 collate utf8mb4_bin not null,
     session_id char(32) character set ascii collate ascii_bin not null,
     primary key (group_name, session_id),
     index idx_member_session (session_id)
@@ -61,18 +62,22 @@ create table if not exists simba_member
 | `simba_lease` | Lease name ever acquired | Never deleted, so the token never resets; release sets `session_id` to `''` and keeps the token |
 | `simba_member` | Group member | Live only while its session is |
 
-Lease names are case-sensitive (binary collation on MySQL, `"C"` on PostgreSQL).
+Lease and group names are case-sensitive (binary collations on MySQL, `"C"` on PostgreSQL).
 
 ### How It Works
 
 - A lease belongs to the session in `session_id` only while that session's `expires_at` is in the future. Acquire is
   one upsert that takes the row when it is free or its session expired and advances `token` by one. On MySQL the
   `token` assignment comes first in `SET`, because MySQL evaluates `SET` left to right with already-updated values.
-- Every time comparison uses the database's own clock (`now` in epoch milliseconds, constant within a statement), so
-  application hosts' clocks never matter.
+- The take-over reads the holder's session row with a shared lock (`for share`), so it serializes with that session's
+  keep-alive at any isolation level: a renewal that commits concurrently either wins, or sees the lease gone in the
+  same keep-alive reply.
+- Every time comparison uses the database's own clock (`now`: UTC epoch milliseconds, constant within a statement and
+  independent of the connection's time zone), so application hosts' clocks never matter.
 - Expired sessions are cleaned up lazily: a lease of an expired session is free for the next acquirer, and a
-  keep-alive that finds its session expired removes it. `JdbcLeaseBackend.purgeExpired()` removes the rest; call it
-  from time to time if many short-lived processes leave rows behind.
+  keep-alive that finds its session expired removes it. The rest (sessions of crashed processes) is removed by
+  `purgeExpired()`, which runs at most once per `purgeInterval` (default one minute) after an `openSession` or
+  `keepAlive`, up to 1000 sessions per run, along `idx_session_expires`.
 
 ### Operating Notes
 
@@ -86,7 +91,9 @@ Lease names are case-sensitive (binary collation on MySQL, `"C"` on PostgreSQL).
 ## Redis 7
 
 Module `simba-redis` (driver-neutral, Lua scripts behind the `RedisScripting` port) and `simba-spring-redis`
-(`SpringRedisScripting`, the Spring Data Redis adapter):
+(`SpringRedisScripting`, the Spring Data Redis adapter). `SpringRedisScripting` needs Lettuce, the Spring Boot default
+client: with Jedis, subscriptions block the calling thread and `WAIT` is unavailable, so the starter fails startup on a
+non-Lettuce `RedisConnectionFactory`:
 
 ```kotlin
 val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
@@ -151,7 +158,11 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
   as 16 hex digits.
 - The token is the lease node's `czxid`: strictly increasing across terms because zxids are global, but not
   consecutive.
-- Release deletes the node; candidates watch it and take over at once. Group membership changes are watched too.
+- Release deletes the node; candidates watch it and take over at once. Group membership changes are watched too,
+  including the creation of a group that did not exist yet.
+- A name counts as possibly owned from the moment its create is sent, so a lease whose create succeeded but whose reply
+  was lost (connection loss, timeout) is still reported by the next keep-alive, after checking the node's owner, and
+  released by the engine. Releases of one session run one at a time.
 - The Zookeeper client heartbeats on its own, so a local watchdog closes a session that no keep-alive renewed within
   the lease: a node that stopped renewing never keeps its leases through heartbeats alone.
 - Remaining time is `min(leaseDuration, negotiated session timeout)`. While the client is disconnected, keep-alive and
