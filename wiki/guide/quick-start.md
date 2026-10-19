@@ -5,7 +5,8 @@ description: Add Simba to a Spring Boot or plain JVM application, wire a backend
 
 # Quick Start
 
-Simba 5 needs Java 21 or later (work and backend calls run on virtual threads).
+Simba 5 needs Java 21 or later (work and backend calls run on virtual threads). The starter needs Spring Boot 4
+(4.1 or later); the libraries are compiled for Kotlin 2.2 or later.
 
 ## Dependencies
 
@@ -45,8 +46,10 @@ implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
 
 :::
 
-`simba-bom` aligns the versions of every Simba module. Without Spring, depend on `simba-core` plus a backend module
-(`simba-jdbc`, `simba-redis` or `simba-spring-redis`, `simba-zookeeper`).
+`simba-bom` aligns the versions of every Simba module. Without Spring, depend on `simba-core` plus a backend module:
+`simba-jdbc`, `simba-zookeeper`, or for Redis `simba-spring-redis` (which brings `simba-redis`). `simba-redis` alone
+only defines the `RedisScripting` port: use it without `simba-spring-redis` only with your own adapter for another
+Redis client.
 
 ## Backend Setup
 
