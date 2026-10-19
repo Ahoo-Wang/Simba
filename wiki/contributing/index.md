@@ -45,9 +45,9 @@ You need JDK 21 and Docker.
 
 ## Adding a Backend
 
-1. Implement `LeaseBackend`: one round trip per call, no scheduling, no local lease state, remaining times measured by
-   the backend's clock and returned as durations, tokens that strictly increase and never reset, expired sessions that
-   are never revived.
+1. Implement `LeaseBackend`: a bounded number of calls per method, no scheduling, no local lease state, remaining
+   times measured by the backend's clock and returned as durations, tokens that strictly increase and never reset,
+   expired sessions that are never revived, keep-alive replies that list every owned lease.
 2. Extend [`LeaseBackendSpec`](/guide/testing#backend-tck) for it. A backend with an injectable clock overrides
    `clock`; otherwise time-based tests poll until the backend's own lease ran out.
 3. Add a starter auto-configuration activated by `simba.enabled`, `simba.<backend>.enabled` and `simba.backend`,

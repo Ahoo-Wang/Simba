@@ -126,7 +126,7 @@ interface LeadershipListener {
 
 ```kotlin
 interface LeaseBackend : AutoCloseable {
-    val capabilities: Capabilities                    // releaseHints, membershipHints, maxBatch
+    val capabilities: Capabilities                    // releaseHints, membershipHints
     fun openSession(lease: Duration, metadata: Map<String, String> = emptyMap()): SessionGrant
     fun keepAlive(session: SessionId, lease: Duration, held: Set<LeaseName>): KeepAliveResult   // Live(remaining, owned) | Expired
     fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult>      // Granted(token) | HeldBy(session, token)
@@ -141,11 +141,14 @@ interface LeaseBackend : AutoCloseable {
 
 每个实现都遵守的规则（由 [`LeaseBackendSpec`](/zh/guide/testing#backend-tck) 检查）：
 
-- 每个方法都是一次后端往返（或每个 slot 一次），不做调度、不发通知、不保存本地状态；
+- 每个方法只发出有限次数的后端调用，不等待、不做调度、不发通知、不保存本地租约状态；
 - 每个剩余时长都用后端的时钟计算，并以时长而非时间戳返回；
 - token 大于零，随该名称的每个新任期严格递增，且永不重置；
 - 会话在其租约期内未被续约即过期，即使传输层仍保持连接；
 - 过期的会话永不复活：`keepAlive` 返回 `Expired`，`acquire` 抛出 `SessionExpiredException`；
+- 无论 `held` 是什么，`keepAlive` 都报告该会话持有的全部租约；即使在租约自行过期的后端上，持有的租约也至少与其会话存活得一样久；
+- 各后端以相同方式校验输入并抛出 `IllegalArgumentException`：租约至少 1 ms，组名遵循 `LeaseName` 规则，每次 `acquire` 至多
+  `LeaseBackend.MAX_BATCH`（64）个名称；
 - `release` 只释放会话仍持有且 token 完全一致的租约，因此陈旧的释放是空操作；
 - 提示（hint）只起加速作用；丢失提示从不影响正确性。
 

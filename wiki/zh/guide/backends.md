@@ -100,7 +100,7 @@ val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
 
 释放会在租约键的频道（`simba:lease:{name}`）上发布 `released`；这是唯一的广播，让候选者能够立即接管。所有时间判断都在脚本内使用 Redis `TIME`。
 
-新任期的持续时间与其会话相同，而续约只延长节点仍持有的租约，因此即使会话键比租约存活得更久，租约也会自行过期。
+租约会自行过期：新任期的持续时间与其会话相同（在 Cluster 上为一个完整的会话租约时长），续约通过会话的租约索引延长该会话持有的每个租约，因此在续约途中获取的租约也会被延长。关闭会话时先删除会话，再释放其租约和组成员身份，最后删除索引，因此失败后重复关闭会把剩余工作做完。
 
 ### Cluster {#cluster}
 

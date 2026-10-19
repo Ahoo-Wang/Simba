@@ -24,8 +24,8 @@ import java.time.Duration
  * [acquire] takes at most [MAX_BATCH] names.
  *
  * Rules for implementations:
- * - every method is one backend round trip (or one per slot), with no scheduling, no notification and no local
- *   state;
+ * - every method makes a bounded number of backend calls (a few, or a few per slot), without waiting, scheduling,
+ *   notifying or keeping local lease state;
  * - every remaining duration is computed with the backend's clock and returned as a *duration*, never a timestamp;
  * - a lease's token is greater than zero, strictly increases with every new term of its name and never resets (a
  *   counter advancing by one, or a globally increasing id such as a Zookeeper czxid);
@@ -33,6 +33,8 @@ import java.time.Duration
  *   its own (heartbeats);
  * - an expired session is never revived: [keepAlive] answers [KeepAliveResult.Expired] and [acquire] throws
  *   [SessionExpiredException];
+ * - [keepAlive] reports every lease the session owns, and a lease the session owns lasts at least as long as the
+ *   session, also when leases expire on their own (as on Redis);
  * - hints only accelerate; losing one never affects correctness.
  */
 interface LeaseBackend : AutoCloseable {

@@ -80,7 +80,7 @@ Checks increasing and equal tokens accepted, lower rejected, racing writers, and
 class MyLeaseBackendTest : LeaseBackendSpec() {
     override fun createBackend(): LeaseBackend = MyLeaseBackend(store)
     // override val clock: ClockControl? — when the backend's clock is injectable
-    // override val shortLease, lease, timeout, leasesExpireIndependently
+    // override val shortLease, lease, timeout
 }
 ```
 

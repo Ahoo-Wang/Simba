@@ -31,18 +31,23 @@ import java.time.Duration
  * [LeaseBackend] on Redis 7 Lua scripts (ADR 0010 §7.2), driven through [RedisScripting].
  *
  * - A lease is a hash `simba:lease:{name}` = `{session, token, expires}` that never expires, so its token never
- *   resets; release clears `session` only. `expires` is Redis time (`TIME`): a lease is free once it passed.
+ *   resets; release clears `session` only. `expires` is Redis time (`TIME`): a lease is free once it passed, so
+ *   leases expire on their own.
  * - A session is a hash `simba:session:{sid}` with `PX` = lease: keep-alive, acquire and join fail once it is gone,
- *   so an expired session is never revived. A new term lasts as long as its session; keep-alive extends the leases in
- *   `held` that the session still holds, so leases expire on their own and [KeepAliveResult.Live.owned] lists only
- *   those.
+ *   so an expired session is never revived. Its lease index (a sorted set of the lease keys it tried, scored by the
+ *   attempt's Redis time) and group index live in the same slot.
+ * - Keep-alive extends and reports every lease of the lease index the session still holds, whatever `held` says, so
+ *   [KeepAliveResult.Live.owned] is complete; acquire extends a lease the session already holds as well. A new term
+ *   lasts as long as its session on a single node, one full session lease on a Cluster.
  * - Group members are sorted sets `simba:group:{group}` scored by expiry in Redis time, extended by keep-alive.
  * - Release publishes `released` on the lease key's channel, the only broadcast ([BackendHint.Released]).
+ * - Closing a session deletes it first, then frees its indexed leases and memberships, then drops its indexes:
+ *   repeating a close that failed halfway finishes it.
  *
- * On a single node or Sentinel, keep-alive, acquire and join are one script call (keep-alive adds a second one when
- * the session joined groups). With [routeBySlot] (default on a Redis Cluster) a call first touches the session's slot,
- * then runs one script per hash slot of the remaining keys. The lease and session slots may then live on nodes whose
- * clocks differ: a skew between them shortens or lengthens leases by that much.
+ * On a single node or Sentinel, acquire and join are one script call; keep-alive is one, plus one more when the
+ * session has indexed leases beyond `held` or joined groups. With [routeBySlot] (default on a Redis Cluster) a call
+ * first touches the session's slot, then runs one script per hash slot of the remaining keys. The lease and session
+ * slots may then live on nodes whose clocks differ: a skew between them shortens or lengthens leases by that much.
  *
  * Redis replication is asynchronous: after a failover a replica may have missed a token increment, so a token can go
  * back. [waitReplicas] narrows that window (not on a Cluster); otherwise prefer JDBC or Zookeeper for strict fencing.
@@ -57,19 +62,22 @@ class RedisLeaseBackend @JvmOverloads constructor(
 ) : LeaseBackend {
     companion object {
         private val log = KotlinLogging.logger {}
-        private const val MAX_BATCH = 64
         private const val EXPIRED = -1L
         private const val WITH_SESSION = "1"
         private const val WITHOUT_SESSION = "0"
         private const val ANY_TOKEN = "*"
         private const val RELEASED = "released"
         private const val ACQUIRE_FIELDS = 3
+        private const val ACQUIRE_HEADER = 2
 
         private val OPEN = LeaseScript.load("lease_session_open")
+        private val SESSION_KEEP_ALIVE = LeaseScript.load("lease_session_keep_alive")
         private val KEEP_ALIVE = LeaseScript.load("lease_keep_alive")
+        private val FORGET = LeaseScript.load("lease_session_forget")
         private val ACQUIRE = LeaseScript.load("lease_acquire")
         private val RELEASE = LeaseScript.load("lease_release")
         private val CLOSE = LeaseScript.load("lease_session_close")
+        private val DROP = LeaseScript.load("lease_session_drop")
         private val JOIN = LeaseScript.load("lease_group_join")
         private val LEAVE = LeaseScript.load("lease_group_leave")
         private val MEMBERS = LeaseScript.load("lease_group_members")
@@ -79,10 +87,10 @@ class RedisLeaseBackend @JvmOverloads constructor(
         require(waitReplicas == null || !scripting.clustered) { "waitReplicas is not supported on a Redis Cluster." }
     }
 
-    override val capabilities: Capabilities = Capabilities(releaseHints = true, maxBatch = MAX_BATCH)
+    override val capabilities: Capabilities = Capabilities(releaseHints = true)
 
     override fun openSession(lease: Duration, metadata: Map<String, String>): SessionGrant {
-        val millis = lease.requirePositiveMillis()
+        val millis = LeaseBackend.requireLease(lease).toMillis()
         val id = SessionId.random()
         val args = listOf(millis.toString()) + metadata.flatMap { (key, value) -> listOf(key, value) }
         eval(OPEN, listOf(RedisLeaseKeys.session(id)), args)
@@ -91,56 +99,46 @@ class RedisLeaseBackend @JvmOverloads constructor(
     }
 
     override fun keepAlive(session: SessionId, lease: Duration, held: Set<LeaseName>): KeepAliveResult {
-        val millis = lease.requirePositiveMillis().toString()
-        val names = held.toList()
-        val leaseKeys = names.map(RedisLeaseKeys::lease)
-        val inline = if (routeBySlot) emptyList() else leaseKeys
-        val reply = eval(
-            KEEP_ALIVE,
-            sessionKeys(session) + inline,
-            listOf(WITH_SESSION, session.value, millis, inline.size.toString())
-        )
+        val millis = LeaseBackend.requireLease(lease).toMillis()
+        val inline = if (routeBySlot) emptyList() else held.map(RedisLeaseKeys::lease)
+        val reply = eval(SESSION_KEEP_ALIVE, sessionKeys(session) + inline, listOf(session.value, millis.toString()))
         if (reply.long(0) == EXPIRED) {
             log.debug { "Session [$session] expired on Redis." }
             return KeepAliveResult.Expired
         }
+        val now = reply.long(1)
+        var index = 2
         val tokens = HashMap<String, Long>()
-        inline.forEachIndexed { index, key -> tokens[key] = reply.long(index + 1) }
-        val groupKeys = reply.drop(inline.size + 1).mapTo(LinkedHashSet()) { it as String }
-        val pending = (leaseKeys - inline.toSet()) + groupKeys
-        val calls = routed(pending) { keys ->
-            val slotLeases = keys.filter { it !in groupKeys }
-            ScriptCall(
-                KEEP_ALIVE,
-                slotLeases + keys.filter { it in groupKeys },
-                listOf(WITHOUT_SESSION, session.value, millis, slotLeases.size.toString())
-            )
+        inline.forEach { tokens[it] = reply.long(index++) }
+        val others = LinkedHashMap<String, String>()
+        repeat(reply.long(index++).toInt()) {
+            others[reply[index] as String] = reply[index + 1] as String
+            index += 2
         }
-        if (calls.isNotEmpty()) {
-            scripting.eval(calls).replies.zip(calls).forEach { (slotReply, call) ->
-                val slotLeases = call.keys.take(slotReply.size - 1)
-                slotLeases.forEachIndexed { index, key -> tokens[key] = slotReply.long(index + 1) }
-            }
+        val groups = reply.drop(index).mapTo(LinkedHashSet()) { it as String }
+        tokens += extend(session, millis, others.keys.toList(), groups)
+        if (routeBySlot) {
+            forget(session, others.filter { (key, score) -> tokens[key] == 0L && now - score.toLong() >= millis })
         }
         val owned = buildMap {
-            names.forEachIndexed { index, name ->
-                val token = tokens[leaseKeys[index]] ?: 0
+            for ((key, token) in tokens) {
                 if (token > 0) {
-                    put(name, token)
+                    put(checkNotNull(RedisLeaseKeys.leaseOf(key)) { "Not a lease key: [$key]." }, token)
                 }
             }
         }
-        return KeepAliveResult.Live(lease, owned)
+        return KeepAliveResult.Live(Duration.ofMillis(millis), owned)
     }
 
     override fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult> {
-        require(names.size <= MAX_BATCH) { "At most $MAX_BATCH names per acquire, was ${names.size}." }
+        LeaseBackend.requireBatch(names)
         val keys = names.map(RedisLeaseKeys::lease)
         val replies: List<Pair<List<String>, List<Any?>>>
         val replicas: Int?
         if (routeBySlot) {
-            val remaining = sessionRemaining(ACQUIRE, session, RedisLeaseKeys.sessionLeases(session), keys)
-            val calls = routed(keys) { ScriptCall(ACQUIRE, it, listOf(WITHOUT_SESSION, session.value, remaining)) }
+            val sessionReply = sessionCall(ACQUIRE, session, RedisLeaseKeys.sessionLeases(session), keys)
+            val lease = sessionReply.long(1).toString()
+            val calls = routed(keys) { ScriptCall(ACQUIRE, it, listOf(WITHOUT_SESSION, session.value, lease)) }
             val result = if (calls.isEmpty()) ScriptReplies(emptyList()) else scripting.eval(calls, waitReplicas)
             replies = calls.map { it.keys }.zip(result.replies)
             replicas = result.replicas
@@ -167,7 +165,7 @@ class RedisLeaseBackend @JvmOverloads constructor(
         val nameOf = names.associateBy(RedisLeaseKeys::lease)
         for ((callKeys, reply) in replies) {
             callKeys.forEachIndexed { index, key ->
-                val offset = 1 + index * ACQUIRE_FIELDS
+                val offset = ACQUIRE_HEADER + index * ACQUIRE_FIELDS
                 val token = reply.long(offset)
                 val holder = reply[offset + 1] as String
                 byKey[key] = if (holder == session.value) {
@@ -206,14 +204,16 @@ class RedisLeaseBackend @JvmOverloads constructor(
         if (calls.isNotEmpty()) {
             scripting.eval(calls)
         }
+        // Only once everything indexed was freed: a close that failed before this point finds the indexes again.
+        eval(DROP, listOf(RedisLeaseKeys.sessionLeases(session), RedisLeaseKeys.sessionGroups(session)), emptyList())
         log.debug { "Closed session [$session] on Redis." }
     }
 
     override fun join(session: SessionId, group: String) {
-        val key = RedisLeaseKeys.group(requireGroup(group))
+        val key = RedisLeaseKeys.group(LeaseBackend.requireGroup(group))
         if (routeBySlot) {
-            val remaining = sessionRemaining(JOIN, session, RedisLeaseKeys.sessionGroups(session), listOf(key))
-            eval(JOIN, listOf(key), listOf(WITHOUT_SESSION, session.value, remaining))
+            val lease = sessionCall(JOIN, session, RedisLeaseKeys.sessionGroups(session), listOf(key)).long(1)
+            eval(JOIN, listOf(key), listOf(WITHOUT_SESSION, session.value, lease.toString()))
             return
         }
         val reply = eval(
@@ -227,11 +227,11 @@ class RedisLeaseBackend @JvmOverloads constructor(
     }
 
     override fun leave(session: SessionId, group: String) {
-        eval(LEAVE, listOf(RedisLeaseKeys.group(requireGroup(group))), listOf(session.value))
+        eval(LEAVE, listOf(RedisLeaseKeys.group(LeaseBackend.requireGroup(group))), listOf(session.value))
     }
 
     override fun members(group: String): List<SessionId> =
-        eval(MEMBERS, listOf(RedisLeaseKeys.group(requireGroup(group))), emptyList())
+        eval(MEMBERS, listOf(RedisLeaseKeys.group(LeaseBackend.requireGroup(group))), emptyList())
             .map { SessionId(it as String) }
             .sortedBy { it.value }
 
@@ -248,25 +248,80 @@ class RedisLeaseBackend @JvmOverloads constructor(
         }
 
     /**
-     * Runs [script] on the session's slot only: checks the session is live, records [indexed] in [index], and answers
-     * the session's remaining milliseconds.
+     * Extends the indexed lease keys [leaseKeys] the session still holds and its memberships in [groupKeys], after
+     * the session itself; answers the token of each lease key, `0` when not held. On a single node this is one call
+     * that also drops the keys the session no longer holds from its lease index.
      */
-    private fun sessionRemaining(
+    private fun extend(
+        session: SessionId,
+        millis: Long,
+        leaseKeys: List<String>,
+        groupKeys: Set<String>,
+    ): Map<String, Long> {
+        val calls = if (routeBySlot) {
+            routed(leaseKeys + groupKeys) { keys ->
+                val slotLeases = keys.filter { it !in groupKeys }
+                ScriptCall(
+                    KEEP_ALIVE,
+                    slotLeases + keys.filter { it in groupKeys },
+                    listOf(WITHOUT_SESSION, session.value, millis.toString(), slotLeases.size.toString())
+                )
+            }
+        } else if (leaseKeys.isEmpty() && groupKeys.isEmpty()) {
+            emptyList()
+        } else {
+            listOf(
+                ScriptCall(
+                    KEEP_ALIVE,
+                    listOf(RedisLeaseKeys.sessionLeases(session)) + leaseKeys + groupKeys,
+                    listOf(WITH_SESSION, session.value, millis.toString(), leaseKeys.size.toString())
+                )
+            )
+        }
+        if (calls.isEmpty()) {
+            return emptyMap()
+        }
+        val tokens = HashMap<String, Long>()
+        scripting.eval(calls).replies.zip(calls).forEach { (reply, call) ->
+            val slotLeases = if (routeBySlot) call.keys else call.keys.drop(1)
+            reply.forEachIndexed { index, token -> tokens[slotLeases[index]] = token as Long }
+        }
+        return tokens
+    }
+
+    /**
+     * Drops [stale] lease keys (with the scores keep-alive read) from the session's lease index on a Cluster: keys
+     * the session did not hold, whose last attempt began at least one lease ago, so no acquire can still take them.
+     */
+    private fun forget(session: SessionId, stale: Map<String, String>) {
+        if (stale.isNotEmpty()) {
+            eval(
+                FORGET,
+                listOf(RedisLeaseKeys.sessionLeases(session)),
+                stale.flatMap { (key, score) -> listOf(key, score) }
+            )
+        }
+    }
+
+    /**
+     * Runs [script] on the session's slot only: checks the session is live, records [indexed] in [index], and answers
+     * the reply (the session's remaining milliseconds, then its lease).
+     */
+    private fun sessionCall(
         script: LeaseScript,
         session: SessionId,
         index: String,
         indexed: List<String>,
-    ): String {
+    ): List<Any?> {
         val reply = eval(
             script,
             listOf(RedisLeaseKeys.session(session), index),
             listOf(WITH_SESSION, session.value, "0") + indexed
         )
-        val remaining = reply.long(0)
-        if (remaining == EXPIRED) {
+        if (reply.long(0) == EXPIRED) {
             throw SessionExpiredException(session)
         }
-        return remaining.toString()
+        return reply
     }
 
     private fun unreplicated(session: SessionId, begun: Map<LeaseName, Long>, replicas: Int): Nothing {
@@ -301,13 +356,4 @@ class RedisLeaseBackend @JvmOverloads constructor(
         scripting.eval(listOf(ScriptCall(script, keys, args))).replies.single()
 
     private fun List<Any?>.long(index: Int): Long = this[index] as Long
-
-    private fun Duration.requirePositiveMillis(): Long {
-        val millis = toMillis()
-        require(millis > 0) { "lease must be at least 1 ms: $this" }
-        return millis
-    }
-
-    /** Group names follow the [LeaseName] rules, so no name breaks the hash tag of its key. */
-    private fun requireGroup(group: String): String = LeaseName(group).value
 }

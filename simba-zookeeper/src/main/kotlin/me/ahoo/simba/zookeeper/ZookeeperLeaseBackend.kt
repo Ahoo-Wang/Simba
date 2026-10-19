@@ -321,7 +321,6 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
     /** Group names follow the lease name rules, so each is one valid node name. */
     private fun groupPath(group: String): String = "$groupsPath/${LeaseBackend.requireGroup(group)}"
 
-
     private fun memberPath(group: String, session: SessionId): String = "${groupPath(group)}/${session.value}"
 
     private fun publish(hint: BackendHint) {
