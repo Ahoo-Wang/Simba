@@ -633,7 +633,8 @@ Lease and group names are case-sensitive (binary collations on MySQL, `"C"` on P
 - A release does not notify anyone: after a clean stop, candidates take over at their next attempt
   (`renewInterval / 2` plus jitter).
 - Each statement has a timeout; the starter sets it to the session renew interval (`simba.jdbc.query-timeout`), after
-  which the engine gives up on the call anyway.
+  which the engine gives up on the call anyway. Without Spring, `JdbcLeaseBackend` defaults to 5 s
+  (`DEFAULT_QUERY_TIMEOUT`, the default renew interval); pass your renew interval as `queryTimeout` when you change it.
 - Give Simba a connection pool that is not starved by the application: a keep-alive that waits for a connection
   longer than the renew interval counts as failed.
 - Tokens and session expiries are only as durable as the database's commits. A failover to an asynchronous MySQL
