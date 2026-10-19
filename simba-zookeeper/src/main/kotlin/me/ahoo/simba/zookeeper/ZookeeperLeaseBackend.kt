@@ -54,7 +54,7 @@ import java.util.concurrent.TimeUnit
  * stays expired and the next [openSession] gets a new id.
  *
  * - A lease is the ephemeral node `{root}/leases/{name}` holding the session id; its token is the node's czxid, which
- *   is strictly increasing across terms (Zookeeper zxids are global) but **not** consecutive. The owner is read from
+ *   is strictly increasing across terms (Zookeeper zxids are global) but not consecutive. The owner is read from
  *   the node's `ephemeralOwner`, so a lease belongs to its session exactly while Zookeeper keeps the session.
  * - A member is the ephemeral node `{root}/groups/{group}/{sessionId}` under a container node.
  * - Hints: every acquire leaves an exists watch on the lease node, whose deletion is announced as

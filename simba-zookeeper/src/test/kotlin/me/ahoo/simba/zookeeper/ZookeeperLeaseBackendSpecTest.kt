@@ -18,19 +18,8 @@ import me.ahoo.simba.tck.LeaseBackendSpec
 import org.apache.curator.test.TestingServer
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll
-import org.junit.jupiter.api.extension.ConditionEvaluationResult
-import org.junit.jupiter.api.extension.ExecutionCondition
-import org.junit.jupiter.api.extension.ExtendWith
-import org.junit.jupiter.api.extension.ExtensionContext
 
-/**
- * [ZookeeperLeaseBackend] passes the backend TCK, except where the SPI promises consecutive tokens.
- *
- * Tokens are czxids: strictly increasing per name but not `+1` per term, so [consecutiveTokens] is off and the TCK
- * tests that expect the literal first token `1` are disabled by [KnownDeviations]. `ZookeeperLeaseBackendTest`
- * covers the same rules with czxid tokens.
- */
-@ExtendWith(ZookeeperLeaseBackendSpecTest.KnownDeviations::class)
+/** [ZookeeperLeaseBackend] on an embedded Zookeeper passes the backend TCK; its tokens are czxids. */
 class ZookeeperLeaseBackendSpecTest : LeaseBackendSpec() {
     companion object {
         private lateinit var server: TestingServer
@@ -48,31 +37,5 @@ class ZookeeperLeaseBackendSpecTest : LeaseBackendSpec() {
         }
     }
 
-    override val consecutiveTokens: Boolean = false
-
     override fun createBackend(): LeaseBackend = ZookeeperLeaseBackend(server.connectString)
-
-    /** Disables the TCK tests that assert the first token is exactly [FIRST_TOKEN]. */
-    class KnownDeviations : ExecutionCondition {
-        private val firstTokenTests = setOf(
-            "aFreeLeaseIsGrantedWithTheFirstToken",
-            "aLeaseIsExclusiveToOneLiveSession",
-            "acquireAnswersEveryNameOfABatch",
-            "everyNewTermAdvancesTheTokenAlsoForTheSameSession",
-            "keepAliveKeepsASessionAndItsLeasesBeyondTheLeaseDuration",
-        )
-
-        override fun evaluateExecutionCondition(context: ExtensionContext): ConditionEvaluationResult {
-            val method = context.testMethod.orElse(null)?.name
-                ?: return ConditionEvaluationResult.enabled("not a test method")
-            return if (method in firstTokenTests) {
-                ConditionEvaluationResult.disabled(
-                    "Known deviation (ADR 0010 §7.3): the token is the lease node's czxid, strictly increasing " +
-                        "but not starting at 1 nor advancing by exactly one; covered by ZookeeperLeaseBackendTest.",
-                )
-            } else {
-                ConditionEvaluationResult.enabled("follows the SPI")
-            }
-        }
-    }
 }
