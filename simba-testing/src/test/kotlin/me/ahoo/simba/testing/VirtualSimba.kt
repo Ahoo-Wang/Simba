@@ -13,7 +13,7 @@
 
 package me.ahoo.simba.testing
 
-import me.ahoo.simba.SimbaClient
+import me.ahoo.simba.Simba
 import me.ahoo.simba.SimbaConfig
 import me.ahoo.simba.event.SimbaEvent
 import me.ahoo.simba.spi.AcquireResult
@@ -48,10 +48,10 @@ class VirtualSimba : AutoCloseable {
         retryJitter = Duration.ZERO,
     )
     val events = LinkedBlockingQueue<SimbaEvent>()
-    private val clients = ArrayList<SimbaClient>()
+    private val clients = ArrayList<Simba>()
 
-    fun client(): SimbaClient =
-        SimbaClient.builder()
+    fun client(): Simba =
+        Simba.builder()
             .backend(recording)
             .config(config)
             .scheduler(scheduler)

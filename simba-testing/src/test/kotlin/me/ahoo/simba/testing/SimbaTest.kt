@@ -16,7 +16,7 @@ package me.ahoo.simba.testing
 import me.ahoo.simba.LeadershipListener
 import me.ahoo.simba.LeaseExpiredException
 import me.ahoo.simba.RevokeReason
-import me.ahoo.simba.SimbaClient
+import me.ahoo.simba.Simba
 import me.ahoo.simba.SimbaConfig
 import me.ahoo.simba.Term
 import me.ahoo.test.asserts.assert
@@ -28,17 +28,17 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /** The threaded shell against the in-memory backend on the system clock; synchronizes on queues, never sleeps. */
-class SimbaClientTest {
+class SimbaTest {
     private val backend = InMemoryLeaseBackend()
     private val config = SimbaConfig(leaseDuration = Duration.ofSeconds(3), renewInterval = Duration.ofMillis(500))
-    private val clients = ArrayList<SimbaClient>()
+    private val clients = ArrayList<Simba>()
 
-    private fun client(): SimbaClient =
-        SimbaClient.builder().backend(backend).config(config).build().also(clients::add)
+    private fun client(): Simba =
+        Simba.builder().backend(backend).config(config).build().also(clients::add)
 
     @AfterEach
     fun close() {
-        clients.forEach(SimbaClient::close)
+        clients.forEach(Simba::close)
     }
 
     private class Recorder : LeadershipListener {

@@ -27,7 +27,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 
-/** `SimbaClient.lock` on virtual time: the term is the credential, closing it releases the lease. */
+/** `Simba.lock` on virtual time: the term is the credential, closing it releases the lease. */
 class LockTest {
     private val simba = VirtualSimba()
     private val name = LeaseName("invoice-42")

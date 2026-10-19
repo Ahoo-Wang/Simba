@@ -12,7 +12,8 @@
  */
 package me.ahoo.simba.redis
 
-import me.ahoo.simba.test.FencingSpec
+import me.ahoo.simba.spi.LeaseBackend
+import me.ahoo.simba.tck.FencingSpec
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.TestInstance
 import org.springframework.data.redis.core.StringRedisTemplate
@@ -41,6 +42,8 @@ internal class RedisFencingRecipeTest : FencingSpec() {
 
     private val connectionFactory = RedisFixture.newConnectionFactory()
     private val redisTemplate = StringRedisTemplate(connectionFactory)
+
+    override fun leaseBackend(): LeaseBackend = RedisLeaseBackend(RedisLeaseFixture.scripting)
 
     @AfterAll
     fun close() {

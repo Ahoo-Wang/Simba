@@ -24,6 +24,7 @@ import me.ahoo.simba.engine.VirtualThreads
 import me.ahoo.simba.engine.WorkListener
 import me.ahoo.simba.engine.runReported
 import me.ahoo.simba.event.SimbaEventListener
+import me.ahoo.simba.event.SimbaSnapshot
 import me.ahoo.simba.partition.GroupTask
 import me.ahoo.simba.partition.PartitionAssignment
 import me.ahoo.simba.partition.PartitionGroup
@@ -46,13 +47,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  * The Simba 5 client (ADR 0010): one per process, one backend session, every election, lock and group attached to
  * that session.
  *
- * Named `SimbaClient` while the 4.x `Simba` constants object still exists; it becomes `Simba` once 4.x is removed.
  * [close] closes the session, so the backend frees every lease at once.
  */
 @OptIn(InternalSimbaApi::class)
-class SimbaClient private constructor(builder: Builder) : AutoCloseable {
+class Simba private constructor(builder: Builder) : AutoCloseable {
     private val ownedExecutors = ArrayList<ExecutorService>()
-    private val config = builder.config
+
+    /** The session timing this client runs with. */
+    val config: SimbaConfig = builder.config
     private val ticker: Ticker = builder.scheduler ?: builder.ticker
     private val shell: EngineShell
     private val workExecutor: Executor
@@ -133,6 +135,9 @@ class SimbaClient private constructor(builder: Builder) : AutoCloseable {
         )
     }
 
+    /** The session and every started election as of now (ADR 0010 §9); never blocks on the backend. */
+    fun snapshot(): SimbaSnapshot = shell.snapshot().join()
+
     internal fun dispatcherCount(): Int = shell.footprint().join().dispatchers
 
     /** Revokes every term, closes the session and stops the engine; completes after the last callback ran. */
@@ -152,7 +157,7 @@ class SimbaClient private constructor(builder: Builder) : AutoCloseable {
     }
 
     private fun checkOpen() {
-        check(!closing.get()) { "SimbaClient is closed." }
+        check(!closing.get()) { "Simba is closed." }
     }
 
     /** Waits for [stage] unless the caller is a callback or leader work of this client. */
@@ -413,7 +418,7 @@ class SimbaClient private constructor(builder: Builder) : AutoCloseable {
         /** Seed of the retry jitter. */
         fun seed(seed: Long) = apply { this.seed = seed }
 
-        fun build(): SimbaClient = SimbaClient(this)
+        fun build(): Simba = Simba(this)
     }
 
     companion object {

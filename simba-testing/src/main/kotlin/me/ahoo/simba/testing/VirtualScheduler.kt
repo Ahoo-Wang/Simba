@@ -18,8 +18,8 @@ import java.time.Duration
 import java.util.PriorityQueue
 
 /**
- * Virtual time for a threaded `SimbaClient`: a [Scheduler] over [clock] whose timers only fire in [advance]. Give it to
- * `SimbaClient.builder().scheduler(...)` together with a direct I/O and callback executor, and the engines settle
+ * Virtual time for a threaded `Simba`: a [Scheduler] over [clock] whose timers only fire in [advance]. Give it to
+ * `Simba.builder().scheduler(...)` together with a direct I/O and callback executor, and the engines settle
  * deterministically between timers. Thread-safe; tasks run on the thread calling [advance].
  */
 class VirtualScheduler(val clock: VirtualClock = VirtualClock()) : Scheduler {

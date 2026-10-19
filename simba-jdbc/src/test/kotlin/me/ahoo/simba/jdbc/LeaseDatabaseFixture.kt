@@ -19,7 +19,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer
 
 /**
  * Databases for [JdbcLeaseBackend], initialized with the published schema scripts of each [Dialect]: one container
- * per database and test JVM, apart from the 4.x schema of [MySqlFixture]. Requires Docker.
+ * per database and test JVM. Requires Docker.
  */
 object LeaseDatabaseFixture {
     val mysql: HikariDataSource by lazy {

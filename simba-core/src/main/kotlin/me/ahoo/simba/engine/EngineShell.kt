@@ -15,14 +15,20 @@ package me.ahoo.simba.engine
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import me.ahoo.simba.LeadershipListener
+import me.ahoo.simba.event.ElectionSnapshot
+import me.ahoo.simba.event.ElectionStatus
+import me.ahoo.simba.event.SessionSnapshot
+import me.ahoo.simba.event.SessionStatus
 import me.ahoo.simba.event.SimbaEvent
 import me.ahoo.simba.event.SimbaEventListener
+import me.ahoo.simba.event.SimbaSnapshot
 import me.ahoo.simba.spi.LeaseBackend
 import me.ahoo.simba.spi.LeaseName
 import me.ahoo.simba.spi.SessionId
 import me.ahoo.simba.spi.Ticker
 import me.ahoo.simba.util.SequentialExecutor
 import me.ahoo.simba.util.Threads
+import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
@@ -67,6 +73,8 @@ internal class EngineShell(
     private val groupViews = HashMap<String, (SessionId?, List<SessionId>) -> Unit>()
     private val handled = AtomicLong()
     private val hintSubscription = backend.subscribe { hint -> post(Event.Hint(hint)) }
+    private var sessionStatus = SessionStatus.OPENING
+    private var notLiveSince = ticker.nanoTime()
 
     /**
      * [active] while the election is started; [starts] counts starts. A stopped dispatcher is dropped once the
@@ -196,6 +204,64 @@ internal class EngineShell(
             }
         }
 
+    /** The session and every election as of now; a closed snapshot once the loop stopped. */
+    fun snapshot(): CompletableFuture<SimbaSnapshot> =
+        CompletableFuture<SimbaSnapshot>().also { snapshot ->
+            val posted = onLoop { snapshot.complete(snapshotNow()) }
+            if (!posted) {
+                val session = SessionSnapshot(
+                    null,
+                    SessionStatus.CLOSED,
+                    Duration.ZERO,
+                    Duration.ofNanos(ticker.nanoTime() - notLiveSince)
+                )
+                snapshot.complete(SimbaSnapshot(session, emptyList(), config.leaseDuration))
+            }
+        }
+
+    private fun snapshotNow(): SimbaSnapshot {
+        val now = ticker.nanoTime()
+        val active = state.session as? SessionState.Active
+        val session = SessionSnapshot(
+            id = active?.id,
+            status = sessionStatus,
+            validFor = Duration.ofNanos((active?.validUntil?.minus(now) ?: 0).coerceAtLeast(0)),
+            notLiveFor = if (sessionStatus == SessionStatus.LIVE) {
+                Duration.ZERO
+            } else {
+                Duration.ofNanos(now - notLiveSince)
+            },
+        )
+        val elections = state.elections.entries.sortedBy { it.key.value }.map { (name, election) ->
+            when (election) {
+                is ElectionState.Candidate -> ElectionSnapshot(name, ElectionStatus.CANDIDATE, 0, Duration.ZERO)
+                is ElectionState.Cooldown -> ElectionSnapshot(name, ElectionStatus.COOLDOWN, 0, Duration.ZERO)
+                is ElectionState.Handover ->
+                    ElectionSnapshot(name, ElectionStatus.HANDOVER, election.token, Duration.ZERO)
+
+                is ElectionState.Leader -> ElectionSnapshot(
+                    name,
+                    ElectionStatus.LEADER,
+                    election.token,
+                    terms.term(election.term)?.remaining() ?: Duration.ZERO,
+                )
+            }
+        }
+        return SimbaSnapshot(session, elections, config.leaseDuration)
+    }
+
+    private fun trackSessionStatus() {
+        val status = when (val session = state.session) {
+            is SessionState.Opening -> SessionStatus.OPENING
+            is SessionState.Active -> if (session.suspended) SessionStatus.SUSPENDED else SessionStatus.LIVE
+            is SessionState.Closed -> SessionStatus.CLOSED
+        }
+        if (sessionStatus == SessionStatus.LIVE && status != SessionStatus.LIVE) {
+            notLiveSince = ticker.nanoTime()
+        }
+        sessionStatus = status
+    }
+
     fun stop(name: LeaseName): CompletableFuture<Void> {
         val done = CompletableFuture<Void>()
         val stopped = CompletableFuture<Void>()
@@ -281,6 +347,7 @@ internal class EngineShell(
     private fun handle(event: Event) {
         val (next, effects) = step(state, event, ticker.nanoTime())
         state = next
+        trackSessionStatus()
         effects.forEach(::execute)
     }
 

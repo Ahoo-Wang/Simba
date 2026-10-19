@@ -26,7 +26,7 @@ import java.time.Duration
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
-class SimbaClientShellTest {
+class SimbaShellTest {
     /** Grants every lease; enough to drive the shell without simba-testing. */
     private class GrantingBackend : LeaseBackend {
         override fun openSession(lease: Duration, metadata: Map<String, String>) = SessionGrant(SessionId("s"), lease)
@@ -50,7 +50,7 @@ class SimbaClientShellTest {
 
     @Test
     fun `stopped one-off elections leave no dispatcher behind`() {
-        SimbaClient.builder().backend(GrantingBackend()).build().use { client ->
+        Simba.builder().backend(GrantingBackend()).build().use { client ->
             val elected = LinkedBlockingQueue<Term>()
             val listener = object : LeadershipListener {
                 override fun onElected(term: Term) {
@@ -76,7 +76,7 @@ class SimbaClientShellTest {
     fun `builder options, listeners and failing callbacks`() {
         val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
         val events = LinkedBlockingQueue<me.ahoo.simba.event.SimbaEvent>()
-        val client = SimbaClient.builder()
+        val client = Simba.builder()
             .backend(GrantingBackend())
             .config(SimbaConfig())
             .ioExecutor(executor)
@@ -104,7 +104,7 @@ class SimbaClientShellTest {
 
     @Test
     fun `closing from a callback does not wait for itself`() {
-        val client = SimbaClient.builder().backend(GrantingBackend()).build()
+        val client = Simba.builder().backend(GrantingBackend()).build()
         val closed = java.util.concurrent.CompletableFuture<Unit>()
         client.election("closer").start(object : LeadershipListener {
             override fun onElected(term: Term) {
@@ -120,8 +120,8 @@ class SimbaClientShellTest {
 
     @Test
     fun `misuse is rejected`() {
-        assertThrows<IllegalArgumentException> { SimbaClient.builder().build() }
-        val client = SimbaClient.builder().backend(GrantingBackend()).build()
+        assertThrows<IllegalArgumentException> { Simba.builder().build() }
+        val client = Simba.builder().backend(GrantingBackend()).build()
         val election = client.election("misuse")
         election.name.assert().isEqualTo(LeaseName("misuse"))
         election.stop().toCompletableFuture().isDone.assert().isTrue()
