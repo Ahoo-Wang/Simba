@@ -10,78 +10,56 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter.jdbc
 
-import me.ahoo.simba.core.ContendObserver
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.jdbc.JdbcMemberRegistry
-import me.ahoo.simba.jdbc.JdbcMutexContendServiceFactory
-import me.ahoo.simba.jdbc.JdbcMutexOwnerRepository
-import me.ahoo.simba.jdbc.MutexOwnerRepository
-import me.ahoo.simba.partition.MemberRegistry
-import me.ahoo.simba.spring.boot.starter.ContendObservers
-import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
-import org.springframework.beans.factory.ObjectProvider
-import org.springframework.beans.factory.annotation.Qualifier
+import me.ahoo.simba.jdbc.Dialect
+import me.ahoo.simba.jdbc.JdbcLeaseBackend
+import me.ahoo.simba.spi.LeaseBackend
+import me.ahoo.simba.spring.boot.starter.SimbaProperties
 import org.springframework.boot.autoconfigure.AutoConfiguration
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnSingleCandidate
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
-import java.util.concurrent.Executor
 import javax.sql.DataSource
 
 /**
- * Simba Jdbc Auto Configuration.
- *
- * @author ahoo wang
+ * A [JdbcLeaseBackend] over the single `DataSource`; the schema (`simba_session`, `simba_lease`, `simba_member`)
+ * comes from the dialect's init script, `me/ahoo/simba/jdbc/init-simba-{mysql,postgresql}.sql`.
  */
-@AutoConfiguration(after = [SimbaAutoConfiguration::class])
-@ConditionalOnSimbaJdbcEnabled
-@ConditionalOnClass(
-    JdbcMutexContendServiceFactory::class
+@AutoConfiguration(
+    afterName = ["org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration"]
 )
-@EnableConfigurationProperties(JdbcProperties::class)
-class SimbaJdbcAutoConfiguration(private val jdbcProperties: JdbcProperties) {
-    @Bean
-    @ConditionalOnMissingBean
+@ConditionalOnSimbaJdbcEnabled
+@ConditionalOnClass(JdbcLeaseBackend::class)
+@EnableConfigurationProperties(JdbcProperties::class, SimbaProperties::class)
+class SimbaJdbcAutoConfiguration {
+    @Bean(destroyMethod = "close")
+    @ConditionalOnMissingBean(LeaseBackend::class)
     @ConditionalOnSingleCandidate(DataSource::class)
-    fun mutexOwnerRepository(dataSource: DataSource): MutexOwnerRepository {
-        // A database call slower than the lease ttl cannot keep ownership anyway.
-        return JdbcMutexOwnerRepository(
-            dataSource,
-            queryTimeout = jdbcProperties.ttl,
-            fencing = jdbcProperties.fencing
-        )
+    fun jdbcLeaseBackend(
+        dataSource: DataSource,
+        properties: JdbcProperties,
+        simbaProperties: SimbaProperties,
+    ): JdbcLeaseBackend {
+        val dialect = when (properties.dialect ?: detect(dataSource)) {
+            JdbcProperties.JdbcDialect.MYSQL -> Dialect.MYSQL
+            JdbcProperties.JdbcDialect.POSTGRESQL -> Dialect.POSTGRESQL
+        }
+        val queryTimeout = properties.queryTimeout ?: simbaProperties.session.toConfig().renewInterval
+        return JdbcLeaseBackend(dataSource, dialect, queryTimeout)
     }
 
-    /**
-     * Membership for partitioned leadership (ADR 0009); needs the `simba_member` table only once it is used.
-     */
-    @Bean
-    @ConditionalOnMissingBean
-    @ConditionalOnSingleCandidate(DataSource::class)
-    fun jdbcMemberRegistry(dataSource: DataSource): MemberRegistry {
-        return JdbcMemberRegistry(dataSource, queryTimeout = jdbcProperties.ttl)
-    }
-
-    @Bean
-    @ConditionalOnMissingBean
-    @ConditionalOnBean(MutexOwnerRepository::class)
-    fun jdbcMutexContendServiceFactory(
-        mutexOwnerRepository: MutexOwnerRepository,
-        @Qualifier(SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME) handleExecutor: Executor,
-        observers: ObjectProvider<ContendObserver>
-    ): MutexContendServiceFactory {
-        return JdbcMutexContendServiceFactory(
-            mutexOwnerRepository = mutexOwnerRepository,
-            handleExecutor = handleExecutor,
-            initialDelay = jdbcProperties.initialDelay,
-            ttl = jdbcProperties.ttl,
-            transition = jdbcProperties.transition,
-            observer = ContendObservers.of(observers)
-        )
+    private fun detect(dataSource: DataSource): JdbcProperties.JdbcDialect {
+        val product = dataSource.connection.use { it.metaData.databaseProductName }
+        return when {
+            product.contains("PostgreSQL", ignoreCase = true) -> JdbcProperties.JdbcDialect.POSTGRESQL
+            product.contains("MySQL", ignoreCase = true) -> JdbcProperties.JdbcDialect.MYSQL
+            else -> throw IllegalStateException(
+                "Simba has no JDBC dialect for [$product]; set ${JdbcProperties.PREFIX}.dialect to mysql or postgresql."
+            )
+        }
     }
 }

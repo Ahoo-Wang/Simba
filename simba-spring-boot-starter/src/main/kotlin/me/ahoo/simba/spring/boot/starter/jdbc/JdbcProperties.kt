@@ -10,30 +10,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter.jdbc
 
-import me.ahoo.simba.Simba
+import me.ahoo.simba.spring.boot.starter.SimbaProperties
 import org.springframework.boot.context.properties.ConfigurationProperties
 import java.time.Duration
 
 /**
- * Jdbc Properties.
+ * `simba.jdbc.*`.
  *
- * @author ahoo wang
+ * @param dialect the database; detected from the `DataSource` when unset.
+ * @param queryTimeout per-statement timeout; default the session renew interval, after which the engine gives up on
+ *   the call anyway.
  */
 @ConfigurationProperties(prefix = JdbcProperties.PREFIX)
 data class JdbcProperties(
     val enabled: Boolean = true,
-    val initialDelay: Duration = Duration.ofSeconds(0),
-    val ttl: Duration = Duration.ofSeconds(10),
-    val transition: Duration = Duration.ofSeconds(6),
-    /**
-     * Issue fencing tokens from the `fencing_token` column (on by default); existing tables need
-     * `init-script/upgrade-simba-mysql-fencing-token.sql` first, or set this to `false`.
-     */
-    val fencing: Boolean = true
+    val dialect: JdbcDialect? = null,
+    val queryTimeout: Duration? = null,
 ) {
+    enum class JdbcDialect { MYSQL, POSTGRESQL }
+
     companion object {
-        const val PREFIX = Simba.SIMBA_PREFIX + "jdbc"
+        const val PREFIX = SimbaProperties.PREFIX + ".jdbc"
     }
 }

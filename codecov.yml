@@ -12,5 +12,4 @@ coverage:
         target: 90%
         threshold: 1%
 ignore:
-  - "simba-test/.*"
   - "simba-example/.*"

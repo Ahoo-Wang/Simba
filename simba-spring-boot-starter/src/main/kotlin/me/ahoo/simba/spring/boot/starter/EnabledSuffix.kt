@@ -10,13 +10,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter
 
-/**
- * Enabled Suffix.
- *
- * @author ahoo wang
- */
+/** Suffix of the `*.enabled` switches. */
 object EnabledSuffix {
     const val KEY = ".enabled"
 }

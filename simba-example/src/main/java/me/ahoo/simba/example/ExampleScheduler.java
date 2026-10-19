@@ -13,12 +13,13 @@
 
 package me.ahoo.simba.example;
 
-import me.ahoo.simba.schedule.ScheduleContext;
+import me.ahoo.simba.Term;
 import me.ahoo.simba.spring.boot.starter.scheduling.SimbaScheduled;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -30,14 +31,11 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class ExampleScheduler {
 
-    @SimbaScheduled(mutex = "example-scheduler", fixedDelay = "10s", worker = "ExampleScheduler")
-    public void work(ScheduleContext context) throws InterruptedException {
-        if (log.isInfoEnabled()) {
-            log.info("do some work start! fencingToken:[{}]", context.getFencingToken());
-        }
+    @SimbaScheduled(name = "example-scheduler", fixedDelay = "10s")
+    public void work(Term term) throws InterruptedException {
+        term.ensureValid(Duration.ofSeconds(5));
+        log.info("do some work start! token:[{}]", term.getToken());
         TimeUnit.SECONDS.sleep(5);
-        if (log.isInfoEnabled()) {
-            log.info("do some work end!");
-        }
+        log.info("do some work end!");
     }
 }

@@ -1,14 +1,16 @@
+# Only the backend module chosen with -PexampleBackend=jdbc|redis|zookeeper is on the classpath.
 simba:
-#  jdbc:
-#    enabled: true
-  redis:
-    enabled: true
+  session:
+    lease-duration: 15s
+  zookeeper:
+    connect-string: localhost:2181
 
 spring:
-#  datasource:
-#    url: jdbc:mysql://localhost:3306/simba_db
-#    username: root
-#    password: root
+  # JDBC: create the tables first with me/ahoo/simba/jdbc/init-simba-mysql.sql from simba-jdbc.
+  datasource:
+    url: jdbc:mysql://localhost:3306/simba_db
+    username: root
+    password: root
   task:
     scheduling:
       pool:
@@ -16,6 +18,12 @@ spring:
   data:
     redis:
       url: redis://localhost:6379
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,simba
 
 logging:
   level:

@@ -13,33 +13,30 @@
 
 package me.ahoo.simba.example;
 
-import me.ahoo.simba.core.MutexContendService;
-import me.ahoo.simba.core.MutexContendServiceFactory;
+import me.ahoo.simba.Simba;
+import me.ahoo.simba.testing.InMemoryLeaseBackend;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ExampleAppTest {
     @Test
-    void contextCloseStopsContendService() throws Exception {
-        MutexContendServiceFactory factory = mock(MutexContendServiceFactory.class);
-        MutexContendService contendService = mock(MutexContendService.class);
-        when(factory.createMutexContendService(any())).thenReturn(contendService);
-
-        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
-            context.registerBean(MutexContendServiceFactory.class, () -> factory);
-            context.registerBean(CommandLineRunner.class, ExampleApp::new);
+    void runStartsTheElectionAndContextCloseStopsIt() throws Exception {
+        try (Simba simba = Simba.builder().backend(new InMemoryLeaseBackend()).build();
+             AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(Simba.class, () -> simba, definition -> definition.setDestroyMethodName(""));
+            context.registerBean(CommandLineRunner.class, () -> new ExampleApp(simba));
             context.refresh();
-            context.getBean(CommandLineRunner.class).run();
-            verify(contendService).start();
-        }
 
-        verify(contendService).stop();
+            context.getBean(CommandLineRunner.class).run();
+            assertEquals(1, simba.snapshot().getElections().size());
+
+            context.close();
+            assertTrue(simba.snapshot().getElections().isEmpty());
+        }
     }
 }

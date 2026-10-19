@@ -10,56 +10,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter.zookeeper
 
-import me.ahoo.simba.core.ContendObserver
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.partition.MemberRegistry
-import me.ahoo.simba.spring.boot.starter.ContendObservers
-import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
-import me.ahoo.simba.zookeeper.ZookeeperMemberRegistry
-import me.ahoo.simba.zookeeper.ZookeeperMutexContendServiceFactory
-import org.apache.curator.framework.CuratorFramework
-import org.springframework.beans.factory.ObjectProvider
-import org.springframework.beans.factory.annotation.Qualifier
+import me.ahoo.simba.spi.LeaseBackend
+import me.ahoo.simba.zookeeper.ZookeeperLeaseBackend
 import org.springframework.boot.autoconfigure.AutoConfiguration
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
-import java.util.concurrent.Executor
 
-/**
- * Simba Zookeeper Auto Configuration.
- *
- * @author ahoo wang
- */
-@AutoConfiguration(after = [SimbaAutoConfiguration::class])
+/** A [ZookeeperLeaseBackend] on `simba.zookeeper.connect-string`. */
+@AutoConfiguration
 @ConditionalOnSimbaZookeeperEnabled
-@ConditionalOnClass(
-    ZookeeperMutexContendServiceFactory::class
-)
+@ConditionalOnClass(ZookeeperLeaseBackend::class)
 @EnableConfigurationProperties(ZookeeperProperties::class)
 class SimbaZookeeperAutoConfiguration {
-    /**
-     * Membership for partitioned leadership (ADR 0009).
-     */
-    @Bean
-    @ConditionalOnBean(CuratorFramework::class)
-    @ConditionalOnMissingBean
-    fun zookeeperMemberRegistry(curatorFramework: CuratorFramework): MemberRegistry {
-        return ZookeeperMemberRegistry(curatorFramework)
-    }
-
-    @Bean
-    @ConditionalOnBean(CuratorFramework::class)
-    @ConditionalOnMissingBean
-    fun zookeeperMutexContendServiceFactory(
-        curatorFramework: CuratorFramework,
-        @Qualifier(SimbaAutoConfiguration.HANDLE_EXECUTOR_BEAN_NAME) handleExecutor: Executor,
-        observers: ObjectProvider<ContendObserver>
-    ): MutexContendServiceFactory {
-        return ZookeeperMutexContendServiceFactory(handleExecutor, curatorFramework, ContendObservers.of(observers))
-    }
+    @Bean(destroyMethod = "close")
+    @ConditionalOnMissingBean(LeaseBackend::class)
+    fun zookeeperLeaseBackend(properties: ZookeeperProperties): ZookeeperLeaseBackend =
+        ZookeeperLeaseBackend(properties.connectString, properties.root, properties.connectionTimeout)
 }

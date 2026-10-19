@@ -10,35 +10,40 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter
 
-import me.ahoo.simba.core.ContendExecutors
+import me.ahoo.simba.Simba
+import me.ahoo.simba.event.SimbaEventListener
+import me.ahoo.simba.spi.LeaseBackend
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.boot.autoconfigure.AutoConfiguration
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
+import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Lazy
 import org.springframework.core.env.Environment
 import org.springframework.core.io.ResourceLoader
-import java.util.concurrent.ExecutorService
 
 /**
- * Simba Auto Configuration: infrastructure shared by all backends.
- *
- * @author ahoo wang
+ * The [Simba] client bean over the [LeaseBackend] bean that a backend auto-configuration (or the application)
+ * defines, with every [SimbaEventListener] bean. [SimbaLifecycle] closes it on shutdown.
  */
-@AutoConfiguration
+@AutoConfiguration(
+    afterName = [
+        "me.ahoo.simba.spring.boot.starter.jdbc.SimbaJdbcAutoConfiguration",
+        "me.ahoo.simba.spring.boot.starter.redis.SimbaRedisAutoConfiguration",
+        "me.ahoo.simba.spring.boot.starter.zookeeper.SimbaZookeeperAutoConfiguration",
+        "me.ahoo.simba.spring.boot.starter.metrics.SimbaMetricsAutoConfiguration",
+    ]
+)
 @ConditionalOnSimbaEnabled
+@EnableConfigurationProperties(SimbaProperties::class)
 class SimbaAutoConfiguration {
-    companion object {
-        /**
-         * Executor running `onAcquired` / `onReleased` callbacks. Define a bean with this name to replace it.
-         */
-        const val HANDLE_EXECUTOR_BEAN_NAME = "simbaHandleExecutor"
-    }
-
     /**
-     * Fails startup when the backend is ambiguous: several active backend modules and no `simba.backend`,
-     * or a `simba.backend` that names an unavailable backend.
+     * Fails startup when the backend is ambiguous: several active backend modules and no `simba.backend`, or a
+     * `simba.backend` that names an unavailable backend.
      */
     @Bean
     @Lazy(false) // validate even under spring.main.lazy-initialization=true
@@ -61,19 +66,24 @@ class SimbaAutoConfiguration {
         return SimbaBackendSelection(backend)
     }
 
-    /**
-     * Dedicated daemon executor, so blocking callbacks cannot starve `ForkJoinPool.commonPool()`.
-     */
-    @Bean(name = [HANDLE_EXECUTOR_BEAN_NAME], destroyMethod = "shutdown")
-    @ConditionalOnMissingBean(name = [HANDLE_EXECUTOR_BEAN_NAME])
-    fun simbaHandleExecutor(): ExecutorService {
-        return ContendExecutors.newCallbackExecutor("simba-callback")
+    @Bean(destroyMethod = "close")
+    @ConditionalOnBean(LeaseBackend::class)
+    @ConditionalOnMissingBean
+    fun simba(
+        backend: LeaseBackend,
+        properties: SimbaProperties,
+        listeners: ObjectProvider<SimbaEventListener>,
+    ): Simba {
+        val builder = Simba.builder().backend(backend).config(properties.session.toConfig())
+        listeners.orderedStream().forEach { builder.listener(it) }
+        return builder.build()
     }
+
+    @Bean
+    @ConditionalOnBean(Simba::class)
+    @ConditionalOnMissingBean
+    fun simbaLifecycle(simba: Simba): SimbaLifecycle = SimbaLifecycle(simba)
 }
 
-/**
- * The backend the starter configures, `null` when no backend module is active.
- *
- * @author ahoo wang
- */
+/** The backend the starter configures, `null` when no backend module is active. */
 data class SimbaBackendSelection(val backend: String?)

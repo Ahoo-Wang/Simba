@@ -68,4 +68,5 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-jdbc")
     testImplementation("org.apache.curator:curator-test")
     testImplementation("io.lettuce:lettuce-core")
+    testImplementation(project(":simba-testing"))
 }

@@ -10,24 +10,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter.redis
 
-import me.ahoo.simba.Simba
+import me.ahoo.simba.spring.boot.starter.SimbaProperties
 import org.springframework.boot.context.properties.ConfigurationProperties
 import java.time.Duration
 
 /**
- * Redis Properties.
+ * `simba.redis.*`.
  *
- * @author ahoo wang
+ * @param waitReplicas when positive, a new term counts only once that many replicas acknowledged it (`WAIT`), so a
+ *   failover is less likely to lose a token increment (ADR 0010 §7.4); not on a Cluster.
+ * @param waitTimeout how long `WAIT` waits for [waitReplicas].
+ * @param routeBySlot whether to split script calls by hash slot; default on for a Redis Cluster.
  */
 @ConfigurationProperties(prefix = RedisProperties.PREFIX)
 data class RedisProperties(
     val enabled: Boolean = true,
-    val ttl: Duration = Duration.ofSeconds(10),
-    val transition: Duration = Duration.ofSeconds(6)
+    val waitReplicas: Int = 0,
+    val waitTimeout: Duration = Duration.ofSeconds(1),
+    val routeBySlot: Boolean? = null,
 ) {
     companion object {
-        const val PREFIX = Simba.SIMBA_PREFIX + "redis"
+        const val PREFIX = SimbaProperties.PREFIX + ".redis"
     }
 }

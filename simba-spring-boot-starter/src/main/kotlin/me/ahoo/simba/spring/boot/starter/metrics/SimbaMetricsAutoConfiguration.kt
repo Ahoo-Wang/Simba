@@ -10,6 +10,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter.metrics
 
 import io.micrometer.core.instrument.MeterRegistry
@@ -21,11 +22,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.context.annotation.Bean
 
-/**
- * Records Simba metrics when Micrometer is on the classpath and a [MeterRegistry] bean exists.
- *
- * @author ahoo wang
- */
+/** Records Simba metrics when Micrometer is on the classpath and a [MeterRegistry] bean exists. */
 @AutoConfiguration(
     afterName = ["org.springframework.boot.micrometer.metrics.autoconfigure.CompositeMeterRegistryAutoConfiguration"]
 )
@@ -44,7 +41,6 @@ class SimbaMetricsAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    fun micrometerContendObserver(registry: MeterRegistry): MicrometerContendObserver {
-        return MicrometerContendObserver(registry)
-    }
+    fun micrometerSimbaEventListener(registry: MeterRegistry): MicrometerSimbaEventListener =
+        MicrometerSimbaEventListener(registry)
 }

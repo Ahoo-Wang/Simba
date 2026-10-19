@@ -98,6 +98,9 @@ class TermRegistry(private val ticker: Ticker) {
     /** Terms not revoked yet. */
     val active: Collection<EngineTerm> get() = terms.values
 
+    /** The active term with id [id], if any. */
+    fun term(id: Long): EngineTerm? = terms[id]
+
     fun deadline(effect: Effect.Deadline) {
         if (effect.session !in deadlines) {
             deadlines.keys.retainAll(terms.values.mapTo(HashSet()) { it.session })

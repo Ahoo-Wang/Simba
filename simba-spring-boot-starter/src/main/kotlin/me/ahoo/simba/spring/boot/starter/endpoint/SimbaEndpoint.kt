@@ -10,90 +10,66 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter.endpoint
 
-import me.ahoo.simba.core.MutexContendService
-import me.ahoo.simba.core.MutexOwner
+import me.ahoo.simba.Simba
+import me.ahoo.simba.event.ElectionSnapshot
+import me.ahoo.simba.event.SimbaSnapshot
 import org.springframework.boot.actuate.endpoint.annotation.Endpoint
 import org.springframework.boot.actuate.endpoint.annotation.ReadOperation
 import org.springframework.boot.actuate.endpoint.annotation.Selector
-import java.time.Instant
 
 /**
- * Read-only view of the mutexes this process contends for: `GET /actuator/simba` and `/actuator/simba/{mutex}`.
- *
- * @author ahoo wang
+ * Read-only view of [Simba.snapshot]: `GET /actuator/simba` (the session and every started election) and
+ * `/actuator/simba/{name}` (one election, 404 when not started here).
  */
 @Endpoint(id = SimbaEndpoint.ID)
-class SimbaEndpoint(private val tracker: SimbaServiceTracker) {
+class SimbaEndpoint(private val simba: Simba) {
     companion object {
         const val ID = "simba"
     }
 
     @ReadOperation
-    fun mutexes(): MutexesDescriptor {
-        return MutexesDescriptor(tracker.services().map(::describe))
-    }
+    fun snapshot(): SnapshotDescriptor = SnapshotDescriptor.of(simba.snapshot())
 
-    /**
-     * The services contending for [mutex]; `null` (404) when this process does not contend for it.
-     */
     @ReadOperation
-    fun mutex(@Selector mutex: String): MutexesDescriptor? {
-        val matching = tracker.services().filter { it.mutex == mutex }
-        return if (matching.isEmpty()) null else MutexesDescriptor(matching.map(::describe))
+    fun election(@Selector name: String): ElectionDescriptor? =
+        simba.snapshot().elections.firstOrNull { it.name.value == name }?.let(ElectionDescriptor::of)
+
+    data class SnapshotDescriptor(val session: SessionDescriptor, val elections: List<ElectionDescriptor>) {
+        companion object {
+            fun of(snapshot: SimbaSnapshot): SnapshotDescriptor =
+                SnapshotDescriptor(
+                    SessionDescriptor(
+                        id = snapshot.session.id?.value,
+                        status = snapshot.session.status.name,
+                        validForMillis = snapshot.session.validFor.toMillis(),
+                        notLiveForMillis = snapshot.session.notLiveFor.toMillis(),
+                    ),
+                    snapshot.elections.map(ElectionDescriptor::of),
+                )
+        }
     }
 
-    private fun describe(service: MutexContendService): MutexDescriptor {
-        val currentOwner = service.afterOwner
-        return MutexDescriptor(
-            mutex = service.mutex,
-            contenderId = service.contenderId,
-            status = service.status.name,
-            owner = service.isOwner,
-            currentOwner = if (currentOwner.hasOwner()) OwnerDescriptor.of(currentOwner) else null
-        )
-    }
-
-    data class MutexesDescriptor(val mutexes: List<MutexDescriptor>)
-
-    /**
-     * @param owner whether this contender owns the mutex.
-     * @param currentOwner the owner this contender last observed; `null` when it observed none.
-     */
-    data class MutexDescriptor(
-        val mutex: String,
-        val contenderId: String,
+    /** @param id the backend session, `null` while none is open. */
+    data class SessionDescriptor(
+        val id: String?,
         val status: String,
-        val owner: Boolean,
-        val currentOwner: OwnerDescriptor?
+        val validForMillis: Long,
+        val notLiveForMillis: Long,
     )
 
-    /**
-     * @param fencingToken `0` when the backend issues none.
-     * @param ttlAt `null` for an unbounded lease, as are [transitionAt].
-     */
-    data class OwnerDescriptor(
-        val ownerId: String,
-        val fencingToken: Long,
-        val acquiredAt: Instant,
-        val ttlAt: Instant?,
-        val transitionAt: Instant?
-    ) {
+    /** @param token the fencing token of the current term, `0` without one. */
+    data class ElectionDescriptor(val name: String, val status: String, val token: Long, val remainingMillis: Long) {
         companion object {
-            fun of(owner: MutexOwner): OwnerDescriptor {
-                return OwnerDescriptor(
-                    ownerId = owner.ownerId,
-                    fencingToken = owner.fencingToken,
-                    acquiredAt = Instant.ofEpochMilli(owner.acquiredAt),
-                    ttlAt = owner.ttlAt.toInstantOrNull(),
-                    transitionAt = owner.transitionAt.toInstantOrNull()
+            fun of(election: ElectionSnapshot): ElectionDescriptor =
+                ElectionDescriptor(
+                    election.name.value,
+                    election.status.name,
+                    election.token,
+                    election.remaining.toMillis(),
                 )
-            }
-
-            private fun Long.toInstantOrNull(): Instant? {
-                return if (this == Long.MAX_VALUE) null else Instant.ofEpochMilli(this)
-            }
         }
     }
 }

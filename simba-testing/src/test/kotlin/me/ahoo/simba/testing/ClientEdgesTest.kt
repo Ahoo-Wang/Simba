@@ -17,7 +17,7 @@ import me.ahoo.simba.LeadershipListener
 import me.ahoo.simba.LockTimeoutException
 import me.ahoo.simba.RevokeReason
 import me.ahoo.simba.Schedule
-import me.ahoo.simba.SimbaClient
+import me.ahoo.simba.Simba
 import me.ahoo.simba.Term
 import me.ahoo.simba.event.SimbaEvent
 import me.ahoo.simba.event.WorkOutcome
@@ -44,7 +44,7 @@ class ClientEdgesTest {
         simba.close()
     }
 
-    private fun client(configure: SimbaClient.Builder.() -> Unit): SimbaClient = simba.client(configure)
+    private fun client(configure: Simba.Builder.() -> Unit): Simba = simba.client(configure)
 
     private fun <T> async(action: () -> T): Pair<Thread, CompletableFuture<T>> {
         val future = CompletableFuture<T>()

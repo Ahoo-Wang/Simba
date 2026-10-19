@@ -14,7 +14,7 @@
 package me.ahoo.simba.testing
 
 import me.ahoo.simba.Schedule
-import me.ahoo.simba.SimbaClient
+import me.ahoo.simba.Simba
 import me.ahoo.simba.event.SimbaEvent
 import me.ahoo.simba.partition.GroupTask
 import me.ahoo.simba.partition.PartitionAssignment
@@ -29,7 +29,7 @@ import java.util.Collections
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
-/** `SimbaClient.group` on virtual time: rendezvous assignment over live sessions, hand-over before release. */
+/** `Simba.group` on virtual time: rendezvous assignment over live sessions, hand-over before release. */
 class PartitionGroupTest {
     private val simba = VirtualSimba()
     private val log: MutableList<String> = Collections.synchronizedList(ArrayList())
@@ -40,7 +40,7 @@ class PartitionGroupTest {
         simba.close()
     }
 
-    private fun join(client: SimbaClient, label: String): GroupTask =
+    private fun join(client: Simba, label: String): GroupTask =
         client.group(GROUP, PARTITIONS).runWhileLeader { term, partition ->
             term.name.assert().isEqualTo(LeaseName("$GROUP.$partition"))
             log += "start $label $partition"

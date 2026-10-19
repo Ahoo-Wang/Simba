@@ -4,14 +4,41 @@
       "name": "simba.enabled",
       "type": "java.lang.Boolean",
       "description": "Whether Simba auto-configuration is enabled.",
-      "sourceType": "me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.SimbaProperties",
       "defaultValue": true
     },
     {
       "name": "simba.backend",
       "type": "java.lang.String",
       "description": "Backend to configure: jdbc, redis or zookeeper. Required when more than one backend module is active.",
-      "sourceType": "me.ahoo.simba.spring.boot.starter.SimbaBackend"
+      "sourceType": "me.ahoo.simba.spring.boot.starter.SimbaProperties"
+    },
+    {
+      "name": "simba.session.lease-duration",
+      "type": "java.time.Duration",
+      "description": "The backend expires the session this long after its last keep-alive; every lease of the session goes with it.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.SimbaProperties$Session",
+      "defaultValue": "15s"
+    },
+    {
+      "name": "simba.session.renew-interval",
+      "type": "java.time.Duration",
+      "description": "Keep-alive period of the session; at most half of the lease duration. Defaults to a third of it.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.SimbaProperties$Session"
+    },
+    {
+      "name": "simba.session.drift",
+      "type": "java.lang.Double",
+      "description": "Upper bound of the clock rate difference between a node and the backend, in [0, 0.5).",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.SimbaProperties$Session",
+      "defaultValue": 0.01
+    },
+    {
+      "name": "simba.session.margin",
+      "type": "java.time.Duration",
+      "description": "Extra safety subtracted from every local deadline.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.SimbaProperties$Session",
+      "defaultValue": "50ms"
     },
     {
       "name": "simba.jdbc.enabled",
@@ -21,32 +48,16 @@
       "defaultValue": true
     },
     {
-      "name": "simba.jdbc.initial-delay",
-      "type": "java.time.Duration",
-      "description": "Delay before the first JDBC contention attempt.",
-      "sourceType": "me.ahoo.simba.spring.boot.starter.jdbc.JdbcProperties",
-      "defaultValue": "0s"
+      "name": "simba.jdbc.dialect",
+      "type": "me.ahoo.simba.spring.boot.starter.jdbc.JdbcProperties$JdbcDialect",
+      "description": "Database dialect: mysql or postgresql. Detected from the DataSource when unset.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.jdbc.JdbcProperties"
     },
     {
-      "name": "simba.jdbc.ttl",
+      "name": "simba.jdbc.query-timeout",
       "type": "java.time.Duration",
-      "description": "Time-to-live of a JDBC owner lease.",
-      "sourceType": "me.ahoo.simba.spring.boot.starter.jdbc.JdbcProperties",
-      "defaultValue": "10s"
-    },
-    {
-      "name": "simba.jdbc.transition",
-      "type": "java.time.Duration",
-      "description": "Grace period for preferential JDBC owner renewal.",
-      "sourceType": "me.ahoo.simba.spring.boot.starter.jdbc.JdbcProperties",
-      "defaultValue": "6s"
-    },
-    {
-      "name": "simba.jdbc.fencing",
-      "type": "java.lang.Boolean",
-      "description": "Whether the JDBC backend issues fencing tokens from the fencing_token column.",
-      "sourceType": "me.ahoo.simba.spring.boot.starter.jdbc.JdbcProperties",
-      "defaultValue": true
+      "description": "Per-statement timeout of the JDBC backend. Defaults to the session renew interval.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.jdbc.JdbcProperties"
     },
     {
       "name": "simba.redis.enabled",
@@ -56,18 +67,52 @@
       "defaultValue": true
     },
     {
-      "name": "simba.redis.ttl",
-      "type": "java.time.Duration",
-      "description": "Time-to-live of a Redis owner lease.",
+      "name": "simba.redis.wait-replicas",
+      "type": "java.lang.Integer",
+      "description": "When positive, a new term counts only once that many replicas acknowledged it (WAIT). Not on a Redis Cluster.",
       "sourceType": "me.ahoo.simba.spring.boot.starter.redis.RedisProperties",
-      "defaultValue": "10s"
+      "defaultValue": 0
     },
     {
-      "name": "simba.redis.transition",
+      "name": "simba.redis.wait-timeout",
       "type": "java.time.Duration",
-      "description": "Grace period for preferential Redis owner renewal.",
+      "description": "How long WAIT waits for simba.redis.wait-replicas.",
       "sourceType": "me.ahoo.simba.spring.boot.starter.redis.RedisProperties",
-      "defaultValue": "6s"
+      "defaultValue": "1s"
+    },
+    {
+      "name": "simba.redis.route-by-slot",
+      "type": "java.lang.Boolean",
+      "description": "Whether to split script calls by hash slot. Defaults to true on a Redis Cluster.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.redis.RedisProperties"
+    },
+    {
+      "name": "simba.zookeeper.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the Zookeeper backend is enabled.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.zookeeper.ZookeeperProperties",
+      "defaultValue": true
+    },
+    {
+      "name": "simba.zookeeper.connect-string",
+      "type": "java.lang.String",
+      "description": "Zookeeper ensemble the backend opens its sessions on.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.zookeeper.ZookeeperProperties",
+      "defaultValue": "localhost:2181"
+    },
+    {
+      "name": "simba.zookeeper.root",
+      "type": "java.lang.String",
+      "description": "Parent path of the lease and group nodes.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.zookeeper.ZookeeperProperties",
+      "defaultValue": "/simba"
+    },
+    {
+      "name": "simba.zookeeper.connection-timeout",
+      "type": "java.time.Duration",
+      "description": "Connection timeout of the Zookeeper clients.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.zookeeper.ZookeeperProperties",
+      "defaultValue": "15s"
     },
     {
       "name": "simba.metrics.enabled",
@@ -79,15 +124,8 @@
     {
       "name": "simba.scheduling.enabled",
       "type": "java.lang.Boolean",
-      "description": "Whether @SimbaScheduled methods and SimbaScheduler beans run with the application context.",
+      "description": "Whether @SimbaScheduled and @SimbaPartitioned methods run with the application context.",
       "sourceType": "me.ahoo.simba.spring.boot.starter.scheduling.SimbaSchedulingAutoConfiguration",
-      "defaultValue": true
-    },
-    {
-      "name": "simba.zookeeper.enabled",
-      "type": "java.lang.Boolean",
-      "description": "Whether the Zookeeper backend is enabled.",
-      "sourceType": "me.ahoo.simba.spring.boot.starter.zookeeper.ZookeeperProperties",
       "defaultValue": true
     }
   ],
@@ -97,15 +135,15 @@
       "values": [
         {
           "value": "jdbc",
-          "description": "JDBC (MySQL) backend."
+          "description": "JDBC backend (MySQL 8, PostgreSQL 14+)."
         },
         {
           "value": "redis",
-          "description": "Spring Data Redis backend."
+          "description": "Redis 7 backend over Spring Data Redis."
         },
         {
           "value": "zookeeper",
-          "description": "Zookeeper (Curator LeaderLatch) backend."
+          "description": "Zookeeper backend (ephemeral nodes)."
         }
       ]
     }

@@ -10,50 +10,51 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter.zookeeper
 
-import io.mockk.mockk
-import me.ahoo.simba.core.MutexContendServiceFactory
-import me.ahoo.simba.partition.MemberRegistry
+import me.ahoo.simba.Simba
+import me.ahoo.simba.spi.LeaseBackend
+import me.ahoo.simba.spring.boot.starter.Leadership
 import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
-import org.apache.curator.framework.CuratorFramework
-import org.assertj.core.api.AssertionsForInterfaceTypes.assertThat
+import me.ahoo.simba.zookeeper.ZookeeperLeaseBackend
+import me.ahoo.test.asserts.assert
+import org.apache.curator.test.TestingServer
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.TestInstance
+import org.springframework.boot.autoconfigure.AutoConfigurations
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
 
-/**
- * SimbaJdbcAutoConfigurationTest .
- *
- * @author ahoo wang
- */
-internal class SimbaZookeeperAutoConfigurationTest {
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class SimbaZookeeperAutoConfigurationTest {
+    private val server = TestingServer()
     private val contextRunner = ApplicationContextRunner()
-        .withPropertyValues("simba.backend=zookeeper")
+        .withConfiguration(
+            AutoConfigurations.of(SimbaAutoConfiguration::class.java, SimbaZookeeperAutoConfiguration::class.java)
+        )
+        .withPropertyValues("simba.backend=zookeeper", "simba.zookeeper.connect-string=${server.connectString}")
 
-    @Test
-    fun contextLoads() {
-        contextRunner
-            .withBean(CuratorFramework::class.java, { mockk() })
-            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaZookeeperAutoConfiguration::class.java)
-            .run {
-                assertThat(it)
-                    .hasSingleBean(SimbaZookeeperAutoConfiguration::class.java)
-                    .hasSingleBean(ZookeeperProperties::class.java)
-                    .hasSingleBean(MutexContendServiceFactory::class.java)
-                    .hasSingleBean(MemberRegistry::class.java)
-            }
+    @AfterAll
+    fun close() {
+        server.close()
     }
 
     @Test
-    fun backsOffWhenUserDefinesMutexContendServiceFactory() {
-        val userFactory = mockk<MutexContendServiceFactory>()
-        contextRunner
-            .withBean(CuratorFramework::class.java, { mockk() })
-            .withBean(MutexContendServiceFactory::class.java, { userFactory })
-            .withUserConfiguration(SimbaAutoConfiguration::class.java, SimbaZookeeperAutoConfiguration::class.java)
-            .run {
-                assertThat(it).hasSingleBean(MutexContendServiceFactory::class.java)
-                assertThat(it.getBean(MutexContendServiceFactory::class.java)).isSameAs(userFactory)
-            }
+    fun `the client is elected on the zookeeper backend`() {
+        contextRunner.run {
+            assertThat(it).hasSingleBean(ZookeeperLeaseBackend::class.java)
+            val leadership = Leadership()
+            it.getBean(Simba::class.java).election("zookeeper-starter").start(leadership)
+            (leadership.nextTerm().token > 0).assert().isTrue()
+        }
+    }
+
+    @Test
+    fun `selecting another backend leaves the zookeeper backend off`() {
+        contextRunner.withPropertyValues("simba.backend=redis").run {
+            assertThat(it).doesNotHaveBean(LeaseBackend::class.java).doesNotHaveBean(Simba::class.java)
+        }
     }
 }

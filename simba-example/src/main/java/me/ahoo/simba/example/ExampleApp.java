@@ -13,12 +13,12 @@
 
 package me.ahoo.simba.example;
 
-import me.ahoo.simba.core.MutexContendService;
-import me.ahoo.simba.core.MutexContendServiceFactory;
-import me.ahoo.simba.locker.SimbaLocker;
+import me.ahoo.simba.Election;
+import me.ahoo.simba.LockTerm;
+import me.ahoo.simba.LockTimeoutException;
+import me.ahoo.simba.Simba;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -31,7 +31,8 @@ import java.time.Duration;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * Example App.
+ * Example App: one election with callbacks, two locks taken from Spring scheduled methods, and the leader-only work
+ * of {@link ExampleScheduler} and {@link ExamplePartitioned}, all on the one {@link Simba} client of the starter.
  *
  * @author ahoo wang
  */
@@ -39,57 +40,54 @@ import java.util.concurrent.locks.LockSupport;
 @EnableScheduling
 @Slf4j
 public class ExampleApp implements CommandLineRunner {
-    
+
     public static void main(String[] args) {
         SpringApplication.run(ExampleApp.class);
     }
-    
-    @Autowired
-    private MutexContendServiceFactory mutexContendServiceFactory;
-    private MutexContendService contendService;
-    
-    /**
-     * Callback used to run the bean.
-     *
-     * @param args incoming main method arguments
-     * @throws Exception on error
-     */
+
+    private final Simba simba;
+    private Election election;
+
+    public ExampleApp(Simba simba) {
+        this.simba = simba;
+    }
+
     @Override
-    public void run(String... args) throws Exception {
-        contendService = mutexContendServiceFactory.createMutexContendService(new ExampleContender());
-        contendService.start();
+    public void run(String... args) {
+        election = simba.election("example-election");
+        election.start(new ExampleLeader());
     }
 
     /**
-     * Stops on context close, before lifecycle beans (such as the Redis connection factory) stop,
-     * so the mutex is released while the backend is still reachable.
+     * Stops the election on context close, before the starter closes the client; {@code stop()} completes once
+     * {@code onRevoked} ran.
      */
     @EventListener(ContextClosedEvent.class)
-    public void stopContendService() {
-        if (contendService != null) {
-            contendService.stop();
+    public void stopElection() {
+        if (election != null) {
+            election.stop().toCompletableFuture().join();
         }
     }
-    
+
     @Scheduled(initialDelay = 1000, fixedDelay = 1000)
     public void scheduleFixedDelay() {
-        try (SimbaLocker locker = new SimbaLocker("example-locker-schedule-fixedDelay", this.mutexContendServiceFactory)) {
-            locker.acquire(Duration.ofSeconds(1));
-            log.warn("-------- scheduleFixedDelay - acquired:[{}] --------", locker.getContenderId());
-            LockSupport.parkNanos(this, Duration.ofMillis(2100).toNanos());
-        } catch (Exception e) {
-            log.error(e.getMessage(), e);
-        }
+        withLock("example-lock-fixed-delay", Duration.ofSeconds(1));
     }
-    
+
     @Scheduled(initialDelay = 1000, fixedRate = 1000)
     public void scheduleFixedRate() {
-        try (SimbaLocker locker = new SimbaLocker("example-locker-schedule-fixedRate", this.mutexContendServiceFactory)) {
-            locker.acquire(Duration.ofMillis(100));
-            log.warn("-------- scheduleFixedRate - acquired:[{}] --------", locker.getContenderId());
+        withLock("example-lock-fixed-rate", Duration.ofMillis(100));
+    }
+
+    /**
+     * The {@link LockTerm} is the credential: pass its token to the protected resource, which rejects lower ones.
+     */
+    private void withLock(String name, Duration timeout) {
+        try (LockTerm term = simba.lock(name).acquire(timeout)) {
+            log.warn("-------- [{}] acquired, token:[{}] --------", name, term.getToken());
             LockSupport.parkNanos(this, Duration.ofMillis(2100).toNanos());
-        } catch (Exception e) {
-            log.error(e.getMessage(), e);
+        } catch (LockTimeoutException e) {
+            log.info("[{}] is held elsewhere: {}", name, e.getMessage());
         }
     }
 }

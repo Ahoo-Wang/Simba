@@ -10,19 +10,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter
 
-import me.ahoo.simba.Simba
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 
-/**
- * Conditional On Simba Enabled.
- *
- * @author ahoo wang
- */
+/** Matches unless `simba.enabled=false`. */
 @ConditionalOnProperty(value = [ConditionalOnSimbaEnabled.ENABLED_KEY], matchIfMissing = true, havingValue = "true")
 annotation class ConditionalOnSimbaEnabled {
     companion object {
-        const val ENABLED_KEY = Simba.SIMBA + EnabledSuffix.KEY
+        const val ENABLED_KEY = SimbaProperties.PREFIX + EnabledSuffix.KEY
     }
 }

@@ -10,6 +10,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter.scheduling
 
 import me.ahoo.simba.spring.boot.starter.ConditionalOnSimbaEnabled
@@ -19,11 +20,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Role
 
-/**
- * Runs [SimbaScheduled] methods and `SimbaScheduler` beans with the application context.
- *
- * @author ahoo wang
- */
+/** Runs [SimbaScheduled] and [SimbaPartitioned] methods with the application context. */
 @AutoConfiguration
 @ConditionalOnSimbaEnabled
 @ConditionalOnProperty(
@@ -40,8 +37,6 @@ class SimbaSchedulingAutoConfiguration {
         @Bean
         @JvmStatic
         @Role(BeanDefinition.ROLE_INFRASTRUCTURE)
-        fun simbaScheduledBeanPostProcessor(): SimbaScheduledBeanPostProcessor {
-            return SimbaScheduledBeanPostProcessor()
-        }
+        fun simbaScheduledBeanPostProcessor(): SimbaScheduledBeanPostProcessor = SimbaScheduledBeanPostProcessor()
     }
 }

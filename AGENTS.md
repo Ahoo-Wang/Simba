@@ -1,12 +1,13 @@
 # Simba - Agent Instructions
 
-Simba is a JVM (Kotlin, Java 21 bytecode) distributed mutex / leader-election library over JDBC (MySQL), Redis, or
-Zookeeper. Its whole contract: per mutex, at most one contender *observes itself* as owner of a time-bounded lease,
-and every contender receives ordered acquire/release callbacks.
+Simba is a JVM (Kotlin, Java 21 bytecode) distributed lease library over JDBC (MySQL 8, PostgreSQL 14+), Redis 7 or
+Zookeeper (ADR 0010). Its whole contract: per lease name, at most one node holds a *valid* `Term` at a time (as far as
+its local clock can tell), every term carries a fencing token that strictly increases per name, and every
+`onElected(term)` is followed by exactly one `onRevoked(term, reason)`.
 
-That view is weakly consistent. A paused process can still act after its lease ended; only a protected resource that
-checks the fencing token (ADR 0002) can reject a stale owner. Never document or implement anything that promises more
-(no "no split-brain", no work continuing while the backend is unreachable).
+That view is weakly consistent. A paused process can still act after its term ended; only a protected resource that
+checks the fencing token can reject a stale owner. Never document or implement anything that promises more (no "no
+split-brain", no work continuing while the backend is unreachable).
 
 This file records what is not obvious from the code. Describe the code as it is; design direction belongs in
 `docs/adr/`. When an invariant below changes, change this file in the same PR.
@@ -19,197 +20,159 @@ This file records what is not obvious from the code. Describe the code as it is;
 ./gradlew <module>:test --tests <fully.qualified.TestClass>
 ./gradlew simba-example:check -PexampleBackend=jdbc|redis|zookeeper   # default: redis
 ./gradlew test -PtestJavaVersion=25                      # Tests on another JDK; bytecode stays 21
+./gradlew simba-testing:test -Psimba.simulation.seed=N   # Replay one SimulationSpec seed (-Psimba.simulation.seeds=N: more)
 ./gradlew codeCoverageReport                             # Aggregated JaCoCo report
 ```
 
 | Module check | Needs |
 |---|---|
 | `simba-core`, `simba-testing`, `simba-tck`, `simba-zookeeper`, `simba-spring-boot-starter` | Nothing (Zookeeper tests use embedded Curator `TestingServer`) |
-| `simba-spring-redis` | Docker: Testcontainers `redis:7.4-alpine` (`RedisFixture`) |
-| `simba-jdbc` | Docker: Testcontainers `mysql:8.4` (`MySqlFixture`, 4.x schema from `simba-jdbc/src/init-script/init-simba-mysql.sql`); `mysql:8.4` and `postgres:17` for `JdbcLeaseBackend` (`LeaseDatabaseFixture`, 5.x schema from `simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-*.sql`) |
+| `simba-redis` (tests also cover `simba-spring-redis`) | Docker: Testcontainers `redis:7.4-alpine` (`RedisFixture`) |
+| `simba-jdbc` | Docker: Testcontainers `mysql:8.4` and `postgres:17` (`LeaseDatabaseFixture`, schema from `simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-*.sql`) |
 
-CI (`.github/workflows/integration-test.yml`): `simba-core:check`, then the Redis, Zookeeper and JDBC module checks,
-the `simba-example` backend matrix, and a JDK 25 test run. Wiki commands are in `wiki/AGENTS.md`.
+CI (`.github/workflows/integration-test.yml`; job names are required checks, keep them): `Simba Core Test` (core,
+testing, tck, starter), `Simba Spring Redis Test` (simba-redis and simba-spring-redis), `Simba Zookeeper Test`,
+`Simba Jdbc Test`, `Simba Example (jdbc|redis|zookeeper)`, `Simba Test (JDK 25)`. Wiki commands are in
+`wiki/AGENTS.md`.
 
 ## Architecture
 
 ### Modules
 
 ```
-simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-spring-boot-starter
-              (simba-test: backend TCK)                              (simba-example: per-backend demo app)
+simba-core  ←  simba-jdbc | simba-redis ← simba-spring-redis | simba-zookeeper  ←  simba-spring-boot-starter
+simba-testing (in-memory backend, virtual time, simulation)    simba-tck (LeaseBackendSpec, FencingSpec)
+simba-example (per-backend demo app), simba-bom, simba-dependencies, code-coverage-report
 ```
 
-- `simba-core` knows no backend and depends only on kotlin-logging. Backend behavior stays in its module; shared API
-  types live in core.
-- `simba-test` holds the TCK every backend must pass (`MutexContendServiceSpec`, `LockSpec`, `MemberRegistrySpec`)
-  and `FencingSpec`, the kit users run against their own token-checking resource (ADR 0007).
-- `simba-bom`, `simba-dependencies`: publication metadata. `code-coverage-report`: JaCoCo aggregation only.
+- `simba-core` knows no backend and depends only on kotlin-logging. Packages: `me.ahoo.simba` (public API:
+  `Simba`, `SimbaConfig`, `Election`, `LeadershipListener`, `Term`, `RevokeReason`, `LeaderTask`, `Schedule`,
+  `DistributedLock`, `LockTerm`), `me.ahoo.simba.partition` (`PartitionGroup`, `GroupTask`, `PartitionAssignment`),
+  `me.ahoo.simba.event` (`SimbaEvent`, `SimbaEventListener`, `SimbaSnapshot`), `me.ahoo.simba.spi` (`LeaseBackend`,
+  `LeaseName`, `SessionId`, results), `me.ahoo.simba.engine` (`@InternalSimbaApi`, opt-in, not public API).
+- `simba-redis` holds the Redis backend and its Lua scripts behind the driver-neutral `RedisScripting` port; it must
+  not depend on Spring. `simba-spring-redis` only adapts Spring Data Redis (`SpringRedisScripting`).
+- `simba-tck`: `LeaseBackendSpec` every backend must pass, and `FencingSpec`, the kit users run against their own
+  token-checking resource (optionally with real terms of a backend).
+- `simba-testing`: `InMemoryLeaseBackend`, `VirtualClock`, `VirtualScheduler`, `Simulation` for users' unit tests.
 
 ### Layers (top to bottom)
 
-1. **User APIs** (`simba-core`): `MutexContender` callbacks (`AbstractMutexContender`); `SimbaLocker` (blocking
-   lock); `SimbaScheduler` / `AbstractScheduler` (leader-only periodic work, ADR 0004); `SimbaPartitionedScheduler`
-   (partitions spread over the live members of a group, ADR 0009). Starter adds
-   `@SimbaScheduled`, Micrometer metrics, the Actuator endpoint `simba` and the `simba` health indicator (ADR 0005,
-   0006, 0007).
-2. **`MutexContendService`** (one per contender and mutex, created by a `MutexContendServiceFactory`):
-   lifecycle, generations, ordered notification. Base: `AbstractMutexRetrievalService` → `AbstractMutexContendService`.
-3. **Contention engine**: `LeaseContendService` (ADR 0001) is the shared polling loop for JDBC and Redis: scheduling,
-   watchdog, retries, late-acquisition release. Zookeeper does not use it; it wraps Curator `LeaderLatch`.
-4. **`MutexLeaseStore`**: the only thing a polling backend implements — one atomic acquire/renew/release call per
-   invocation, no scheduling, no notification (`JdbcMutexLeaseStore`, `SpringRedisMutexLeaseStore`).
-
-`LeaseConfig` is the single place that validates `ttl` / `transition`. `ContendPeriod` computes the next attempt.
+1. **User APIs**: `Simba` (one per process: one backend session) → `election(name)` (`start(listener)`, `stop()`,
+   `stepDown(cooldown)`, `runWhileLeader`, `schedule`), `lock(name)` (`acquire(timeout)` / `tryAcquire()` →
+   `LockTerm`), `group(name, partitions)` (`schedule` / `runWhileLeader` per partition), `snapshot()`. The starter
+   adds the `Simba` bean, `@SimbaScheduled`, `@SimbaPartitioned`, Micrometer metrics, the Actuator endpoint `simba`
+   and the `simba` health indicator.
+2. **Engine**: `engine.step(state, event, now)` is pure (no threads, clock or I/O); `EngineShell` runs it on one loop
+   thread and executes its effects (backend calls, timers, callbacks, group views); `Simulation` runs it in virtual
+   time.
+3. **`LeaseBackend` SPI**: session open / keep-alive / close, batch acquire, release, group join / leave / members,
+   optional hints. No scheduling, no notification, no local lease state; remaining durations come back as durations
+   measured by the backend's clock.
 
 ## Invariants
 
-### Lease model
-- An owner holds `ttlAt` (renew deadline) and `transitionAt = ttlAt + transition` (grace period). Inside the grace
-  period only the current owner may renew; others may acquire only after `transitionAt`.
-- `ContendPeriod`: owners retry at `ttlAt`; contenders retry at `transitionAt` plus jitter in `[-200, 1000)` ms
-  (`[0, 1000)` when transition is zero).
-- JDBC: one `simba_mutex` row per mutex; the acquire `UPDATE` encodes the rule above using database time.
-- Redis: key `simba:{mutex}` with `PX = ttl + transition`; acquire is `SET NX`, renew (guard) is `SET XX` by the owner
-  only; release deletes the key and publishes `released` on the mutex channel so every contender contends at once.
-- Zookeeper: `LeaderLatch` at `/simba/{mutex}`; ttl/transition do not apply (`ttlAt = transitionAt = MAX`).
-
-### Fencing tokens (ADR 0002)
-- `MutexOwner.fencingToken` increases strictly per ownership term and is stable within it; `0` means none.
-- Zookeeper: the winning latch node's czxid, never its sequence number (container parents get reaped and restart
-  sequences).
-- Redis: `INCR simba:{mutex}:fence` on a successful `SET NX`; the term's token is stored in `simba:{mutex}:token`.
-  Nodes ignore broadcasts of their own acquisition.
-- JDBC (`simba.jdbc.fencing`, on by default): `fencing_token` advances inside the acquire `UPDATE` only on a new term.
-  That assignment must stay first in `SET`: MySQL evaluates `SET` left to right with already-updated values.
-
-### Lifecycle
-- `Status`: `INITIAL → STARTING → RUNNING → STOPPING → INITIAL`. A failed `start()` returns to `INITIAL`; services
-  restart with the same `contenderId`.
-- `stop()` always delivers a release (`MutexOwner.NONE`) notification, even if `stopContend()` throws. `stop()` throws
-  when not `RUNNING`; `close()` is idempotent (stops only when `RUNNING`).
-- Each `start()` begins a new generation. Notifications from an older generation are dropped; while inactive, only
-  `NONE` may be applied.
-- A late acquisition that completes after `stop()` must be released remotely — unless a restarted lifecycle with the
-  same `contenderId` is now active (releasing would kill the new lease). `LeaseContendService.adopt` owns this.
-- Local lease guard: each successful acquire/renew arms a watchdog at `transitionAt`, measured from when the call was
-  *sent*. It revokes local ownership if no renewal succeeds by then, even while a backend call hangs. A failed renew
-  keeps ownership while the lease is still valid and retries with halving backoff (min 100 ms); otherwise it revokes
-  and retries after `ttl`. With `transition = 0`, ownership can flap.
-- `leaseRemaining` / `ensureLease` (ADR 0007) read that watchdog deadline in `LeaseContendService` (lock-free, zero
-  until the acquisition is observed); other services derive it from `afterOwner`, unbounded on Zookeeper. It is a
-  hint to start a step, never a substitute for the fencing check.
-- `relinquish(cooldown)` (ADR 0008) keeps the service `RUNNING`. `LeaseContendService` releases the held lease and
-  defers every trigger (reschedules, `contendNow`) to the cooldown end, and gives back an in-flight acquisition won
-  meanwhile unreported. Zookeeper closes the latch and rejoins after the cooldown unless the latch epoch changed.
-  `start()` and `stop()` clear the cooldown.
-- The starter sets `JdbcMutexOwnerRepository.queryTimeout` to `simba.jdbc.ttl` (a call slower than the ttl could not keep ownership anyway).
-
-### Threading
-- Owner notifications run asynchronously through a `SequentialExecutor` over `handleExecutor` (library default
-  `ForkJoinPool.commonPool()`; the starter injects the dedicated `simbaHandleExecutor` bean). The state lock is never
-  held while callbacks run.
-- `stop()` returns only after its own `onReleased` ran (inline when called from a callback). Callers of `stop()` must
-  not hold locks their callbacks take. Keep callbacks short.
-- `LeaseContendService` separates a trigger `ScheduledExecutorService` (never blocks) from an `ioExecutor` running
-  `MutexLeaseStore` calls, with at most one call in flight per service and lifecycle. JDBC and Redis factories own
-  shared executors from `ContendExecutors` (daemon, idle threads reclaimed) and shut them down on `close()`. A directly
-  constructed service defaults to its own idle-reclaimed scheduler and runs I/O on the trigger thread.
-- `SimbaLocker` is owned by one thread at a time; interruption does not cancel `acquire()` (the flag is restored).
-- `SimbaScheduler` and `AbstractScheduler` share `ScheduledWorkRunner`: the worker executor is created on acquire,
-  work is cancelled with interrupt on release, and the executor is shut down on `stop()`. `stop()` / `relinquish()`
-  first cancel the work and wait for a running run (at most `leaseRemaining`, 30 s when unbounded), then release.
-- `ContendObserver` (ADR 0005) receives contention, ownership, watchdog and work events; observer failures are logged
-  and ignored. New backend factories/services take it as a trailing optional parameter.
-
-### Time
-- Lease decisions use backend time or monotonic offsets — never wall clocks mixed across nodes.
-- `MutexOwner` records `observedAt` (backend time) plus a monotonic anchor; `currentAt` advances it with
-  `System.nanoTime()`. JDBC observes database time (`current_at`). Redis derives `transitionAt` from the local clock
-  plus the key's `PTTL`, and `currentAt` defaults to the local wall clock.
-
-### Wire contracts (nodes of different versions may run together)
-- Redis names are built in both Kotlin (`RedisMutexKeys`) and Lua (`simba-spring-redis/src/main/resources/mutex_*.lua`):
-  `simba:{mutex}` (lease key and channel), `simba:{mutex}:fence`, `simba:{mutex}:token`. Pub/sub messages are
-  `{event}@@{ownerId}`; scripts take keys via `KEYS` and return arrays. Simba 4.0 requires every node on 3.2+.
-- Partitioned leadership (ADR 0009): `PartitionAssignment.weight` (FNV-1a 64 of `"$partition@$member"` mixed with
-  SplitMix64) must stay identical across versions, as must partition mutex names `{group}.{partition}`. Membership:
-  Redis sorted set `simba:{group}:members` scored by expiry in Redis `TIME` (`member_*.lua`); JDBC table
-  `simba_member(group_name, member_id, expire_at)` in database time; Zookeeper ephemeral nodes
-  `/simba-members/{group}/{memberId}`.
-- JDBC schema (MySQL-specific SQL):
-  `simba_mutex(mutex, acquired_at, ttl_at, transition_at, owner_id varchar(128), version, fencing_token)`.
-  Existing tables get `fencing_token` from `upgrade-simba-mysql-fencing-token.sql`.
-
-### Simba 5 engine (ADR 0010, phase 1; lives beside 4.x until phase 5)
-
-- Packages `me.ahoo.simba.spi` (`LeaseBackend`), `me.ahoo.simba.event`, `me.ahoo.simba.engine`; public API `SimbaClient`,
-  `Election`, `Term` in `me.ahoo.simba`. `simba-testing`: `InMemoryLeaseBackend`, `VirtualClock`, `Simulation`.
-- `engine.step(state, event, now)` is pure: no threads, clock or I/O. `EngineShell` runs it on one loop thread;
-  `Simulation` runs it in virtual time. Engine types are `@InternalSimbaApi` (opt-in), not public API.
-- A term is adopted only from the reply to the election's current attempt, before the session's local deadline
-  (`sentAt + remaining × (1 − drift) − margin`), and only with a token above every token the session released.
-  A term is revoked before its lease is released; releases carry the token, so a late one is a no-op.
-- Keep-alive replies list the leases the session owns: a term adopted before the request but missing from the reply is
-  revoked (`TAKEN_OVER`); an owned lease nobody holds or is acquiring is released.
+### Session and terms
+- One session per `Simba` client incarnation; a `SessionId` is never reused. An expired session is never revived:
+  the engine opens a new one and contends again.
+- Local deadline of a session = `sentAt + remaining × (1 − drift) − margin`, measured from when the keep-alive was
+  *sent*. `SimbaConfig` validates `renewInterval × 2 ≤ leaseDuration` and that the local validity exceeds one renew
+  interval. Defaults: lease 15 s, renew a third of it, drift 0.01, margin 50 ms.
+- A term is adopted only from the reply to the election's current attempt, before the session's local deadline, and
+  only with a token above every token the session released for that name. A term is revoked before its lease is
+  released; releases carry the token, so a late one is a no-op.
+- `Term.isValid` / `remaining()` are pure functions of the monotonic clock and the session's volatile deadline (no
+  watchdog thread); a revoked term never becomes valid again. They are hints to start a step, never a substitute for
+  the fencing check.
+- Keep-alive replies list the leases the session owns: a term adopted before the request but missing from the reply
+  is revoked (`TAKEN_OVER`); an owned lease nobody holds or is acquiring is released.
 - Handover (ADR 0010 contract 3): an election started with work (`runWhileLeader`, `schedule`, groups) keeps the
   lease of a stopped or stepped-down term in `ElectionState.Handover` until `Event.WorkExited` for that term or the
   session's local deadline at the stop, whichever comes first; terms without work release at once. A step-down
   cooldown counts from the step-down. Terms lost otherwise (deadline, take-over, expiry) are not waited for.
-- User primitives (phase 5a, beside 4.x): work runs once per term on a task of the client's work executor (virtual
-  threads), interrupted on revocation; failures become `SimbaEvent.WorkCompleted` and never touch the election.
-  `lock(name)` returns a `LockTerm` (the credential; one holder per name per client; a term lost other than by
-  release is not re-acquired). `group(name, n)`: the engine joins the group with every session and publishes member
-  views (`Effect.Members`); partition leases are `{group}.{p}`, assigned by `PartitionAssignment` over session ids.
-- Tests of the threaded client run on virtual time: `VirtualScheduler` plus direct I/O and callback executors, and
-  `awaitIdle()` between timers (see `VirtualSimba` in simba-testing tests); never sleep.
-- Engine changes must keep `SimulationSpec` (I1–I5 over 10⁴ seeds) green; replay a failure with
-  `./gradlew simba-testing:test -Psimba.simulation.seed=N`.
-- Every `LeaseBackend` passes `simba-tck`'s `LeaseBackendSpec` (phase 2): the SPI KDoc rules, one per test. A backend
-  with an injectable clock overrides `clock`; otherwise time-based tests poll until the backend's own lease ran out.
-- JDBC (`JdbcLeaseBackend` + `Dialect`: MySQL 8, PostgreSQL 14+): tables `simba_session`, `simba_lease`,
-  `simba_member`; every time comparison uses the dialect's `now` (database epoch ms, constant within a statement).
-  `simba_lease` rows are never deleted (the token never resets); release clears `session_id` only. A lease belongs to
-  its `session_id` only while that session is live. The MySQL acquire assigns `token` before `session_id` (left-to-right
-  `SET`). The 5.x `simba_member` differs from the 4.x table: use a separate database until 4.x JDBC is removed.
-- Redis (`me.ahoo.simba.redis.RedisLeaseBackend` in `simba-spring-redis`, Lua in `resources/me/ahoo/simba/redis/`):
-  lease hash `simba:lease:{name}` = `{session, token, expires}` never expires and is never deleted (release clears
+
+### Threading
+- The engine state is touched only by the loop thread. Backend calls run on the I/O executor (default: a virtual
+  thread per call) with a timeout of one renew interval; at most one keep-alive per session and one acquire per
+  election are in flight.
+- Callbacks run on one serial dispatcher per election over the callback executor (default virtual threads); the
+  engine never waits for a callback except through the futures of `stop()` / `stepDown()`. `close()` and
+  `LockTerm.close()` do not wait when called from a callback or leader work (they would wait for themselves).
+- Work runs once per term on a task of the work executor (virtual threads), interrupted on revocation; failures
+  become `SimbaEvent.WorkCompleted` and never touch the election. Schedules loop on that one task and call
+  `ensureValid` before each run.
+- `lock(name)`: one holder per name per client; a lock term lost other than by release is released for good, not
+  re-acquired.
+- Groups: the engine joins the group with every session and publishes member views (`Effect.Members`); each node runs
+  the partitions `PartitionAssignment` gives it over the session ids and hands the others over.
+- `SimbaEventListener` failures are logged and ignored; events are published from the loop thread.
+
+### Observability
+- `Simba.snapshot()` is read on the loop: session id, status (`OPENING`, `LIVE`, `SUSPENDED`, `CLOSED`), `validFor`,
+  `notLiveFor`, and per election status, token and remaining. `healthy` = not live for at most `leaseDuration`; the
+  starter's health indicator is exactly that rule.
+- Micrometer (starter): `simba.session.renew` (timer), `simba.session.state` (gauge per `state`),
+  `simba.leadership` (gauge per `name`), `simba.revocations` (counter per `name`, `reason`), `simba.work` (timer per
+  `name`, `outcome`).
+
+### Wire contracts
+- Lease names (`LeaseName`): 1–128 characters of `[A-Za-z0-9._:-]`. Partition `p` of group `g` is the lease
+  `{g}.{p}`; `PartitionAssignment.weight` (FNV-1a 64 of `"$partition@$member"` mixed with SplitMix64, members = session
+  ids) must stay identical across versions.
+- JDBC (`JdbcLeaseBackend` + `Dialect`): tables `simba_session`, `simba_lease`, `simba_member`; every time comparison
+  uses the dialect's `now` (database epoch ms, constant within a statement). `simba_lease` rows are never deleted (the
+  token never resets); release clears `session_id` only. A lease belongs to its `session_id` only while that session
+  is live. The MySQL acquire assigns `token` before `session_id` (left-to-right `SET`).
+- Redis (`me.ahoo.simba.redis.RedisLeaseBackend`, Lua in `simba-redis/src/main/resources/me/ahoo/simba/redis/`): lease
+  hash `simba:lease:{name}` = `{session, token, expires}` never expires and is never deleted (release clears
   `session`); `expires` is Redis `TIME`. Session hash `simba:session:{sid}` (PX) plus `:leases` / `:groups` index sets
   in the same slot; keep-alive, acquire and join fail once it is gone. A new term lasts as long as its session and
   keep-alive extends only `held`, so leases expire on their own. Groups: zset `simba:group:{g}` scored by expiry.
-  Release publishes `released` on the lease key, the only broadcast. Core logic sees Redis only through
-  `RedisScripting` (`SpringRedisScripting` adapts Spring Data Redis); with `routeBySlot` (Cluster) every script call
-  keeps to one hash slot. Group names follow the `LeaseName` rules.
+  Release publishes `released` on the lease key, the only broadcast. With `routeBySlot` (Cluster) every script call
+  keeps to one hash slot. Group names follow the `LeaseName` rules. `wait-replicas` makes a new term wait for `WAIT`.
 - Zookeeper (`ZookeeperLeaseBackend`): one raw `ZooKeeper` client per session, never reconnected to another session;
   `SessionId` = zk session id as 16 hex digits. Leases are ephemeral `/simba/leases/{name}`, owner = `ephemeralOwner`,
-  token = czxid (strictly increasing, not consecutive; the SPI and TCK only require strict increase). The client
-  heartbeats on its own, so a local watchdog closes a session no keep-alive started within `lease`; remaining is
-  `min(lease, negotiated timeout)`. A disconnected client fails `keepAlive` / `acquire`; a zk-expired one is `Expired`.
+  token = czxid (strictly increasing, not consecutive). Members are ephemeral `/simba/groups/{g}/{sid}`. A local
+  watchdog closes a session no keep-alive started within `lease`; remaining is `min(lease, negotiated timeout)`. A
+  disconnected client fails `keepAlive` / `acquire`; a zk-expired one is `Expired`.
+
+### Starter
+- Properties: `simba.enabled`, `simba.backend`, `simba.session.{lease-duration,renew-interval,drift,margin}`,
+  `simba.jdbc.{enabled,dialect,query-timeout}`, `simba.redis.{enabled,wait-replicas,wait-timeout,route-by-slot}`,
+  `simba.zookeeper.{enabled,connect-string,root,connection-timeout}`, `simba.scheduling.enabled`,
+  `simba.metrics.enabled`.
+- Each backend auto-configuration activates on `simba.enabled`, `simba.<backend>.enabled` (both default `true`) and
+  `simba.backend` (unset, or naming it), and defines the `LeaseBackend` bean unless the application has one.
+  `SimbaAutoConfiguration` fails startup when several backends are active without `simba.backend`, and builds the one
+  `Simba` bean over the `LeaseBackend` with every `SimbaEventListener` bean.
+- Shutdown order: `SimbaScheduledBeanPostProcessor` (phase `DEFAULT_PHASE`) stops `@SimbaScheduled` /
+  `@SimbaPartitioned` work and waits for the handover; `SimbaLifecycle` (phase `DEFAULT_PHASE - 4096`) then closes the
+  client, before lower-phase infrastructure such as connection factories stops.
+- JDBC `query-timeout` defaults to the session renew interval (the engine gives up on a call after it anyway).
 
 ## Change Playbooks
 
-- **Contention loop:** change `LeaseContendService` and cover the race deterministically in `LeaseContendServiceTest`
-  (manual scheduler and I/O executor; no real threads or sleeps).
-- **New polling backend:** implement `MutexLeaseStore` plus a factory and extend `MutexContendServiceSpec`. Do not
-  re-implement scheduling or generation checks in the backend.
-- **Redis Lua / naming:** change `RedisMutexKeys`, `SpringRedisMutexLeaseStore`, `AcquireResult` / `OwnerEvent` and
-  all three scripts together; keep mixed-version nodes working or document the upgrade order.
-- **JDBC SQL / schema:** only compatible widening without asking. Update the init script, the schema snippet in
-  `wiki/guide/backends.md` (EN and ZH), and check DB time vs JVM time.
-- **Starter:** each backend activates on `simba.enabled` and `simba.<backend>.enabled` (both default `true`) and on
-  `simba.backend` (unset, or naming it), plus its bean conditions. `SimbaAutoConfiguration` fails startup when several
-  backends are active without `simba.backend`. Keep `META-INF/spring/...AutoConfiguration.imports` and
-  `additional-spring-configuration-metadata.json` in sync with the properties.
+- **Engine:** change `step()` and cover it with `EngineTest`-style table tests (events in, effects out); keep
+  `SimulationSpec` (I1–I5 over 10⁴ seeds) green. Threaded-client tests run on virtual time: `VirtualScheduler`, direct
+  I/O and callback executors, `awaitIdle()` between timers (see `VirtualSimba`); never sleep.
+- **New backend:** implement `LeaseBackend` and extend `LeaseBackendSpec`; a backend with an injectable clock
+  overrides `clock`, otherwise time-based tests poll until the backend's own lease ran out. Add a starter
+  auto-configuration, a `SimbaBackend` entry and an example backend.
+- **Redis Lua / naming:** change `RedisLeaseKeys`, `RedisLeaseBackend` and the scripts together; every script call
+  must stay within one hash slot under `routeBySlot`.
+- **JDBC SQL / schema:** update both dialects and both init scripts; every time decision uses the database `now`.
+- **Starter:** keep `META-INF/spring/...AutoConfiguration.imports`, `additional-spring-configuration-metadata.json`
+  and `ConfigurationMetadataTest` in sync with the properties.
 
 ## Conventions
 
-- Package `me.ahoo.simba...`, four-space indentation, Apache license header, concise KDoc on public types.
+- Package `me.ahoo.simba...`, four-space indentation, Apache license header, concise KDoc on public types. Times in
+  the API are `Duration`, never `Long` milliseconds.
 - Constructor injection with immutable parameters; validate arguments at construction.
-- Logging: `io.github.oshai.kotlinlogging.KotlinLogging` with lazy messages that include `mutex` and `contenderId`.
+- Logging: `io.github.oshai.kotlinlogging.KotlinLogging` with lazy messages that include the lease name.
 - No exposed mutable state: no public setters or public `AtomicXxxFieldUpdater`s in new code.
-- Tests: JUnit Platform. New assertions use FluentAssert `.assert()`; keep existing Hamcrest assertions unless the test
-  is already being changed. MockK only where a real code path is impractical. Name tests after the behavior;
-  synchronize on latches/futures, never `sleep`.
+- Tests: JUnit Platform, FluentAssert `.assert()`. MockK only where a real code path is impractical. Name tests after
+  the behavior; synchronize on queues, latches or futures, never `sleep`.
 
 ## Git Workflow
 
@@ -221,17 +184,19 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
 ## Boundaries
 
 - **Always:** keep `README.md` / `README.zh-CN.md` and the wiki EN/ZH pages in sync.
-- **Ask first:** public API changes in `simba-core` (including `MutexOwner` fields/equality); Redis Lua results,
-  messages, or key names; JDBC SQL semantics or schema beyond compatible widening; default executors or thread model;
-  starter activation semantics; new dependencies; CI, publication, or signing changes; wiki navigation.
+- **Ask first:** public API changes in `simba-core`; `LeaseBackend` SPI changes; Redis Lua results, messages, or key
+  names; JDBC SQL semantics or schema; default executors or thread model; starter activation semantics; new
+  dependencies; CI, publication, or signing changes; wiki navigation.
 - **Never:** commit secrets, `build/`, `out/`, `logs/`, IDE metadata, or generated artifacts.
 
 ## Documentation Map
+
+`README*`, `llms.txt`, `wiki/` and `skills/` still describe Simba 4.x until ADR 0010 phase 6 rewrites them.
 
 | Path | Content |
 |---|---|
 | `README.md`, `README.zh-CN.md`, `llms.txt` | Entry points: what Simba is, install, one example per API (`llms.txt` mirrors `wiki/llms.txt`) |
 | `wiki/` | VitePress site, the authoritative docs; page ownership and rules in `wiki/AGENTS.md` |
-| `docs/adr/` | ADRs: 0001 lease engine, 0002 fencing token, 0003 Simba 4, 0004 leader scheduling, 0005 observability, 0006 Actuator endpoint, 0007 lease validity and health, 0008 relinquish and handover, 0009 partitioned leadership, 0010 Simba 5 target architecture |
+| `docs/adr/` | ADRs: 0001–0009 record the 4.x design and are superseded by 0010 (Simba 5 architecture) where they conflict; 0002 (fencing token) still holds |
 | `CONTRIBUTING.md`, `SECURITY.md`, `.github/` | Contribution workflow, quality gates, SemVer and releases; vulnerability reporting; templates, labeler, CODEOWNERS |
 | `skills/simba/`, `skills/simba-testing/` | Source skill docs; do not generate marketplace artifacts here |

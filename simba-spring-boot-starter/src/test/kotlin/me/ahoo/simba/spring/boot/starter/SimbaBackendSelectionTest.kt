@@ -10,24 +10,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package me.ahoo.simba.spring.boot.starter
 
 import io.mockk.mockk
 import me.ahoo.simba.spring.boot.starter.jdbc.SimbaJdbcAutoConfiguration
-import me.ahoo.simba.spring.boot.starter.redis.SimbaSpringRedisAutoConfiguration
-import me.ahoo.simba.spring.redis.SpringRedisMutexContendServiceFactory
-import me.ahoo.simba.zookeeper.ZookeeperMutexContendServiceFactory
+import me.ahoo.simba.spring.boot.starter.redis.SimbaRedisAutoConfiguration
+import me.ahoo.simba.spring.redis.SpringRedisScripting
+import me.ahoo.simba.zookeeper.ZookeeperLeaseBackend
 import org.assertj.core.api.AssertionsForInterfaceTypes.assertThat
 import org.junit.jupiter.api.Test
+import org.springframework.boot.LazyInitializationBeanFactoryPostProcessor
 import org.springframework.boot.autoconfigure.AutoConfigurations
 import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration
 import org.springframework.boot.test.context.FilteredClassLoader
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
+import org.springframework.context.support.GenericApplicationContext
 import javax.sql.DataSource
 
-/**
- * The test classpath carries all three backend modules.
- */
+/** The test classpath carries all three backend modules. */
 internal class SimbaBackendSelectionTest {
     private val contextRunner = ApplicationContextRunner()
         .withConfiguration(AutoConfigurations.of(SimbaAutoConfiguration::class.java))
@@ -44,12 +45,11 @@ internal class SimbaBackendSelectionTest {
     fun `ambiguity fails fast even with global lazy initialization`() {
         contextRunner
             .withInitializer { context ->
-                (context as org.springframework.context.support.GenericApplicationContext)
-                    .addBeanFactoryPostProcessor(org.springframework.boot.LazyInitializationBeanFactoryPostProcessor())
+                (context as GenericApplicationContext).addBeanFactoryPostProcessor(
+                    LazyInitializationBeanFactoryPostProcessor()
+                )
             }
-            .run {
-                assertThat(it).hasFailed()
-            }
+            .run { assertThat(it).hasFailed() }
     }
 
     @Test
@@ -70,15 +70,8 @@ internal class SimbaBackendSelectionTest {
     @Test
     fun `a single backend module needs no selection`() {
         contextRunner
-            .withClassLoader(
-                FilteredClassLoader(
-                    SpringRedisMutexContendServiceFactory::class.java,
-                    ZookeeperMutexContendServiceFactory::class.java
-                )
-            )
-            .run {
-                assertThat(it.getBean(SimbaBackendSelection::class.java).backend).isEqualTo("jdbc")
-            }
+            .withClassLoader(FilteredClassLoader(SpringRedisScripting::class.java, ZookeeperLeaseBackend::class.java))
+            .run { assertThat(it.getBean(SimbaBackendSelection::class.java).backend).isEqualTo("jdbc") }
     }
 
     @Test
@@ -95,24 +88,17 @@ internal class SimbaBackendSelectionTest {
             .withPropertyValues("simba.backend=redis")
             .withConfiguration(AutoConfigurations.of(SimbaJdbcAutoConfiguration::class.java))
             .withBean(DataSource::class.java, { mockk() })
-            .run {
-                assertThat(it).doesNotHaveBean(SimbaJdbcAutoConfiguration::class.java)
-            }
+            .run { assertThat(it).doesNotHaveBean(SimbaJdbcAutoConfiguration::class.java) }
     }
 
     @Test
     fun `redis auto-configuration requires the simba redis module, not only spring data redis`() {
         contextRunner
             .withPropertyValues("simba.backend=jdbc")
-            .withClassLoader(FilteredClassLoader(SpringRedisMutexContendServiceFactory::class.java))
+            .withClassLoader(FilteredClassLoader(SpringRedisScripting::class.java))
             .withConfiguration(
-                AutoConfigurations.of(
-                    DataRedisAutoConfiguration::class.java,
-                    SimbaSpringRedisAutoConfiguration::class.java
-                )
+                AutoConfigurations.of(DataRedisAutoConfiguration::class.java, SimbaRedisAutoConfiguration::class.java)
             )
-            .run {
-                assertThat(it).doesNotHaveBean(SimbaSpringRedisAutoConfiguration::class.java)
-            }
+            .run { assertThat(it).doesNotHaveBean(SimbaRedisAutoConfiguration::class.java) }
     }
 }

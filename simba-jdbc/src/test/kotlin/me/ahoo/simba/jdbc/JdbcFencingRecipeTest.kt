@@ -12,8 +12,8 @@
  */
 package me.ahoo.simba.jdbc
 
-import me.ahoo.simba.test.FencingSpec
-import org.junit.jupiter.api.AfterAll
+import me.ahoo.simba.spi.LeaseBackend
+import me.ahoo.simba.tck.FencingSpec
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.TestInstance
 
@@ -22,7 +22,7 @@ import org.junit.jupiter.api.TestInstance
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 internal class JdbcFencingRecipeTest : FencingSpec() {
-    private val dataSource = MySqlFixture.newDataSource()
+    private val dataSource = LeaseDatabaseFixture.mysql
 
     @BeforeAll
     fun createTable() {
@@ -41,10 +41,7 @@ internal class JdbcFencingRecipeTest : FencingSpec() {
         }
     }
 
-    @AfterAll
-    fun close() {
-        dataSource.close()
-    }
+    override fun leaseBackend(): LeaseBackend = JdbcLeaseBackend.mysql(dataSource)
 
     override fun write(resource: String, fencingToken: Long): Boolean {
         dataSource.connection.use { connection ->
