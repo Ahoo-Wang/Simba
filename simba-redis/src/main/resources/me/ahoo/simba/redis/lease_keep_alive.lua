@@ -27,9 +27,12 @@ local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 local first = 1
 local groups = {}
 if withSession then
-    if redis.call('PEXPIRE', KEYS[1], lease) == 0 then
+    -- PTTL answers 0 in the millisecond the session expires, while Redis still keeps the key (it drops a key only
+    -- once now > expiry): PEXPIRE alone would revive it. Acquire and join read the same boundary as expired.
+    if redis.call('PTTL', KEYS[1]) <= 0 then
         return { -1 }
     end
+    redis.call('PEXPIRE', KEYS[1], lease)
     redis.call('PEXPIRE', KEYS[2], lease)
     redis.call('PEXPIRE', KEYS[3], lease)
     groups = redis.call('SMEMBERS', KEYS[3])

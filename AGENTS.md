@@ -157,7 +157,8 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
 - Redis (`me.ahoo.simba.redis.RedisLeaseBackend`, Lua in `simba-redis/src/main/resources/me/ahoo/simba/redis/`): lease
   hash `simba:lease:{name}` = `{session, token, expires}` never expires and is never deleted (release clears
   `session`); `expires` is Redis `TIME`. Session hash `simba:session:{sid}` (PX) plus `:leases` / `:groups` index sets
-  in the same slot; keep-alive, acquire and join fail once it is gone. A new term lasts as long as its session and
+  in the same slot; keep-alive, acquire and join fail once its `PTTL` is 0 (Redis still keeps the key in that
+  millisecond, so a bare `PEXPIRE` would revive it). A new term lasts as long as its session and
   keep-alive extends only `held`, so leases expire on their own. Groups: zset `simba:group:{g}` scored by expiry.
   Release publishes `released` on the lease key, the only broadcast. With `routeBySlot` (Cluster) every script call
   keeps to one hash slot. Group names follow the `LeaseName` rules. `wait-replicas` makes a new term wait for `WAIT`.
