@@ -1,120 +1,174 @@
 ---
 title: Backends
-description: How the JDBC, Redis and Zookeeper backends store a lease, what each needs to run, and how each fails.
+description: How the JDBC (MySQL, PostgreSQL), Redis and Zookeeper backends store sessions, leases and group members, where fencing tokens come from, and how to operate each.
 ---
 
 # Backends
 
-All backends implement the same contract (see [Correctness](/guide/correctness)), verified by the shared
-[TCK](/contributing/#backend-tck). They differ in where the lease lives, which clock decides it, and what happens when
-the backend itself fails.
+Every backend implements the same `LeaseBackend` SPI and passes the same
+[TCK](/guide/testing#backend-tck), so elections, locks and groups behave the same on all of them. They differ in
+storage, in where time is measured, and in how durable the fencing token is.
 
-## JDBC (MySQL)
+Every backend follows the same rules: a session expires once it was not kept alive for its lease; an expired session
+is never revived; a lease belongs to a session only while that session is live; a lease's token is greater than zero,
+strictly increases with every new term and never resets; and every remaining time is measured by the backend's clock
+and returned as a duration.
 
-**Storage.** One row per mutex in `simba_mutex`. Create the table once with
-[`init-simba-mysql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/init-simba-mysql.sql);
-rows are inserted on first use.
+## JDBC (MySQL 8, PostgreSQL 14+)
+
+Module `simba-jdbc`, class `JdbcLeaseBackend` with a `Dialect` (`Dialect.MYSQL`, `Dialect.POSTGRESQL`):
+
+```kotlin
+val backend = JdbcLeaseBackend.mysql(dataSource)      // or JdbcLeaseBackend.postgres(dataSource)
+```
+
+### Schema
+
+Create the three tables once with the script of your database:
+[`init-simba-mysql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-mysql.sql)
+or
+[`init-simba-postgresql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-postgresql.sql)
+(both on the classpath under `me/ahoo/simba/jdbc/`). The MySQL version:
 
 ```sql
-create table if not exists simba_mutex
+create table if not exists simba_session
 (
-    mutex         varchar(66)     not null primary key comment 'mutex name',
-    acquired_at   bigint unsigned not null,
-    ttl_at        bigint unsigned not null,
-    transition_at bigint unsigned not null,
-    owner_id      varchar(128)    not null,
-    version       int unsigned    not null,
-    fencing_token bigint unsigned not null default 0
+    session_id char(32) character set ascii collate ascii_bin not null primary key,
+    expires_at bigint                                        not null comment 'database time, epoch ms',
+    metadata   varchar(1024)                                 not null default ''
+);
+
+create table if not exists simba_lease
+(
+    name       varchar(128) character set ascii collate ascii_bin not null primary key,
+    session_id char(32) character set ascii collate ascii_bin     not null default '' comment 'empty = free',
+    token      bigint                                             not null comment 'term number, never reset',
+    index idx_lease_session (session_id)
+);
+
+create table if not exists simba_member
+(
+    group_name varchar(128)                                  not null,
+    session_id char(32) character set ascii collate ascii_bin not null,
+    primary key (group_name, session_id),
+    index idx_member_session (session_id)
 );
 ```
 
-**Acquire and renew** are one conditional `UPDATE`, evaluated with the database clock: it succeeds when the lease has
-ended (`transition_at < now`) or when the caller already owns it and the lease has not ended. The row is then read
-back in the same transaction together with the database time (`current_at`), so lease decisions never compare wall
-clocks of different machines.
-
-**Fencing tokens** come from `fencing_token`, advanced in that `UPDATE` only when a new term starts. They are on by
-default (`simba.jdbc.fencing=true`). Tables created before 3.3 need
-[`upgrade-simba-mysql-fencing-token.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/upgrade-simba-mysql-fencing-token.sql),
-or set `simba.jdbc.fencing=false`.
-
-**Operating notes**
-
-- The SQL is MySQL-specific (`unix_timestamp(current_timestamp(3))`, `if(...)`, left-to-right `SET` evaluation).
-- Contenders poll: after a clean `stop()` the next owner takes over at its next scheduled attempt, not immediately.
-- The starter sets the statement timeout to `simba.jdbc.ttl`, so a hung query cannot block contention for longer
-  than one lease.
-- Database unavailable: owners keep ownership while their lease is valid, then revoke it locally. Nobody owns the
-  mutex until the database is back.
-
-## Redis
-
-**Storage.** Three keys per mutex, sharing the `{mutex}` hash tag so they live in one cluster slot:
-
-| Key | Content | Expiry |
+| Table | One row per | Notes |
 |---|---|---|
-| `simba:{mutex}` | Owner's contender id; also the pub/sub channel | `ttl + transition` |
-| `simba:{mutex}:fence` | Fencing counter | Never |
-| `simba:{mutex}:token` | Fencing token of the current term | With the lease |
+| `simba_session` | Session | `expires_at` in database time; one `UPDATE` per keep-alive renews the session and, through it, every lease and membership of the node |
+| `simba_lease` | Lease name ever acquired | Never deleted, so the token never resets; release sets `session_id` to `''` and keeps the token |
+| `simba_member` | Group member | Live only while its session is |
 
-**Acquire** is `SET NX PX` in a Lua script that, on success, increments the counter and publishes
-`acquired@@{contenderId}`. **Renew** is `SET XX PX` by the owner only. **Release** deletes the lease and publishes
-`released@@{contenderId}`, which makes every subscribed contender contend immediately. Each node derives `transitionAt`
-from the key's `PTTL` and its local clock.
+Lease names are case-sensitive (binary collation on MySQL, `"C"` on PostgreSQL).
 
-**Operating notes**
+### How It Works
 
-- **Persistence matters for fencing.** The counter only increases across Redis restarts if it is persisted (AOF with
-  `appendfsync always` or equivalent). Without persistence a restart resets it and tokens can go backwards.
-- Replication is asynchronous: a failover to a replica that missed the latest `SET` can grant a second lease. Use
-  fencing tokens if that matters, or use a backend with synchronous replication.
-- Mixed versions: 4.x nodes require every node of the same mutex to run Simba 3.2 or later.
+- A lease belongs to the session in `session_id` only while that session's `expires_at` is in the future. Acquire is
+  one upsert that takes the row when it is free or its session expired and advances `token` by one. On MySQL the
+  `token` assignment comes first in `SET`, because MySQL evaluates `SET` left to right with already-updated values.
+- Every time comparison uses the database's own clock (`now` in epoch milliseconds, constant within a statement), so
+  application hosts' clocks never matter.
+- Expired sessions are cleaned up lazily: a lease of an expired session is free for the next acquirer, and a
+  keep-alive that finds its session expired removes it. `JdbcLeaseBackend.purgeExpired()` removes the rest; call it
+  from time to time if many short-lived processes leave rows behind.
+
+### Operating Notes
+
+- A release does not notify anyone: after a clean stop, candidates take over at their next attempt
+  (`renewInterval / 2` plus jitter).
+- Each statement has a timeout; the starter sets it to the session renew interval (`simba.jdbc.query-timeout`), after
+  which the engine gives up on the call anyway.
+- Give Simba a connection pool that is not starved by the application: a keep-alive that waits for a connection
+  longer than the renew interval counts as failed.
+
+## Redis 7
+
+Module `simba-redis` (driver-neutral, Lua scripts behind the `RedisScripting` port) and `simba-spring-redis`
+(`SpringRedisScripting`, the Spring Data Redis adapter):
+
+```kotlin
+val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
+```
+
+### Keys
+
+| Key | Type | Content |
+|---|---|---|
+| `simba:lease:{name}` | Hash, never expires | `session`, `token`, `expires` (Redis `TIME`); release clears `session` only, so the token never resets |
+| `simba:session:{sid}` | Hash with `PX` = lease | The session; keep-alive, acquire and join fail once it is gone |
+| `simba:session:{sid}:leases` | Set, same slot | Leases of the session |
+| `simba:session:{sid}:groups` | Set, same slot | Groups the session joined |
+| `simba:group:{group}` | Sorted set | Members (session ids) scored by expiry in Redis time |
+
+Release publishes `released` on the lease key's channel (`simba:lease:{name}`); it is the only broadcast and lets
+candidates take over at once. Every time decision uses Redis `TIME` inside the scripts.
+
+A new term lasts as long as its session, and a keep-alive extends only the leases the node still holds, so leases
+expire on their own even if a session key outlives them.
+
+### Cluster
+
+On a Redis Cluster (`RedisScripting.clustered`, or `simba.redis.route-by-slot=true`) every script call keeps to one
+hash slot: a call first touches the session's slot, then runs one script per slot of the remaining keys. The lease
+and session slots may then live on nodes whose clocks differ; a skew between them shortens or lengthens leases by that
+much.
+
+### Token Regression after a Failover
+
+Redis replication is asynchronous. When a master fails before a replica received the latest `token` increment, the
+promoted replica can hand out a token that was already used, or a lower one. A resource that checks tokens can then
+accept a write from a node whose term is newer in time but lower in token, or reject a legitimate owner.
+
+- Set `simba.redis.wait-replicas` (constructor parameter `waitReplicas`): a new term counts only once that many
+  replicas acknowledged it with `WAIT`, otherwise the acquisition fails. This narrows the window; it does not close it,
+  and it is not available on a Cluster.
+- Enable persistence (AOF) so a restart of a single node does not reset tokens.
+- When fencing must be strict, use JDBC or Zookeeper.
 
 ## Zookeeper
 
-**Storage.** A Curator `LeaderLatch` at `/simba/{mutex}`: each contender creates an ephemeral sequential node, and the
-lowest one leads. There is no TTL: `ttl` and `transition` do not apply, and leadership ends when the leader closes its
-latch or its session expires. Provide a started `CuratorFramework` bean; the starter does not create one.
+Module `simba-zookeeper`, class `ZookeeperLeaseBackend`:
 
-**Fencing tokens** are the `czxid` of the winning latch node. ZooKeeper transaction ids grow monotonically across the
-ensemble, so each new leader gets a larger token. (The node's sequence number would not work: the parent is a
-container node that ZooKeeper deletes when empty, which restarts the sequence.)
-
-**Operating notes**
-
-- Failover after a crash takes the session timeout configured on your `CuratorFramework`.
-- On connection loss (`SUSPENDED`) Curator revokes leadership; the node contends again after reconnecting and gets a
-  new token.
-- Simba observes only its own leadership on Zookeeper: non-leaders do not know who leads, and the
-  [`simba` endpoint](/guide/observability#actuator-endpoint) shows no current owner on them. Contention metrics are
-  not reported because Curator performs the contention.
-
-## Membership for Partitioned Scheduling
-
-`SimbaPartitionedScheduler` needs to know which nodes are alive. Each backend provides a `MemberRegistry`; the starter
-registers it as a bean ([ADR 0009](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0009-partitioned-leadership.md)).
-
-| Backend | Storage | Expiry |
-|---|---|---|
-| JDBC | Table `simba_member`, one row per member | `expire_at` in database time; refreshed by heartbeats |
-| Redis | Sorted set `simba:{group}:members`, scored by expiry | Redis `TIME`, pruned on every heartbeat and read |
-| Zookeeper | Ephemeral node `/simba-members/{group}/{memberId}` | With the Curator session |
-
-The JDBC table is in `init-simba-mysql.sql`. For an existing schema, run
-[`upgrade-simba-mysql-member.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/init-script/upgrade-simba-mysql-member.sql). Only partitioned scheduling needs it; mutexes work without it.
-
-```sql
-create table if not exists simba_member
-(
-    group_name varchar(66)     not null,
-    member_id  varchar(128)    not null,
-    expire_at  bigint unsigned not null,
-    primary key (group_name, member_id)
-);
+```kotlin
+val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba")
 ```
+
+### Nodes
+
+| Path | Kind | Content |
+|---|---|---|
+| `{root}/leases/{name}` | Ephemeral | The session id; the owner is the node's `ephemeralOwner`, the token its `czxid` |
+| `{root}/groups/{group}/{sessionId}` | Ephemeral, under a container node | Group member |
+
+`root` defaults to `/simba`.
+
+### How It Works
+
+- A Simba session is one Zookeeper session: the backend opens a dedicated Zookeeper client per session (it does not
+  use a shared Curator client) and never reconnects it to another session. The `SessionId` is the Zookeeper session id
+  as 16 hex digits.
+- The token is the lease node's `czxid`: strictly increasing across terms because zxids are global, but not
+  consecutive.
+- Release deletes the node; candidates watch it and take over at once. Group membership changes are watched too.
+- The Zookeeper client heartbeats on its own, so a local watchdog closes a session that no keep-alive renewed within
+  the lease: a node that stopped renewing never keeps its leases through heartbeats alone.
+- Remaining time is `min(leaseDuration, negotiated session timeout)`. While the client is disconnected, keep-alive and
+  acquire fail, so the local deadline runs out; when Zookeeper reports the session expired, the session is `Expired`.
+
+### Operating Notes
+
+- The session timeout requested is `leaseDuration`; the ensemble clamps it to `[minSessionTimeout,
+  maxSessionTimeout]` (by default 2 to 20 ticks). Failover after a crash takes the negotiated timeout.
+- `simba.zookeeper.connection-timeout` bounds how long opening a session may take.
 
 ## Selecting a Backend in Spring Boot
 
-Each backend activates when its module is on the classpath, `simba.enabled` and `simba.<backend>.enabled` are `true`
-(the default), and its infrastructure bean exists. If more than one backend module is active, set
-`simba.backend=jdbc|redis|zookeeper`; startup fails otherwise, instead of depending on auto-configuration order.
+Each backend auto-configuration activates when its module is on the classpath, `simba.enabled` and
+`simba.<backend>.enabled` are not `false`, and `simba.backend` is unset or names it. It defines the `LeaseBackend`
+bean unless the application defines one.
+
+With several backend modules on the classpath, set `simba.backend=jdbc|redis|zookeeper`; startup fails otherwise, and
+also when `simba.backend` names a backend that is not active. To use a backend the starter does not configure (or a
+`LeaseBackend` of your own), define the `LeaseBackend` bean yourself. See [Spring Boot](/guide/configuration).

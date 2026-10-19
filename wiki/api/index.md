@@ -1,182 +1,167 @@
 ---
 title: API Reference
-description: The public types of Simba — contend services, contenders, owners, locker, schedulers, observers and the backend SPI.
+description: The public types of Simba 5 and their contracts — Simba, Election, Term, DistributedLock, Schedule, PartitionGroup, SimbaEvent, SimbaSnapshot, the LeaseBackend SPI and the Spring annotations.
 ---
 
 # API Reference
 
-All types are in `simba-core` unless noted. Package `me.ahoo.simba` is abbreviated as `simba`.
+Public API lives in `me.ahoo.simba` (`simba-core`) and its subpackages `partition`, `event` and `spi`. Times are always
+`java.time.Duration`. Types in `me.ahoo.simba.engine` and members marked `@InternalSimbaApi` require an opt-in and are
+not public API.
 
-## Contending
+## Client — `me.ahoo.simba`
 
-### `MutexContendServiceFactory` — `simba.core`
+### `Simba`
 
-```kotlin
-interface MutexContendServiceFactory {
-    fun createMutexContendService(mutexContender: MutexContender): MutexContendService
-}
-```
-
-Entry point of every API. Implementations: `JdbcMutexContendServiceFactory`, `SpringRedisMutexContendServiceFactory`,
-`ZookeeperMutexContendServiceFactory` (see [Configuration](/guide/configuration#without-spring)). The JDBC and Redis
-factories are `AutoCloseable` and own their executors.
-
-### `MutexContender` / `AbstractMutexContender` — `simba.core`
+One client per process: one backend session, with every election, lock and group attached to it. `AutoCloseable`.
 
 | Member | Description |
 |---|---|
-| `mutex: String` | Name of the mutex. Contenders with the same name compete. |
-| `contenderId: String` | Unique id of this contender. Default: `ContenderIdGenerator.HOST` (`counter:pid@host`). |
-| `onAcquired(mutexState)` | This contender became the owner. |
-| `onReleased(mutexState)` | This contender stopped being the owner (released, lost, revoked or stopped). |
+| `Simba.builder()` | Builder; see [Without Spring](/guide/configuration#without-spring) |
+| `config: SimbaConfig` | The session timing |
+| `election(name): Election` | The election of `name`; handles of the same name share one election |
+| `lock(name): DistributedLock` | The lock on `name`; a lock and an election of the same name share one lease |
+| `group(name, partitions): PartitionGroup` | The partition group `name` with `partitions` partitions |
+| `snapshot(): SimbaSnapshot` | The session and every started election, without calling the backend |
+| `closeAsync(): CompletionStage<Void>` | Revokes every term, closes the session; completes after the last callback ran |
+| `close()` | `closeAsync()` and wait, except inside a callback or leader work |
 
-Extend `AbstractMutexContender(mutex, contenderId = ...)`; it validates both values and logs the callbacks. Callbacks
-run on the handle executor, in order and never concurrently for one contender.
+Names follow the lease name rules: 1–128 characters of `[A-Za-z0-9._:-]`; anything else throws
+`IllegalArgumentException`. After `close()`, every method that starts something throws `IllegalStateException`.
 
-### `MutexContendService` — `simba.core`
+### `SimbaConfig`
 
-Created by a factory for one contender; `AutoCloseable`.
+`data class SimbaConfig(leaseDuration = 15s, renewInterval = leaseDuration / 3, drift = 0.01, margin = 50ms,
+retryJitter = renewInterval / 2, minBackoff = 100ms)`. Construction validates `renewInterval × 2 ≤ leaseDuration` and
+`leaseDuration × (1 − drift) − margin > renewInterval`. See [Timing](/guide/correctness#timing).
+
+## Elections — `me.ahoo.simba`
+
+### `Election`
 
 | Member | Description |
 |---|---|
-| `start()` / `stop()` | Start or stop contending. `stop()` throws unless `RUNNING`, delivers `onReleased` if owner, and returns after it ran. |
-| `close()` | Idempotent `stop()`. |
-| `status` | `INITIAL → STARTING → RUNNING → STOPPING → INITIAL`. A failed `start()` returns to `INITIAL`; services are restartable. |
-| `running` | `status` is `STARTING` or `RUNNING`. |
-| `isOwner` | This contender owns the mutex (local, weakly consistent view). |
-| `isInTtl` | Owner and before `ttlAt`. |
-| `fencingToken` | Token of the current term while owner, else `0`. |
-| `leaseRemaining` | How long local ownership stays valid: `Duration.ZERO` when not owner, `UNBOUNDED_LEASE` on Zookeeper. Lease backends measure it to the lease watchdog's deadline. |
-| `ensureLease(minRemaining)` | Throws `LeaseExpiredException` unless `leaseRemaining` exceeds `minRemaining` (default zero). |
-| `relinquish(cooldown)` | Releases ownership if held and stays out of contention for `cooldown`, then contends again; stays `RUNNING`. Throws unless running. |
-| `afterOwner` / `beforeOwner` / `mutexState` | Last observed owner and the previous one. |
-| `hasOwner()` | Someone holds a lease that has not ended. |
+| `name: LeaseName` | The lease name |
+| `start(listener)` | Starts contending; throws `IllegalStateException` when already started |
+| `stop(): CompletionStage<Void>` | Stops contending; completes after the last `onRevoked` ran (at once when not started) |
+| `stepDown(cooldown): CompletionStage<Void>` | Gives up the current term and does not contend for `cooldown`; stays started |
+| `runWhileLeader(executor?, work): LeaderTask` | Starts the election and runs `work` once per term |
+| `schedule(schedule, work): LeaderTask` | Starts the election and runs `work` on `schedule` while leader |
 
-### `MutexState` and `MutexOwner` — `simba.core`
+Contract: every `onElected(term)` is followed by exactly one `onRevoked(term, reason)`; callbacks of one election run
+one at a time, in order; the engine never waits for a callback except through the futures of `stop()` and
+`stepDown()`; after `stop()` completed, no more callbacks.
 
-`MutexState(before, after)` is passed to callbacks; `isAcquired(id)` / `isReleased(id)` tell which transition happened.
-
-`MutexOwner` is an immutable value describing a lease:
-
-| Field | Description |
-|---|---|
-| `ownerId` | Owner's contender id; `""` for `MutexOwner.NONE`. |
-| `acquiredAt`, `ttlAt`, `transitionAt` | Epoch millis on the backend clock. `Long.MAX_VALUE` for Zookeeper (no lease). |
-| `fencingToken` | Token of the term, `0` when none. |
-| `observedAt`, `currentAt` | Backend time when observed, and that time advanced by the local monotonic clock. |
-
-Equality ignores `observedAt`.
-
-## Locking — `simba.locker`
+### `LeadershipListener`
 
 ```kotlin
-interface Locker : AutoCloseable {
-    fun acquire()                      // waits until owner
-    fun acquire(timeout: Duration)     // throws TimeoutException
-    val fencingToken: Long
-    val leaseRemaining: Duration        // Duration.ZERO when not held
-    fun ensureLease(minRemaining: Duration = Duration.ZERO)  // throws LeaseExpiredException
-}
-class SimbaLocker(mutex: String, contendServiceFactory: MutexContendServiceFactory) : Locker
-```
-
-`close()` stops contending and releases the mutex. A locker is owned by one thread at a time (`acquire` from a second
-thread throws `IllegalMonitorStateException`); interruption does not cancel `acquire()`, and the interrupt flag is
-restored. A failed `acquire` closes the locker.
-
-## Scheduling — `simba.schedule`
-
-### `SimbaScheduler`
-
-```kotlin
-class SimbaScheduler(
-    mutex: String,
-    contendServiceFactory: MutexContendServiceFactory,
-    config: ScheduleConfig,
-    worker: String = mutex,          // thread name prefix
-    work: ScheduledWork              // fun interface: work(context: ScheduleContext)
-) : AutoCloseable
-```
-
-Members: `start()`, `stop()`, idempotent `close()`, `relinquish(cooldown)`, `running`, `isLeader`, `fencingToken`. When
-the node acquires the mutex, a single-thread executor is created and runs the work; on release the run is cancelled
-with interruption. A node that never leads holds no work thread. `stop()` and `relinquish(cooldown)` first cancel the
-work and wait for a running run (at most the remaining lease, 30 s when unbounded), then release the mutex.
-
-`ScheduleConfig.delay(initialDelay, period)` runs with a fixed delay between runs; `ScheduleConfig.rate(initialDelay,
-period)` at a fixed rate. `ScheduleContext` exposes `mutex`, `fencingToken`, `leaseRemaining` and `ensureLease(minRemaining)`. A failed run is logged and the next one
-still runs.
-
-`AbstractScheduler(mutex, factory)` offers the same semantics by subclassing (`config`, `worker`, `work()`,
-protected `fencingToken`, `leaseRemaining`, `ensureLease()`, public `relinquish(cooldown)`); prefer `SimbaScheduler`.
-
-### `SimbaPartitionedScheduler` — `simba.partition`
-
-```kotlin
-class SimbaPartitionedScheduler(
-    group: String,
-    partitions: Int,
-    contendServiceFactory: MutexContendServiceFactory,
-    memberRegistry: MemberRegistry,
-    config: ScheduleConfig,
-    membershipTtl: Duration = 15s,
-    memberId: String = generated,
-    worker: String = group,
-    work: PartitionedWork            // fun interface: work(context: PartitionContext)
-) : AutoCloseable
-```
-
-Members: `start()` (joins the group, failing when the registry is unreachable), `stop()` (stops every partition, then
-leaves), idempotent `close()`, `running`, `members`, `assignedPartitions`, `ownedPartitions`. The node heartbeats every
-`membershipTtl / 3` and runs a `SimbaScheduler` on mutex `{group}.{partition}` for each partition that
-`PartitionAssignment.ownerOf(partition, members)` gives it. `PartitionContext` extends `ScheduleContext` with
-`group`, `partition` and `partitions`. When the registry is unreachable, the node keeps its current partitions.
-
-`MemberRegistry` (`heartbeat(group, memberId, ttl)`, `leave`, `members`) is implemented by `JdbcMemberRegistry`,
-`SpringRedisMemberRegistry` and `ZookeeperMemberRegistry`; `simba-test` provides `MemberRegistrySpec`.
-
-### `@SimbaScheduled` — `simba-spring-boot-starter`, `simba.spring.boot.starter.scheduling`
-
-| Attribute | Description |
-|---|---|
-| `mutex` | Mutex whose leader runs the method; unique per application. |
-| `fixedDelay` / `fixedRate` | Exactly one. Spring Boot duration, placeholders allowed. |
-| `initialDelay` | Delay after becoming leader. Default `0s`. |
-| `worker` | Thread name prefix. Default: `mutex`. |
-
-The method takes no parameter or one `ScheduleContext`. The starter registers a `SimbaScheduler` per method, starts it
-after context refresh and stops it on shutdown; `SimbaScheduler` beans are managed the same way. Invalid declarations,
-duplicate mutexes, or a missing `MutexContendServiceFactory` fail startup.
-
-## Observing — `simba.core`
-
-`ContendObserver` receives events from a contend service; every method defaults to a no-op, and exceptions are logged
-and ignored. Pass it to a factory (or declare it as a bean with the starter).
-
-| Method | When | Backends |
-|---|---|---|
-| `onStarted(service)` / `onStopped(service)` | `start()` succeeded / `stop()` completed | All |
-| `onContend(mutex, renew, durationNanos, outcome)` | A backend round trip ended: `OWNER`, `OTHER` or `FAILED` | JDBC, Redis |
-| `onAcquired(mutex)` / `onReleased(mutex)` | This contender gained / lost ownership | All |
-| `onLeaseExpired(mutex)` | The lease watchdog revoked ownership; `onReleased` follows | JDBC, Redis |
-| `onWork(mutex, durationNanos, outcome)` | A scheduler run ended: `SUCCESS`, `FAILED` or `INTERRUPTED` | All |
-
-See [Observability](/guide/observability) for the Micrometer metrics and Actuator endpoint built on it.
-
-## Backend SPI — `simba.core`
-
-To add a polling backend, implement one atomic storage call and reuse the engine:
-
-```kotlin
-interface MutexLeaseStore {
-    /** Acquire, or renew when [renew] is true; return the owner the backend observed afterwards. */
-    fun contend(mutex: String, contenderId: String, renew: Boolean, config: LeaseConfig): MutexOwner
-    /** Release when held by [contenderId]; true when this call released it. */
-    fun release(mutex: String, contenderId: String): Boolean
+interface LeadershipListener {
+    fun onElected(term: Term)
+    fun onRevoked(term: Term, reason: RevokeReason)
 }
 ```
 
-`LeaseContendService(contender, handleExecutor, leaseStore, leaseConfig, scheduler, ioExecutor, observer)` runs the
-contention loop, lease watchdog and lifecycle for it. `LeaseConfig(ttl, transition, initialDelay)` validates the
-durations. `ContendExecutors` creates the default scheduler, I/O and callback executors. See
-[Contributing](/contributing/#adding-a-backend).
+### `LeaderWork` and `LeaderTask`
+
+`fun interface LeaderWork { fun run(term: Term) }` may throw; failures become `SimbaEvent.WorkCompleted` and never
+affect the election. `LeaderTask` (`AutoCloseable`) exposes `election`, `stop(): CompletionStage<Void>` (completes once
+the work exited or timed out and the lease is released) and `close()`. See [Leader Work](/guide/leader-work).
+
+### `Schedule`
+
+`Schedule.fixedDelay(delay, initialDelay = 0)`, `Schedule.fixedRate(period, initialDelay = 0)`,
+`withInitialDelay(initialDelay)`; `mode`, `period`, `initialDelay`. The period must be positive. A fixed-rate run that
+overruns skips the missed starts.
+
+## Terms — `me.ahoo.simba`
+
+### `Term`
+
+| Member | Description |
+|---|---|
+| `name: LeaseName` | The lease name |
+| `token: Long` | Fencing token: `> 0`, constant within the term, strictly increasing across terms of the name |
+| `isValid: Boolean` | Not revoked and the session's local deadline has not passed |
+| `remaining(): Duration` | Time left before the local deadline; `ZERO` once the term ended |
+| `ensureValid(minRemaining = ZERO)` | Throws `LeaseExpiredException` unless valid for more than `minRemaining` |
+| `revoked: CompletionStage<RevokeReason>` | Completes exactly once, when the term is revoked |
+
+### `RevokeReason`
+
+`STOPPED`, `STEPPED_DOWN`, `SESSION_EXPIRED`, `DEADLINE_PASSED`, `TAKEN_OVER`; see
+[Leases, Terms and Tokens](/guide/correctness#leases-terms-and-tokens).
+
+## Locks — `me.ahoo.simba`
+
+| Type | Members |
+|---|---|
+| `DistributedLock` | `name`; `acquire(timeout): LockTerm` (throws `LockTimeoutException`); `tryAcquire(): LockTerm?` |
+| `LockTerm : Term, AutoCloseable` | `releaseAsync(): CompletionStage<Void>`; `close()` (idempotent) |
+| `LockTimeoutException` | `name`, `timeout` |
+
+See [Locks](/guide/locks).
+
+## Partitions — `me.ahoo.simba.partition`
+
+| Type | Members |
+|---|---|
+| `PartitionGroup` | `name`, `partitions`; `schedule(schedule, work): GroupTask`; `runWhileLeader(work): GroupTask` |
+| `PartitionWork` | `fun run(term: Term, partition: Int)` |
+| `GroupTask : AutoCloseable` | `group`; `partitions(): Set<Int>` (this node's partitions in its latest view); `stop()`; `close()` |
+| `PartitionAssignment` | `ownerOf(partition, members)`, `partitionsOf(member, partitions, members)`, `weight(partition, member)`: rendezvous hashing (FNV-1a 64 mixed with SplitMix64), identical across versions |
+
+## Events and Snapshot — `me.ahoo.simba.event`
+
+| Type | Members |
+|---|---|
+| `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`; exceptions are logged and ignored |
+| `SimbaEvent` | `SessionOpened`, `SessionRenewed`, `SessionSuspended`, `SessionExpired`, `Elected`, `Revoked`, `AcquireFailed`, `WorkCompleted` |
+| `WorkOutcome` | `COMPLETED`, `FAILED`, `CANCELLED` |
+| `SimbaSnapshot` | `session: SessionSnapshot`, `elections: List<ElectionSnapshot>`, `leaseDuration`, `healthy` |
+| `SessionSnapshot` | `id`, `status` (`OPENING`, `LIVE`, `SUSPENDED`, `CLOSED`), `validFor`, `notLiveFor` |
+| `ElectionSnapshot` | `name`, `status` (`CANDIDATE`, `LEADER`, `COOLDOWN`, `HANDOVER`), `token`, `remaining` |
+
+See [Observability](/guide/observability).
+
+## Backend SPI — `me.ahoo.simba.spi`
+
+```kotlin
+interface LeaseBackend : AutoCloseable {
+    val capabilities: Capabilities                    // releaseHints, membershipHints, maxBatch
+    fun openSession(lease: Duration, metadata: Map<String, String> = emptyMap()): SessionGrant
+    fun keepAlive(session: SessionId, lease: Duration, held: Set<LeaseName>): KeepAliveResult   // Live(remaining, owned) | Expired
+    fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult>      // Granted(token) | HeldBy(session, token)
+    fun release(session: SessionId, leases: Map<LeaseName, Long>)
+    fun closeSession(session: SessionId)
+    fun join(session: SessionId, group: String)
+    fun leave(session: SessionId, group: String)
+    fun members(group: String): List<SessionId>
+    fun subscribe(listener: BackendHintListener): AutoCloseable   // optional Released / MembersChanged hints
+}
+```
+
+Rules every implementation follows (checked by [`LeaseBackendSpec`](/guide/testing#backend-tck)):
+
+- every method is one backend round trip (or one per slot), with no scheduling, no notification and no local state;
+- every remaining duration is computed with the backend's clock and returned as a duration, never a timestamp;
+- a token is greater than zero, strictly increases with every new term of its name and never resets;
+- a session expires once it was not kept alive for its lease, even if the transport keeps a connection alive;
+- an expired session is never revived: `keepAlive` answers `Expired`, `acquire` throws `SessionExpiredException`;
+- `release` frees only leases the session still owns with exactly the given token, so a stale release is a no-op;
+- hints only accelerate; losing one never affects correctness.
+
+Value types: `LeaseName` (1–128 characters of `[A-Za-z0-9._:-]`), `SessionId` (never reused), `Ticker` (monotonic
+nanoseconds). Implementations: `JdbcLeaseBackend`, `RedisLeaseBackend`, `ZookeeperLeaseBackend`,
+`InMemoryLeaseBackend`; see [Backends](/guide/backends).
+
+## Spring Boot — `me.ahoo.simba.spring.boot.starter`
+
+| Type | Description |
+|---|---|
+| `@SimbaScheduled(name, fixedDelay, fixedRate, initialDelay)` | Runs a method `()` or `(Term)` on `election(name).schedule(...)` |
+| `@SimbaPartitioned(group, partitions, fixedDelay, fixedRate, initialDelay)` | Runs a method `(Term, Int)` on `group(group, partitions).schedule(...)` |
+| `SimbaEndpoint` | Actuator endpoint `simba` |
+| `SimbaHealthIndicator` | Health indicator `simba` |
+| `MicrometerSimbaEventListener` | Micrometer meters from `SimbaEvent`s |
+
+See [Spring Boot](/guide/configuration) and [Leader Work](/guide/leader-work#spring-annotations).

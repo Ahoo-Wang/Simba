@@ -1,12 +1,12 @@
 ---
 layout: home
 title: Simba
-description: Leader election and distributed mutex for the JVM, backed by MySQL, Redis or Zookeeper.
+description: Leader election and distributed locks for the JVM, backed by MySQL, PostgreSQL, Redis or Zookeeper.
 
 hero:
   name: "Simba"
   text: "Leader election for the JVM"
-  tagline: "One node at a time runs the job — on the MySQL, Redis or Zookeeper you already operate."
+  tagline: "One node at a time runs the job — on the database, Redis or Zookeeper you already operate."
   actions:
     - theme: brand
       text: Quick Start
@@ -19,16 +19,16 @@ hero:
       link: https://github.com/Ahoo-Wang/Simba
 
 features:
-  - title: Leader-only scheduling
-    details: "Annotate a method with @SimbaScheduled, or use SimbaScheduler without Spring. Work starts when the node becomes leader and is interrupted when it loses leadership."
-  - title: Leases you can reason about
-    details: "Ownership is a time-bounded lease. Each node revokes its own ownership when the lease ends, even if the backend call hangs."
+  - title: Terms, not flags
+    details: "Winning a lease gives you a Term: its fencing token, whether it is still valid, and how long it has left. Every term ends with exactly one onRevoked."
+  - title: One session per node
+    details: "A process keeps one backend session alive; every election, lock and partition lives and dies with it. One keep-alive renews them all."
   - title: Fencing tokens
-    details: "Every ownership term carries a strictly increasing token, so the resources you protect can reject a paused former leader."
-  - title: Three backends, one contract
-    details: "JDBC/MySQL, Redis and Zookeeper pass the same compatibility test kit. No Simba server to run."
-  - title: Spring Boot starter
-    details: "Auto-configuration for the backend on your classpath, a dedicated callback executor, and explicit simba.backend selection."
-  - title: Observable
-    details: "Micrometer metrics for leadership, contention and lease expiry, plus a read-only simba Actuator endpoint."
+    details: "Every term carries a strictly increasing token, so the resources you protect can reject a paused former leader."
+  - title: Work bound to the term
+    details: "runWhileLeader, schedules, @SimbaScheduled and @SimbaPartitioned run on virtual threads, are interrupted when the term ends, and finish before the lease is released."
+  - title: Three backends, one engine
+    details: "JDBC (MySQL, PostgreSQL), Redis and Zookeeper pass the same TCK under one pure state machine. No Simba server to run."
+  - title: Testable and observable
+    details: "In-memory backend and virtual time for your tests; snapshot(), Micrometer metrics, a simba Actuator endpoint and health indicator in production."
 ---

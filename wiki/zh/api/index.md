@@ -1,175 +1,163 @@
 ---
 title: API 参考
-description: Simba 的公共类型——竞争服务、竞争者、持有者、locker、调度器、观察者和后端 SPI。
+description: Simba 5 的公共类型及其契约——Simba、Election、Term、DistributedLock、Schedule、PartitionGroup、SimbaEvent、SimbaSnapshot、LeaseBackend SPI 以及 Spring 注解。
 ---
 
 # API 参考
 
-除特别说明外，所有类型都位于 `simba-core`。包 `me.ahoo.simba` 简写为 `simba`。
+公共 API 位于 `me.ahoo.simba`（`simba-core`）及其子包 `partition`、`event` 和 `spi`。时间一律使用 `java.time.Duration`。
+`me.ahoo.simba.engine` 中的类型以及标注了 `@InternalSimbaApi` 的成员需要显式 opt-in，不属于公共 API。
 
-## 竞争
+## 客户端 — `me.ahoo.simba` {#client-me-ahoo-simba}
 
-### `MutexContendServiceFactory` — `simba.core`
+### `Simba` {#simba}
 
-```kotlin
-interface MutexContendServiceFactory {
-    fun createMutexContendService(mutexContender: MutexContender): MutexContendService
-}
-```
-
-所有 API 的入口。实现：`JdbcMutexContendServiceFactory`、`SpringRedisMutexContendServiceFactory`、
-`ZookeeperMutexContendServiceFactory`（见 [配置](/zh/guide/configuration#不使用-spring)）。JDBC 和 Redis 工厂实现了
-`AutoCloseable` 并拥有自己的执行器。
-
-### `MutexContender` / `AbstractMutexContender` — `simba.core`
+每个进程一个客户端：一个后端会话，所有选举、锁和组都依附于它。实现 `AutoCloseable`。
 
 | 成员 | 说明 |
 |---|---|
-| `mutex: String` | mutex 名称。同名的竞争者相互竞争。 |
-| `contenderId: String` | 该竞争者的唯一 id。默认：`ContenderIdGenerator.HOST`（`counter:pid@host`）。 |
-| `onAcquired(mutexState)` | 该竞争者成为持有者。 |
-| `onReleased(mutexState)` | 该竞争者不再是持有者（释放、丢失、撤销或停止）。 |
+| `Simba.builder()` | 构建器；参阅 [不使用 Spring](/zh/guide/configuration#without-spring) |
+| `config: SimbaConfig` | 会话的时间参数 |
+| `election(name): Election` | `name` 的选举；同名的句柄共享同一个选举 |
+| `lock(name): DistributedLock` | `name` 上的锁；同名的锁和选举共享同一个租约 |
+| `group(name, partitions): PartitionGroup` | 名为 `name`、包含 `partitions` 个分区的分区组 |
+| `snapshot(): SimbaSnapshot` | 会话及所有已启动的选举，不调用后端 |
+| `closeAsync(): CompletionStage<Void>` | 撤销所有任期并关闭会话；在最后一个回调运行完后完成 |
+| `close()` | 调用 `closeAsync()` 并等待，但在回调或 leader 任务内部调用时不等待 |
 
-继承 `AbstractMutexContender(mutex, contenderId = ...)`；它会校验这两个值并记录回调日志。回调在 handle executor 上运行，
-对同一个竞争者按顺序执行且从不并发。
+名称遵循租约名称规则：1–128 个 `[A-Za-z0-9._:-]` 字符；其他任何名称都会抛出 `IllegalArgumentException`。`close()` 之后，
+所有启动某种操作的方法都会抛出 `IllegalStateException`。
 
-### `MutexContendService` — `simba.core`
+### `SimbaConfig` {#simbaconfig}
 
-由工厂为一个竞争者创建；实现 `AutoCloseable`。
+`data class SimbaConfig(leaseDuration = 15s, renewInterval = leaseDuration / 3, drift = 0.01, margin = 50ms,
+retryJitter = renewInterval / 2, minBackoff = 100ms)`。构造时校验 `renewInterval × 2 ≤ leaseDuration` 以及
+`leaseDuration × (1 − drift) − margin > renewInterval`。参阅 [时间参数](/zh/guide/correctness#timing)。
+
+## 选举 — `me.ahoo.simba` {#elections-me-ahoo-simba}
+
+### `Election` {#election}
 
 | 成员 | 说明 |
 |---|---|
-| `start()` / `stop()` | 开始或停止竞争。`stop()` 在非 `RUNNING` 时抛出异常；若为持有者则投递 `onReleased`，并在其执行完后返回。 |
-| `close()` | 幂等的 `stop()`。 |
-| `status` | `INITIAL → STARTING → RUNNING → STOPPING → INITIAL`。`start()` 失败会回到 `INITIAL`；服务可以重启。 |
-| `running` | `status` 为 `STARTING` 或 `RUNNING`。 |
-| `isOwner` | 该竞争者持有 mutex（本地弱一致视图）。 |
-| `isInTtl` | 是持有者且在 `ttlAt` 之前。 |
-| `fencingToken` | 作为持有者时当前任期的 token，否则为 `0`。 |
-| `leaseRemaining` | 本地所有权还能保持多久：不是持有者时为 `Duration.ZERO`，Zookeeper 为 `UNBOUNDED_LEASE`。租约后端以本地租约看门狗的截止时间计算。 |
-| `ensureLease(minRemaining)` | 除非 `leaseRemaining` 大于 `minRemaining`（默认为零），否则抛出 `LeaseExpiredException`。 |
-| `relinquish(cooldown)` | 若持有则释放所有权，并在 `cooldown` 内不参与竞争，之后重新竞争；始终保持 `RUNNING`。未运行时抛出异常。 |
-| `afterOwner` / `beforeOwner` / `mutexState` | 最近观察到的持有者及其前一个。 |
-| `hasOwner()` | 有人持有尚未结束的租约。 |
+| `name: LeaseName` | 租约名称 |
+| `start(listener)` | 开始竞争；已启动时抛出 `IllegalStateException` |
+| `stop(): CompletionStage<Void>` | 停止竞争；在最后一个 `onRevoked` 运行完后完成（未启动时立即完成） |
+| `stepDown(cooldown): CompletionStage<Void>` | 放弃当前任期，并在 `cooldown` 期间不参与竞争；保持已启动状态 |
+| `runWhileLeader(executor?, work): LeaderTask` | 启动选举，并在每个任期内运行一次 `work` |
+| `schedule(schedule, work): LeaderTask` | 启动选举，并在担任 leader 期间按 `schedule` 运行 `work` |
 
-### `MutexState` 与 `MutexOwner` — `simba.core`
+契约：每个 `onElected(term)` 之后都恰好跟随一个 `onRevoked(term, reason)`；同一选举的回调一次只运行一个，并按顺序运行；
+除了通过 `stop()` 和 `stepDown()` 的 future 之外，引擎从不等待回调；`stop()` 完成之后不再有回调。
 
-`MutexState(before, after)` 传给回调；`isAcquired(id)` / `isReleased(id)` 指出发生了哪种转换。
-
-`MutexOwner` 是描述租约的不可变值：
-
-| 字段 | 说明 |
-|---|---|
-| `ownerId` | 持有者的 contender id；`MutexOwner.NONE` 时为 `""`。 |
-| `acquiredAt`、`ttlAt`、`transitionAt` | 后端时钟上的毫秒时间戳。Zookeeper 为 `Long.MAX_VALUE`（没有租约）。 |
-| `fencingToken` | 任期的 token，没有时为 `0`。 |
-| `observedAt`、`currentAt` | 观察时的后端时间，以及用本地单调时钟推进后的该时间。 |
-
-相等性比较忽略 `observedAt`。
-
-## 锁 — `simba.locker`
+### `LeadershipListener` {#leadershiplistener}
 
 ```kotlin
-interface Locker : AutoCloseable {
-    fun acquire()                      // 等待直到成为持有者
-    fun acquire(timeout: Duration)     // 超时抛出 TimeoutException
-    val fencingToken: Long
-    val leaseRemaining: Duration        // 未持有时为 Duration.ZERO
-    fun ensureLease(minRemaining: Duration = Duration.ZERO)  // 抛出 LeaseExpiredException
-}
-class SimbaLocker(mutex: String, contendServiceFactory: MutexContendServiceFactory) : Locker
-```
-
-`close()` 停止竞争并释放 mutex。一个 locker 同一时间只属于一个线程（另一个线程调用 `acquire` 会抛出
-`IllegalMonitorStateException`）；中断不会取消 `acquire()`，中断标志会被恢复。`acquire` 失败会关闭 locker。
-
-## 调度 — `simba.schedule`
-
-### `SimbaScheduler`
-
-```kotlin
-class SimbaScheduler(
-    mutex: String,
-    contendServiceFactory: MutexContendServiceFactory,
-    config: ScheduleConfig,
-    worker: String = mutex,          // 线程名前缀
-    work: ScheduledWork              // fun interface: work(context: ScheduleContext)
-) : AutoCloseable
-```
-
-成员：`start()`、`stop()`、幂等的 `close()`、`relinquish(cooldown)`、`running`、`isLeader`、`fencingToken`。节点获取 mutex 时创建一个单线程执行器运行工作；
-释放时以中断方式取消运行。从未成为 leader 的节点不持有工作线程。`stop()` 和 `relinquish(cooldown)` 先取消工作并等待正在进行的运行结束
-（最多等待剩余租约时间，租约不限期时最多 30 秒），再释放 mutex。
-
-`ScheduleConfig.delay(initialDelay, period)` 以固定延迟运行；`ScheduleConfig.rate(initialDelay, period)` 以固定频率运行。
-`ScheduleContext` 提供 `mutex`、`fencingToken`、`leaseRemaining` 和 `ensureLease(minRemaining)`。某次运行失败会被记录日志，后续运行照常进行。
-
-`AbstractScheduler(mutex, factory)` 以继承方式提供相同语义（`config`、`worker`、`work()`、protected `fencingToken`、`leaseRemaining`、`ensureLease()`，以及 public `relinquish(cooldown)`）；
-推荐使用 `SimbaScheduler`。
-
-### `SimbaPartitionedScheduler` — `simba.partition`
-
-```kotlin
-class SimbaPartitionedScheduler(
-    group: String,
-    partitions: Int,
-    contendServiceFactory: MutexContendServiceFactory,
-    memberRegistry: MemberRegistry,
-    config: ScheduleConfig,
-    membershipTtl: Duration = 15s,
-    memberId: String = 自动生成,
-    worker: String = group,
-    work: PartitionedWork            // fun interface: work(context: PartitionContext)
-) : AutoCloseable
-```
-
-成员：`start()`（加入组，注册表不可达时失败）、`stop()`（停止所有分区后离开组）、幂等的 `close()`、`running`、`members`、
-`assignedPartitions`、`ownedPartitions`。节点每 `membershipTtl / 3` 发一次心跳，并对 `PartitionAssignment.ownerOf(partition, members)`
-分配给自己的每个分区，在 mutex `{group}.{partition}` 上运行一个 `SimbaScheduler`。`PartitionContext` 在 `ScheduleContext`
-基础上增加了 `group`、`partition` 和 `partitions`。注册表不可达时，节点保留当前的分区。
-
-`MemberRegistry`（`heartbeat(group, memberId, ttl)`、`leave`、`members`）由 `JdbcMemberRegistry`、`SpringRedisMemberRegistry` 和
-`ZookeeperMemberRegistry` 实现；`simba-test` 提供 `MemberRegistrySpec`。
-
-### `@SimbaScheduled` — `simba-spring-boot-starter`，`simba.spring.boot.starter.scheduling`
-
-| 属性 | 说明 |
-|---|---|
-| `mutex` | 由其 leader 运行该方法的 mutex；在应用内唯一。 |
-| `fixedDelay` / `fixedRate` | 必须且只能设置一个。Spring Boot 时长格式，支持占位符。 |
-| `initialDelay` | 成为 leader 后的延迟。默认 `0s`。 |
-| `worker` | 线程名前缀。默认：`mutex`。 |
-
-方法不接受参数，或只接受一个 `ScheduleContext`。Starter 为每个方法注册一个 `SimbaScheduler`，在上下文刷新后启动、关闭时停止；
-`SimbaScheduler` bean 也按同样方式管理。声明无效、mutex 重复或缺少 `MutexContendServiceFactory` 都会导致启动失败。
-
-## 观察 — `simba.core`
-
-`ContendObserver` 接收竞争服务的事件；每个方法默认是空操作，异常会被记录并忽略。将它传给工厂（或在使用 starter 时声明为 bean）。
-
-| 方法 | 时机 | 后端 |
-|---|---|---|
-| `onStarted(service)` / `onStopped(service)` | `start()` 成功 / `stop()` 完成 | 全部 |
-| `onContend(mutex, renew, durationNanos, outcome)` | 一次后端往返结束：`OWNER`、`OTHER` 或 `FAILED` | JDBC、Redis |
-| `onAcquired(mutex)` / `onReleased(mutex)` | 该竞争者获得 / 失去所有权 | 全部 |
-| `onLeaseExpired(mutex)` | 租约看门狗撤销了所有权；随后是 `onReleased` | JDBC、Redis |
-| `onWork(mutex, durationNanos, outcome)` | 一次调度运行结束：`SUCCESS`、`FAILED` 或 `INTERRUPTED` | 全部 |
-
-基于它的 Micrometer 指标和 Actuator 端点见 [可观测性](/zh/guide/observability)。
-
-## 后端 SPI — `simba.core`
-
-要添加一个轮询类后端，实现一个原子存储调用并复用引擎：
-
-```kotlin
-interface MutexLeaseStore {
-    /** 获取，或在 renew 为 true 时续期；返回操作后后端观察到的持有者。 */
-    fun contend(mutex: String, contenderId: String, renew: Boolean, config: LeaseConfig): MutexOwner
-    /** 由 contenderId 持有时释放；本次调用释放成功时返回 true。 */
-    fun release(mutex: String, contenderId: String): Boolean
+interface LeadershipListener {
+    fun onElected(term: Term)
+    fun onRevoked(term: Term, reason: RevokeReason)
 }
 ```
 
-`LeaseContendService(contender, handleExecutor, leaseStore, leaseConfig, scheduler, ioExecutor, observer)` 为其运行竞争循环、
-租约看门狗和生命周期。`LeaseConfig(ttl, transition, initialDelay)` 校验时长。`ContendExecutors` 创建默认的调度器、I/O 和回调执行器。
-见 [参与贡献](/zh/contributing/#添加后端)。
+### `LeaderWork` 与 `LeaderTask` {#leaderwork-and-leadertask}
+
+`fun interface LeaderWork { fun run(term: Term) }` 可以抛出异常；失败会成为 `SimbaEvent.WorkCompleted`，从不影响选举。
+`LeaderTask`（`AutoCloseable`）提供 `election`、`stop(): CompletionStage<Void>`（在工作退出或超时且租约已释放后完成）以及 `close()`。
+参阅 [Leader 任务](/zh/guide/leader-work)。
+
+### `Schedule` {#schedule}
+
+`Schedule.fixedDelay(delay, initialDelay = 0)`、`Schedule.fixedRate(period, initialDelay = 0)`、
+`withInitialDelay(initialDelay)`；`mode`、`period`、`initialDelay`。周期必须为正。超时的 fixed-rate 运行会跳过错过的启动。
+
+## 任期 — `me.ahoo.simba` {#terms-me-ahoo-simba}
+
+### `Term` {#term}
+
+| 成员 | 说明 |
+|---|---|
+| `name: LeaseName` | 租约名称 |
+| `token: Long` | Fencing token：`> 0`，任期内不变，同一名称的各任期之间严格递增 |
+| `isValid: Boolean` | 未被撤销，且会话的本地截止时刻尚未过去 |
+| `remaining(): Duration` | 距本地截止时刻的剩余时间；任期结束后为 `ZERO` |
+| `ensureValid(minRemaining = ZERO)` | 除非有效期超过 `minRemaining`，否则抛出 `LeaseExpiredException` |
+| `revoked: CompletionStage<RevokeReason>` | 在任期被撤销时完成，且恰好完成一次 |
+
+### `RevokeReason` {#revokereason}
+
+`STOPPED`、`STEPPED_DOWN`、`SESSION_EXPIRED`、`DEADLINE_PASSED`、`TAKEN_OVER`；参阅
+[租约、任期与 token](/zh/guide/correctness#leases-terms-and-tokens)。
+
+## 锁 — `me.ahoo.simba` {#locks-me-ahoo-simba}
+
+| 类型 | 成员 |
+|---|---|
+| `DistributedLock` | `name`；`acquire(timeout): LockTerm`（抛出 `LockTimeoutException`）；`tryAcquire(): LockTerm?` |
+| `LockTerm : Term, AutoCloseable` | `releaseAsync(): CompletionStage<Void>`；`close()`（幂等） |
+| `LockTimeoutException` | `name`、`timeout` |
+
+参阅 [锁](/zh/guide/locks)。
+
+## 分区 — `me.ahoo.simba.partition` {#partitions-me-ahoo-simba-partition}
+
+| 类型 | 成员 |
+|---|---|
+| `PartitionGroup` | `name`、`partitions`；`schedule(schedule, work): GroupTask`；`runWhileLeader(work): GroupTask` |
+| `PartitionWork` | `fun run(term: Term, partition: Int)` |
+| `GroupTask : AutoCloseable` | `group`；`partitions(): Set<Int>`（本节点在其最新视图中的分区）；`stop()`；`close()` |
+| `PartitionAssignment` | `ownerOf(partition, members)`、`partitionsOf(member, partitions, members)`、`weight(partition, member)`：rendezvous 哈希（FNV-1a 64 与 SplitMix64 混合），跨版本保持一致 |
+
+## 事件与快照 — `me.ahoo.simba.event` {#events-and-snapshot-me-ahoo-simba-event}
+
+| 类型 | 成员 |
+|---|---|
+| `SimbaEventListener` | `fun onEvent(event: SimbaEvent)`；异常会被记录并忽略 |
+| `SimbaEvent` | `SessionOpened`、`SessionRenewed`、`SessionSuspended`、`SessionExpired`、`Elected`、`Revoked`、`AcquireFailed`、`WorkCompleted` |
+| `WorkOutcome` | `COMPLETED`、`FAILED`、`CANCELLED` |
+| `SimbaSnapshot` | `session: SessionSnapshot`、`elections: List<ElectionSnapshot>`、`leaseDuration`、`healthy` |
+| `SessionSnapshot` | `id`、`status`（`OPENING`、`LIVE`、`SUSPENDED`、`CLOSED`）、`validFor`、`notLiveFor` |
+| `ElectionSnapshot` | `name`、`status`（`CANDIDATE`、`LEADER`、`COOLDOWN`、`HANDOVER`）、`token`、`remaining` |
+
+参阅 [可观测性](/zh/guide/observability)。
+
+## 后端 SPI — `me.ahoo.simba.spi` {#backend-spi-me-ahoo-simba-spi}
+
+```kotlin
+interface LeaseBackend : AutoCloseable {
+    val capabilities: Capabilities                    // releaseHints, membershipHints, maxBatch
+    fun openSession(lease: Duration, metadata: Map<String, String> = emptyMap()): SessionGrant
+    fun keepAlive(session: SessionId, lease: Duration, held: Set<LeaseName>): KeepAliveResult   // Live(remaining, owned) | Expired
+    fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult>      // Granted(token) | HeldBy(session, token)
+    fun release(session: SessionId, leases: Map<LeaseName, Long>)
+    fun closeSession(session: SessionId)
+    fun join(session: SessionId, group: String)
+    fun leave(session: SessionId, group: String)
+    fun members(group: String): List<SessionId>
+    fun subscribe(listener: BackendHintListener): AutoCloseable   // optional Released / MembersChanged hints
+}
+```
+
+每个实现都遵守的规则（由 [`LeaseBackendSpec`](/zh/guide/testing#backend-tck) 检查）：
+
+- 每个方法都是一次后端往返（或每个 slot 一次），不做调度、不发通知、不保存本地状态；
+- 每个剩余时长都用后端的时钟计算，并以时长而非时间戳返回；
+- token 大于零，随该名称的每个新任期严格递增，且永不重置；
+- 会话在其租约期内未被续约即过期，即使传输层仍保持连接；
+- 过期的会话永不复活：`keepAlive` 返回 `Expired`，`acquire` 抛出 `SessionExpiredException`；
+- `release` 只释放会话仍持有且 token 完全一致的租约，因此陈旧的释放是空操作；
+- 提示（hint）只起加速作用；丢失提示从不影响正确性。
+
+值类型：`LeaseName`（1–128 个 `[A-Za-z0-9._:-]` 字符）、`SessionId`（永不复用）、`Ticker`（单调纳秒）。实现：`JdbcLeaseBackend`、
+`RedisLeaseBackend`、`ZookeeperLeaseBackend`、`InMemoryLeaseBackend`；参阅 [后端](/zh/guide/backends)。
+
+## Spring Boot — `me.ahoo.simba.spring.boot.starter` {#spring-boot-me-ahoo-simba-spring-boot-starter}
+
+| 类型 | 说明 |
+|---|---|
+| `@SimbaScheduled(name, fixedDelay, fixedRate, initialDelay)` | 在 `election(name).schedule(...)` 上运行签名为 `()` 或 `(Term)` 的方法 |
+| `@SimbaPartitioned(group, partitions, fixedDelay, fixedRate, initialDelay)` | 在 `group(group, partitions).schedule(...)` 上运行签名为 `(Term, Int)` 的方法 |
+| `SimbaEndpoint` | Actuator 端点 `simba` |
+| `SimbaHealthIndicator` | 健康指示器 `simba` |
+| `MicrometerSimbaEventListener` | 基于 `SimbaEvent` 的 Micrometer 指标 |
+
+参阅 [Spring Boot](/zh/guide/configuration) 和 [Leader 任务](/zh/guide/leader-work#spring-annotations)。

@@ -4,7 +4,7 @@ export const zh: DefaultTheme.Config = {
   label: '中文',
   lang: 'zh-CN',
   title: 'Simba',
-  description: 'JVM 选主与分布式互斥库',
+  description: 'JVM 选主与分布式锁库',
   themeConfig: {
     nav: [
       { text: '指南', link: '/zh/guide/' },
@@ -15,6 +15,7 @@ export const zh: DefaultTheme.Config = {
         text: '版本',
         items: [
           { text: '升级', link: '/zh/guide/upgrading' },
+          { text: '从 4.x 迁移', link: '/zh/guide/migration' },
           { text: '发布说明', link: 'https://github.com/Ahoo-Wang/Simba/releases' },
         ],
       },
@@ -26,11 +27,15 @@ export const zh: DefaultTheme.Config = {
           items: [
             { text: '简介', link: '/zh/guide/' },
             { text: '快速开始', link: '/zh/guide/quick-start' },
+            { text: '核心概念与正确性', link: '/zh/guide/correctness' },
             { text: '后端', link: '/zh/guide/backends' },
-            { text: '正确性', link: '/zh/guide/correctness' },
-            { text: '配置', link: '/zh/guide/configuration' },
+            { text: 'Spring Boot', link: '/zh/guide/configuration' },
+            { text: 'Leader 任务与分区', link: '/zh/guide/leader-work' },
+            { text: '锁', link: '/zh/guide/locks' },
             { text: '可观测性', link: '/zh/guide/observability' },
+            { text: '测试', link: '/zh/guide/testing' },
             { text: '升级', link: '/zh/guide/upgrading' },
+            { text: '从 4.x 迁移', link: '/zh/guide/migration' },
           ],
         },
       ],

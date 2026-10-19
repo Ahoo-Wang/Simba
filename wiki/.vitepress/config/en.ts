@@ -4,7 +4,7 @@ export const en: DefaultTheme.Config = {
   label: 'English',
   lang: 'en',
   title: 'Simba',
-  description: 'Leader election and distributed mutex for the JVM',
+  description: 'Leader election and distributed locks for the JVM',
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide/' },
@@ -15,6 +15,7 @@ export const en: DefaultTheme.Config = {
         text: 'Releases',
         items: [
           { text: 'Upgrading', link: '/guide/upgrading' },
+          { text: 'Migrating from 4.x', link: '/guide/migration' },
           { text: 'Release Notes', link: 'https://github.com/Ahoo-Wang/Simba/releases' },
         ],
       },
@@ -26,11 +27,15 @@ export const en: DefaultTheme.Config = {
           items: [
             { text: 'Introduction', link: '/guide/' },
             { text: 'Quick Start', link: '/guide/quick-start' },
+            { text: 'Concepts and Correctness', link: '/guide/correctness' },
             { text: 'Backends', link: '/guide/backends' },
-            { text: 'Correctness', link: '/guide/correctness' },
-            { text: 'Configuration', link: '/guide/configuration' },
+            { text: 'Spring Boot', link: '/guide/configuration' },
+            { text: 'Leader Work and Partitions', link: '/guide/leader-work' },
+            { text: 'Locks', link: '/guide/locks' },
             { text: 'Observability', link: '/guide/observability' },
+            { text: 'Testing', link: '/guide/testing' },
             { text: 'Upgrading', link: '/guide/upgrading' },
+            { text: 'Migrating from 4.x', link: '/guide/migration' },
           ],
         },
       ],
