@@ -24,9 +24,9 @@ This file records what is not obvious from the code. Describe the code as it is;
 
 | Module check | Needs |
 |---|---|
-| `simba-core`, `simba-testing`, `simba-zookeeper`, `simba-spring-boot-starter` | Nothing (Zookeeper tests use embedded Curator `TestingServer`) |
+| `simba-core`, `simba-testing`, `simba-tck`, `simba-zookeeper`, `simba-spring-boot-starter` | Nothing (Zookeeper tests use embedded Curator `TestingServer`) |
 | `simba-spring-redis` | Docker: Testcontainers `redis:7.4-alpine` (`RedisFixture`) |
-| `simba-jdbc` | Docker: Testcontainers `mysql:8.4` (`MySqlFixture`, schema from `simba-jdbc/src/init-script/init-simba-mysql.sql`) |
+| `simba-jdbc` | Docker: Testcontainers `mysql:8.4` (`MySqlFixture`, 4.x schema from `simba-jdbc/src/init-script/init-simba-mysql.sql`); `mysql:8.4` and `postgres:17` for `JdbcLeaseBackend` (`LeaseDatabaseFixture`, 5.x schema from `simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-*.sql`) |
 
 CI (`.github/workflows/integration-test.yml`): `simba-core:check`, then the Redis, Zookeeper and JDBC module checks,
 the `simba-example` backend matrix, and a JDK 25 test run. Wiki commands are in `wiki/AGENTS.md`.
@@ -154,6 +154,13 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
   revoked (`TAKEN_OVER`); an owned lease nobody holds or is acquiring is released.
 - Engine changes must keep `SimulationSpec` (I1–I4 over 10⁴ seeds) green; replay a failure with
   `./gradlew simba-testing:test -Psimba.simulation.seed=N`.
+- Every `LeaseBackend` passes `simba-tck`'s `LeaseBackendSpec` (phase 2): the SPI KDoc rules, one per test. A backend
+  with an injectable clock overrides `clock`; otherwise time-based tests poll until the backend's own lease ran out.
+- JDBC (`JdbcLeaseBackend` + `Dialect`: MySQL 8, PostgreSQL 14+): tables `simba_session`, `simba_lease`,
+  `simba_member`; every time comparison uses the dialect's `now` (database epoch ms, constant within a statement).
+  `simba_lease` rows are never deleted (the token never resets); release clears `session_id` only. A lease belongs to
+  its `session_id` only while that session is live. The MySQL acquire assigns `token` before `session_id` (left-to-right
+  `SET`). The 5.x `simba_member` differs from the 4.x table: use a separate database until 4.x JDBC is removed.
 
 ## Change Playbooks
 
