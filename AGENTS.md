@@ -191,8 +191,6 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
 
 ## Documentation Map
 
-`README*`, `llms.txt`, `wiki/` and `skills/` still describe Simba 4.x until ADR 0010 phase 6 rewrites them.
-
 | Path | Content |
 |---|---|
 | `README.md`, `README.zh-CN.md`, `llms.txt` | Entry points: what Simba is, install, one example per API (`llms.txt` mirrors `wiki/llms.txt`) |

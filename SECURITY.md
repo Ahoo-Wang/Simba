@@ -4,7 +4,8 @@
 
 | Version | Supported |
 |---|---|
-| 4.x | ✅ |
+| 5.x | ✅ |
+| 4.6.x | Fixes on the `v4.6.x` maintenance branch |
 | 3.3.x | Security fixes only |
 | < 3.3 | ❌ |
 
