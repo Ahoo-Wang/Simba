@@ -13,34 +13,27 @@
 
 package me.ahoo.simba.example;
 
-import me.ahoo.simba.core.AbstractMutexContender;
-import me.ahoo.simba.core.ContenderIdGenerator;
-import me.ahoo.simba.core.MutexState;
+import me.ahoo.simba.LeadershipListener;
+import me.ahoo.simba.RevokeReason;
+import me.ahoo.simba.Term;
 
-import org.slf4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
 /**
- * Example Contender.
+ * Example leadership callbacks: every {@code onElected} is followed by exactly one {@code onRevoked} of the same term.
  *
  * @author ahoo wang
  */
-public class ExampleContender extends AbstractMutexContender {
-    
-    private static final Logger log = org.slf4j.LoggerFactory.getLogger(ExampleContender.class);
-    
-    public ExampleContender() {
-        super("example-mutex", ContenderIdGenerator.HOST.generate());
-    }
-    
+@Slf4j
+public class ExampleLeader implements LeadershipListener {
+
     @Override
-    public void onAcquired(MutexState mutexState) {
-        super.onAcquired(mutexState);
-        log.warn("------ onAcquired ------");
+    public void onElected(Term term) {
+        log.warn("------ onElected token:[{}] ------", term.getToken());
     }
-    
+
     @Override
-    public void onReleased(MutexState mutexState) {
-        super.onReleased(mutexState);
-        log.warn("------ onReleased ------");
+    public void onRevoked(Term term, RevokeReason reason) {
+        log.warn("------ onRevoked token:[{}] reason:[{}] ------", term.getToken(), reason);
     }
 }
