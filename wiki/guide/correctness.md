@@ -72,7 +72,7 @@ A **term** is one period during which this node owns a lease. Winning the same n
 | `token` | Fencing token: greater than zero, constant within the term, strictly increasing across terms of the name |
 | `isValid` | Not revoked and the session's local deadline has not passed |
 | `remaining()` | Time left before the local deadline; `Duration.ZERO` once the term ended |
-| `ensureValid(minRemaining)` | Throws `LeaseExpiredException` unless the term is valid for more than `minRemaining` |
+| `ensureValid(minRemaining)` | Throws `TermExpiredException` unless the term is valid for more than `minRemaining` |
 | `revoked` | `CompletionStage<RevokeReason>` that completes exactly once, when the term ends |
 
 `isValid` and `remaining()` are pure functions of the monotonic clock and the session's deadline: no watchdog thread
@@ -204,7 +204,7 @@ synchronized(state) {
 
 ## Checking the Term Before Each Step
 
-`term.ensureValid(minRemaining)` throws `LeaseExpiredException` unless the term stays valid for more than
+`term.ensureValid(minRemaining)` throws `TermExpiredException` unless the term stays valid for more than
 `minRemaining`. Call it before a step that should not start when the term is about to end:
 
 ```kotlin

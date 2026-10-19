@@ -126,5 +126,5 @@ public class Billing {
 - **把 `term.token` 传给任务对共享资源的每一次写入**。暂停的节点在其任期结束后仍可能写入成功；只有校验
   [fencing token](/zh/guide/correctness#fencing-tokens) 的资源才能拒绝它。
 - **在被中断时停止。** 忽略中断的阻塞 I/O 会把交接最多推迟到任期的剩余时间。
-- **在耗时步骤之前检查：** `term.ensureValid(expectedStepDuration)` 会抛出 `LeaseExpiredException`，而不是开始一个会超出任期的步骤。
+- **在耗时步骤之前检查：** `term.ensureValid(expectedStepDuration)` 会抛出 `TermExpiredException`，而不是开始一个会超出任期的步骤。
 - 尽可能**让任务幂等**：故障转移之后，下一个 leader 可能会重做最后一个步骤。

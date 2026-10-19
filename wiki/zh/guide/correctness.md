@@ -64,7 +64,7 @@ deadline = sentAt + remaining × (1 − drift) − margin
 | `token` | Fencing token：大于零，在任期内不变，在同一名称的任期之间严格递增 |
 | `isValid` | 未被撤销，且会话的本地截止时刻未过 |
 | `remaining()` | 距本地截止时刻的剩余时间；任期结束后为 `Duration.ZERO` |
-| `ensureValid(minRemaining)` | 除非任期在超过 `minRemaining` 的时间内仍然有效，否则抛出 `LeaseExpiredException` |
+| `ensureValid(minRemaining)` | 除非任期在超过 `minRemaining` 的时间内仍然有效，否则抛出 `TermExpiredException` |
 | `revoked` | `CompletionStage<RevokeReason>`，在任期结束时恰好完成一次 |
 
 `isValid` 和 `remaining()` 是单调时钟与会话截止时刻的纯函数：不需要先运行任何看门狗线程，因此一个从长时间暂停中醒来的进程在第一次读取时就会看到
@@ -186,7 +186,7 @@ synchronized(state) {
 
 ## 在每个步骤前检查任期 {#checking-the-term-before-each-step}
 
-除非任期在超过 `minRemaining` 的时间内仍然有效，否则 `term.ensureValid(minRemaining)` 抛出 `LeaseExpiredException`。
+除非任期在超过 `minRemaining` 的时间内仍然有效，否则 `term.ensureValid(minRemaining)` 抛出 `TermExpiredException`。
 在任期即将结束时不应开始的步骤之前调用它：
 
 ```kotlin

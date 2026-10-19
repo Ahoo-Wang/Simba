@@ -81,7 +81,7 @@ interface LeadershipListener {
 | `token: Long` | Fencing token：`> 0`，任期内不变，同一名称的各任期之间严格递增 |
 | `isValid: Boolean` | 未被撤销，且会话的本地截止时刻尚未过去 |
 | `remaining(): Duration` | 距本地截止时刻的剩余时间；任期结束后为 `ZERO` |
-| `ensureValid(minRemaining)`、`ensureValid()` | 除非有效期超过 `minRemaining`（无参数时为 `ZERO`），否则抛出 `LeaseExpiredException` |
+| `ensureValid(minRemaining)`、`ensureValid()` | 除非有效期超过 `minRemaining`（无参数时为 `ZERO`），否则抛出 `TermExpiredException` |
 | `revoked: CompletionStage<RevokeReason>` | 在任期被撤销时完成，且恰好完成一次 |
 
 ### `RevokeReason` {#revokereason}

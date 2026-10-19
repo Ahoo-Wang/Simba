@@ -344,7 +344,7 @@ A **term** is one period during which this node owns a lease. Winning the same n
 | `token` | Fencing token: greater than zero, constant within the term, strictly increasing across terms of the name |
 | `isValid` | Not revoked and the session's local deadline has not passed |
 | `remaining()` | Time left before the local deadline; `Duration.ZERO` once the term ended |
-| `ensureValid(minRemaining)` | Throws `LeaseExpiredException` unless the term is valid for more than `minRemaining` |
+| `ensureValid(minRemaining)` | Throws `TermExpiredException` unless the term is valid for more than `minRemaining` |
 | `revoked` | `CompletionStage<RevokeReason>` that completes exactly once, when the term ends |
 
 `isValid` and `remaining()` are pure functions of the monotonic clock and the session's deadline: no watchdog thread
@@ -476,7 +476,7 @@ synchronized(state) {
 
 ## Checking the Term Before Each Step
 
-`term.ensureValid(minRemaining)` throws `LeaseExpiredException` unless the term stays valid for more than
+`term.ensureValid(minRemaining)` throws `TermExpiredException` unless the term stays valid for more than
 `minRemaining`. Call it before a step that should not start when the term is about to end:
 
 ```kotlin
@@ -976,7 +976,7 @@ String attributes of both annotations accept `${...}` placeholders, and duration
   its term ended; only a resource that checks the [fencing token](/guide/correctness#fencing-tokens) rejects it.
 - **Stop on interruption.** Blocking I/O that ignores interruption delays the handover up to the term's remaining
   time.
-- **Check before long steps:** `term.ensureValid(expectedStepDuration)` throws `LeaseExpiredException` instead of
+- **Check before long steps:** `term.ensureValid(expectedStepDuration)` throws `TermExpiredException` instead of
   starting a step that would outlive the term.
 - **Make work idempotent** where you can: after a failover the next leader may redo the last step.
 </doc>
@@ -1030,7 +1030,7 @@ reported the session expired, or another session took the lease over. The lock i
 re-acquired behind your back:
 
 - `term.isValid` turns `false` and `term.revoked` completes with the reason;
-- your next `ensureValid()` throws `LeaseExpiredException`;
+- your next `ensureValid()` throws `TermExpiredException`;
 - closing the `LockTerm` afterwards is a harmless no-op.
 
 Because a lock can end while your code still runs, pass `term.token` to the protected resource and let it reject
@@ -1610,7 +1610,7 @@ overruns skips the missed starts.
 | `token: Long` | Fencing token: `> 0`, constant within the term, strictly increasing across terms of the name |
 | `isValid: Boolean` | Not revoked and the session's local deadline has not passed |
 | `remaining(): Duration` | Time left before the local deadline; `ZERO` once the term ended |
-| `ensureValid(minRemaining)`, `ensureValid()` | Throws `LeaseExpiredException` unless valid for more than `minRemaining` (`ZERO` without an argument) |
+| `ensureValid(minRemaining)`, `ensureValid()` | Throws `TermExpiredException` unless valid for more than `minRemaining` (`ZERO` without an argument) |
 | `revoked: CompletionStage<RevokeReason>` | Completes exactly once, when the term is revoked |
 
 ### `RevokeReason`

@@ -49,7 +49,7 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 此时锁被**永久释放**，不会在你不知情的情况下被重新获取：
 
 - `term.isValid` 变为 `false`，`term.revoked` 以原因完成；
-- 你的下一次 `ensureValid()` 抛出 `LeaseExpiredException`；
+- 你的下一次 `ensureValid()` 抛出 `TermExpiredException`；
 - 之后再关闭该 `LockTerm` 是无害的空操作。
 
 由于锁可能在你的代码仍在运行时结束，请把 `term.token` 传给受保护的资源，让它拒绝更低的 token；见

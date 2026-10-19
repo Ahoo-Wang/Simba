@@ -139,6 +139,6 @@ String attributes of both annotations accept `${...}` placeholders, and duration
   its term ended; only a resource that checks the [fencing token](/guide/correctness#fencing-tokens) rejects it.
 - **Stop on interruption.** Blocking I/O that ignores interruption delays the handover up to the term's remaining
   time.
-- **Check before long steps:** `term.ensureValid(expectedStepDuration)` throws `LeaseExpiredException` instead of
+- **Check before long steps:** `term.ensureValid(expectedStepDuration)` throws `TermExpiredException` instead of
   starting a step that would outlive the term.
 - **Make work idempotent** where you can: after a failover the next leader may redo the last step.

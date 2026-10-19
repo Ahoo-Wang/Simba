@@ -51,7 +51,7 @@ reported the session expired, or another session took the lease over. The lock i
 re-acquired behind your back:
 
 - `term.isValid` turns `false` and `term.revoked` completes with the reason;
-- your next `ensureValid()` throws `LeaseExpiredException`;
+- your next `ensureValid()` throws `TermExpiredException`;
 - closing the `LockTerm` afterwards is a harmless no-op.
 
 Because a lock can end while your code still runs, pass `term.token` to the protected resource and let it reject

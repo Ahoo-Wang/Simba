@@ -85,7 +85,7 @@ overruns skips the missed starts.
 | `token: Long` | Fencing token: `> 0`, constant within the term, strictly increasing across terms of the name |
 | `isValid: Boolean` | Not revoked and the session's local deadline has not passed |
 | `remaining(): Duration` | Time left before the local deadline; `ZERO` once the term ended |
-| `ensureValid(minRemaining)`, `ensureValid()` | Throws `LeaseExpiredException` unless valid for more than `minRemaining` (`ZERO` without an argument) |
+| `ensureValid(minRemaining)`, `ensureValid()` | Throws `TermExpiredException` unless valid for more than `minRemaining` (`ZERO` without an argument) |
 | `revoked: CompletionStage<RevokeReason>` | Completes exactly once, when the term is revoked |
 
 ### `RevokeReason`
