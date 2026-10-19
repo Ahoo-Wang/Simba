@@ -193,13 +193,15 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   `SessionId` = zk session id as 16 hex digits. Leases are ephemeral `/simba/leases/{name}`, owner = `ephemeralOwner`,
   token = czxid (strictly increasing, not consecutive). Members are ephemeral `/simba/groups/{g}/{sid}`. A local
   watchdog closes a session no keep-alive started within `lease`; remaining is `min(lease, negotiated timeout)`. A
-  disconnected client fails `keepAlive` / `acquire`; a zk-expired one is `Expired`.
+  disconnected client fails `keepAlive` / `acquire`; a zk-expired one is `Expired`, and so is a `CONNECTIONLOSS` of a
+  closing client (Zookeeper fails requests that way while closing, before the state turns `CLOSED`).
   A name is a keep-alive candidate from before its create is sent (under the session's send lock, so a keep-alive read
   sent earlier cannot drop it); keep-alive reports candidates the session owns and forgets the others. Releases of a
   session are serialized (the czxid check and the delete are not atomic). Lease paths of a batch are validated before
   any request; `members` syncs the group path, then leaves a children watch (an exists watch on a missing group). A
   closed backend opens no session. Group names follow the `LeaseName` rules. Every client adds `authInfo` and uses
-  `clientConfig`; every node the backend creates gets `aclProvider`'s ACL (default open; existing parents keep theirs).
+  `clientConfig`; every node the backend creates gets `aclProvider`'s ACL (default open; existing parents keep theirs, also
+  when the backend may not create in their parent: `NoAuth` on an existing ancestor is ignored).
 
 ### Starter
 - Properties: `simba.enabled`, `simba.backend`, `simba.session.{lease-duration,renew-interval,drift,margin}`,

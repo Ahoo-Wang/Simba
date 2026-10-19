@@ -134,7 +134,8 @@ class ZookeeperLeaseBackendTest {
             expireOnServer(checkNotNull(backend.zooKeeperOf(expiring)))
             awaitHint(hints, BackendHint.Released(name))
         }
-        awaitUntil { backend.keepAlive(expiring, lease, setOf(name)) == KeepAliveResult.Expired }
+        // The client sees the connection drop before Zookeeper tells it the session expired: suspended meanwhile.
+        awaitUntil { runCatching { backend.keepAlive(expiring, lease, setOf(name)) }.getOrNull() == KeepAliveResult.Expired }
 
         backend.keepAlive(expiring, lease, setOf(name)).assert().isEqualTo(KeepAliveResult.Expired)
         assertThrows<SessionExpiredException> { backend.acquire(expiring, setOf(name)) }
