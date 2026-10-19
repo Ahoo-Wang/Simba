@@ -374,7 +374,6 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
         override fun toString(): String = "LockTerm($term)"
     }
 
-
     // endregion
 
     // region groups

@@ -29,7 +29,12 @@ class ReviewTwoEngineTest : EngineHarness() {
     @Test
     fun `a backend granting less than the lease makes the session renew every third of its validity, warning once`() {
         on(Event.Boot)
-        on(Event.Reply(call<BackendRequest.OpenSession>().requestId, BackendResult.Opened(SessionGrant(session, short))))
+        on(
+            Event.Reply(
+                call<BackendRequest.OpenSession>().requestId,
+                BackendResult.Opened(SessionGrant(session, short))
+            )
+        )
         // 1.2 s × 0.99 − 20 ms = 1.168 s of local validity: two keep-alives a second apart no longer fit.
         val every = (1_168 * MILLIS) / 3
         effects.assert().contains(Effect.Arm(active.renewTimer!!, every))

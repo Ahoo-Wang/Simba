@@ -72,7 +72,9 @@ class SimbaConfigTest {
             { SimbaConfig.builder().retryJitter(Duration.ofMillis(-1)).build() },
             { SimbaConfig.builder().minBackoff(Duration.ZERO).build() },
             {
-                SimbaConfig.builder().leaseDuration(lease).renewInterval(Duration.ofMillis(1500)).margin(Duration.ofMillis(1500)).build()
+                SimbaConfig.builder().leaseDuration(
+                    lease
+                ).renewInterval(Duration.ofMillis(1500)).margin(Duration.ofMillis(1500)).build()
             },
         ).forEach { invalid -> assertThrows<IllegalArgumentException> { invalid() } }
     }

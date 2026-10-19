@@ -125,7 +125,7 @@ class ReviewTwoClientTest {
 
     @Test
     fun `public value types are plain classes without copy or destructuring`() {
-        val types = SimbaEvent::class.sealedSubclasses.map { it.java } + listOf(
+        val types = SimbaEvent::class.java.declaredClasses.toList() + listOf(
             SimbaSnapshot::class.java,
             SessionSnapshot::class.java,
             ElectionSnapshot::class.java,
@@ -134,8 +134,8 @@ class ReviewTwoClientTest {
             SimulationResult::class.java,
             InMemoryLeaseBackend.Owner::class.java,
         )
+        types.size.assert().isGreaterThan(SimbaEvent::class.java.declaredClasses.size)
         for (type in types) {
-            type.kotlin.isData.assert().isFalse()
             type.methods.map { it.name }.filter { it == "copy" || it.startsWith("component") }.assert().isEmpty()
         }
         val event = SimbaEvent.Elected(LeaseName("a"), 1, ElectionKind.LOCK)

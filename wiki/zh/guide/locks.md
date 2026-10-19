@@ -21,6 +21,8 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
     invoiceStore.write(invoice, term.getToken());
 } catch (LockTimeoutException e) {
     // held elsewhere
+} catch (InterruptedException e) {
+    Thread.currentThread().interrupt();
 }
 ```
 

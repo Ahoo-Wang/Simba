@@ -14,11 +14,11 @@
 package me.ahoo.simba.testing
 
 import me.ahoo.simba.LeadershipListener
-import me.ahoo.simba.TermExpiredException
 import me.ahoo.simba.RevokeReason
 import me.ahoo.simba.Simba
 import me.ahoo.simba.SimbaConfig
 import me.ahoo.simba.Term
+import me.ahoo.simba.TermExpiredException
 import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
@@ -30,7 +30,9 @@ import java.util.concurrent.TimeUnit
 /** The threaded shell against the in-memory backend on the system clock; synchronizes on queues, never sleeps. */
 class SimbaTest {
     private val backend = InMemoryLeaseBackend()
-    private val config = SimbaConfig.builder().leaseDuration(Duration.ofSeconds(3)).renewInterval(Duration.ofMillis(500)).build()
+    private val config = SimbaConfig.builder().leaseDuration(
+        Duration.ofSeconds(3)
+    ).renewInterval(Duration.ofMillis(500)).build()
     private val clients = ArrayList<Simba>()
 
     private fun client(): Simba =

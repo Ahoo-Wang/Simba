@@ -119,7 +119,9 @@ class ListenerAndLoopTest {
             val election = client.election("cooling")
             election.start(Ignore)
             election.stepDown(Duration.ofSeconds(Long.MAX_VALUE)).toCompletableFuture().get(WAIT, TimeUnit.SECONDS)
-            client.snapshot().elections.single { it.name.value == "cooling" }.kind.assert().isEqualTo(ElectionKind.ELECTION)
+            client.snapshot().elections.single { it.name.value == "cooling" }.kind.assert().isEqualTo(
+                ElectionKind.ELECTION
+            )
         }
     }
 

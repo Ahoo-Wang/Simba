@@ -28,7 +28,11 @@ import java.util.concurrent.CompletableFuture
 /** Table-style tests of the pure core: feed events, assert effects. No threads, no clock. */
 class EngineTest {
     private val config = EngineConfig.of(
-        SimbaConfig.builder().leaseDuration(Duration.ofSeconds(3)).renewInterval(Duration.ofSeconds(1)).drift(0.01).margin(Duration.ofMillis(20)).retryJitter(Duration.ZERO).build()
+        SimbaConfig.builder().leaseDuration(
+            Duration.ofSeconds(3)
+        ).renewInterval(
+            Duration.ofSeconds(1)
+        ).drift(0.01).margin(Duration.ofMillis(20)).retryJitter(Duration.ZERO).build()
     )
     private val name = LeaseName("orders")
     private val session = SessionId("s1")

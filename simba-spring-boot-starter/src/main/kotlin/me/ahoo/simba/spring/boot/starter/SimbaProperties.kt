@@ -42,7 +42,9 @@ data class SimbaProperties(
     ) {
         fun toConfig(): SimbaConfig {
             val renew = renewInterval ?: leaseDuration.dividedBy(DEFAULT_RENEWALS)
-            return SimbaConfig.builder().leaseDuration(leaseDuration).renewInterval(renew).drift(drift).margin(margin).retryJitter(renew.dividedBy(2)).build()
+            return SimbaConfig.builder().leaseDuration(
+                leaseDuration
+            ).renewInterval(renew).drift(drift).margin(margin).retryJitter(renew.dividedBy(2)).build()
         }
     }
 

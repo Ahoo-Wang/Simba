@@ -48,7 +48,13 @@ import java.util.concurrent.TimeoutException
  *   handover timed out).
  */
 class SimulationParams(
-    val config: SimbaConfig = SimbaConfig.builder().leaseDuration(Duration.ofSeconds(3)).renewInterval(Duration.ofSeconds(1)).drift(0.01).margin(Duration.ofMillis(20)).retryJitter(Duration.ofMillis(500)).minBackoff(Duration.ofMillis(50)).build(),
+    val config: SimbaConfig = SimbaConfig.builder().leaseDuration(
+        Duration.ofSeconds(3)
+    ).renewInterval(
+        Duration.ofSeconds(1)
+    ).drift(
+        0.01
+    ).margin(Duration.ofMillis(20)).retryJitter(Duration.ofMillis(500)).minBackoff(Duration.ofMillis(50)).build(),
     val minNodes: Int = 2,
     val maxNodes: Int = 5,
     val minNames: Int = 1,
@@ -81,7 +87,14 @@ class SimulationParams(
 
     override fun hashCode(): Int = values().hashCode()
 
-    override fun toString(): String = "SimulationParams(config=$config, minNodes=$minNodes, maxNodes=$maxNodes, minNames=$minNames, maxNames=$maxNames, maxDelay=$maxDelay, maxDropRate=$maxDropRate, quietMaxDelay=$quietMaxDelay, clockRateSpread=$clockRateSpread, meanPauseInterval=$meanPauseInterval, maxPause=$maxPause, meanOperationInterval=$meanOperationInterval, faultPhase=$faultPhase, quietPhase=$quietPhase, workShare=$workShare, selfExitShare=$selfExitShare, maxWork=$maxWork)"
+    override fun toString(): String =
+        "SimulationParams(config=$config, minNodes=$minNodes, maxNodes=$maxNodes, " +
+            "minNames=$minNames, maxNames=$maxNames, maxDelay=$maxDelay, maxDropRate=$maxDropRate, " +
+            "quietMaxDelay=$quietMaxDelay, clockRateSpread=$clockRateSpread, " +
+            "meanPauseInterval=$meanPauseInterval, maxPause=$maxPause, " +
+            "meanOperationInterval=$meanOperationInterval, faultPhase=$faultPhase, " +
+            "quietPhase=$quietPhase, workShare=$workShare, selfExitShare=$selfExitShare, " +
+            "maxWork=$maxWork)"
 }
 
 /** What a run did, for sanity checks and replay comparisons. */

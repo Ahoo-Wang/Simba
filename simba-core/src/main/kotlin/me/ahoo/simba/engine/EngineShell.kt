@@ -229,15 +229,15 @@ internal class EngineShell(
         }
 
     private fun footprintNow(): Footprint =
-                    Footprint(
-                        elections = state.elections.size,
-                        works = state.works.size,
-                        pending = state.pending.size,
-                        dispatchers = dispatchers.size,
-                        groups = state.groups.size + groupViews.size,
-                        terms = terms.active.size,
-                        abandoned = (state.session as? SessionState.Active)?.abandoned?.size ?: 0,
-                    )
+        Footprint(
+            elections = state.elections.size,
+            works = state.works.size,
+            pending = state.pending.size,
+            dispatchers = dispatchers.size,
+            groups = state.groups.size + groupViews.size,
+            terms = terms.active.size,
+            abandoned = (state.session as? SessionState.Active)?.abandoned?.size ?: 0,
+        )
 
     /** The session and every election as of now; a closed snapshot once the loop stopped. */
     fun snapshot(): CompletableFuture<SimbaSnapshot> =

@@ -13,9 +13,9 @@
 
 package me.ahoo.simba.engine
 
-import me.ahoo.simba.TermExpiredException
 import me.ahoo.simba.RevokeReason
 import me.ahoo.simba.Term
+import me.ahoo.simba.TermExpiredException
 import me.ahoo.simba.spi.LeaseName
 import me.ahoo.simba.spi.SessionId
 import me.ahoo.simba.spi.Ticker
