@@ -169,6 +169,11 @@ simba-core  ←  simba-jdbc | simba-spring-redis | simba-zookeeper  ←  simba-s
   Release publishes `released` on the lease key, the only broadcast. Core logic sees Redis only through
   `RedisScripting` (`SpringRedisScripting` adapts Spring Data Redis); with `routeBySlot` (Cluster) every script call
   keeps to one hash slot. Group names follow the `LeaseName` rules.
+- Zookeeper (`ZookeeperLeaseBackend`): one raw `ZooKeeper` client per session, never reconnected to another session;
+  `SessionId` = zk session id as 16 hex digits. Leases are ephemeral `/simba/leases/{name}`, owner = `ephemeralOwner`,
+  token = czxid (strictly increasing, not consecutive; the SPI and TCK only require strict increase). The client
+  heartbeats on its own, so a local watchdog closes a session no keep-alive started within `lease`; remaining is
+  `min(lease, negotiated timeout)`. A disconnected client fails `keepAlive` / `acquire`; a zk-expired one is `Expired`.
 
 ## Change Playbooks
 
