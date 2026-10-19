@@ -81,7 +81,7 @@ public void bill(Term term, int partition) { billing.run(partition, term.getToke
 Exactly one of `fixedDelay` / `fixedRate`; `initialDelay` counts from each term's start. Names must be unique per
 application. Actuator: endpoint `simba` (snapshot) and health indicator `simba` (`DOWN` when the session was not live
 for longer than the lease). Micrometer: `simba.session.renew`, `simba.session.state`, `simba.leadership`,
-`simba.revocations`, `simba.work`.
+`simba.locks.held`, `simba.revocations`, `simba.work`.
 
 ## Plain JVM
 

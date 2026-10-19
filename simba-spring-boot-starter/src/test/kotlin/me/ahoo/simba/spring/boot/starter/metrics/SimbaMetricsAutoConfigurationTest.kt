@@ -19,12 +19,14 @@ import me.ahoo.simba.Simba
 import me.ahoo.simba.spi.LeaseBackend
 import me.ahoo.simba.spring.boot.starter.Leadership
 import me.ahoo.simba.spring.boot.starter.SimbaAutoConfiguration
+import me.ahoo.simba.spring.boot.starter.SimbaLifecycle
 import me.ahoo.simba.testing.InMemoryLeaseBackend
 import me.ahoo.test.asserts.assert
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.springframework.boot.autoconfigure.AutoConfigurations
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
+import java.time.Duration
 
 class SimbaMetricsAutoConfigurationTest {
     private val contextRunner = ApplicationContextRunner()
@@ -45,6 +47,25 @@ class SimbaMetricsAutoConfigurationTest {
             it.getBean(Simba::class.java).snapshot()
             it.getBean(MeterRegistry::class.java).get(MicrometerSimbaEventListener.LEADERSHIP)
                 .tag("name", "metered").gauge().value().assert().isEqualTo(1.0)
+        }
+    }
+
+    @Test
+    fun `locks are counted without names and a closed client reads closed`() {
+        contextRunner.withBean(MeterRegistry::class.java, { SimpleMeterRegistry() }).run {
+            val simba = it.getBean(Simba::class.java)
+            val registry = it.getBean(MeterRegistry::class.java)
+            simba.lock("invoice-42").acquire(Duration.ofSeconds(Leadership.WAIT_SECONDS)).use {
+                simba.snapshot()
+                registry.get(MicrometerSimbaEventListener.LOCKS_HELD).gauge().value().assert().isEqualTo(1.0)
+                registry.find(MicrometerSimbaEventListener.LEADERSHIP).gauges().assert().isEmpty()
+            }
+            simba.snapshot()
+            registry.get(MicrometerSimbaEventListener.LOCKS_HELD).gauge().value().assert().isEqualTo(0.0)
+
+            it.getBean(SimbaLifecycle::class.java).stop()
+            registry.get(MicrometerSimbaEventListener.SESSION_STATE).tag("state", "closed").gauge().value()
+                .assert().isEqualTo(1.0)
         }
     }
 
