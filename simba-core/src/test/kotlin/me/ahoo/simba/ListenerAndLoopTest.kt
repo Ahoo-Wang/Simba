@@ -27,9 +27,11 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /** Event listeners off the loop, the loop-thread guard, closed waits and saturated durations. */
 class ListenerAndLoopTest {
@@ -116,10 +118,60 @@ class ListenerAndLoopTest {
     }
 
     @Test
-    fun `closing a lock term in a dependent of acquireAsync does not wait for the callback executor it occupies`() {
+    fun `dependents of a release run off the loop and may close the term`() {
         val executor = Executors.newSingleThreadExecutor()
         try {
             Simba.builder().backend(GrantingBackend()).callbackExecutor(executor).build().use { client ->
+                val term = client.lock("released").acquire(Duration.ofSeconds(WAIT))
+                // Hold the callback executor, so the release (which needs it) completes after the dependent is added.
+                val gate = CountDownLatch(1)
+                executor.execute { gate.await() }
+                val outcome = term.releaseAsync().thenApply {
+                    // Before, this ran on the loop, where close() threw although the release was done.
+                    listOf(me.ahoo.simba.engine.EngineShell.isLoopThread(), runCatching { term.close() }.isSuccess)
+                }
+                gate.countDown()
+                outcome.toCompletableFuture().get(WAIT, TimeUnit.SECONDS).assert().containsExactly(false, true)
+            }
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `closing an already released term on the loop returns instead of failing`() {
+        val outcomes = LinkedBlockingQueue<Boolean>()
+        lateinit var released: LockTerm
+        // A direct I/O executor runs backend calls on the loop thread, outside any callback.
+        val onLoop = object : LeaseBackend by GrantingBackend() {
+            override fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult> {
+                if (LeaseName("trigger") in names) {
+                    outcomes += me.ahoo.simba.engine.EngineShell.isLoopThread()
+                    outcomes += runCatching { released.close() }.isSuccess
+                }
+                return names.associateWith { AcquireResult.Granted(1) }
+            }
+        }
+        Simba.builder().backend(onLoop).ioExecutor(Runnable::run).build().use { client ->
+            released = client.lock("released").acquire(Duration.ofSeconds(WAIT))
+            released.releaseAsync().toCompletableFuture().get(WAIT, TimeUnit.SECONDS)
+            client.election("trigger").start(Ignore)
+            outcomes.poll(WAIT, TimeUnit.SECONDS).assert().isTrue()
+            outcomes.poll(WAIT, TimeUnit.SECONDS).assert().isTrue()
+        }
+    }
+
+    @Test
+    fun `closing a lock term in a dependent of acquireAsync does not wait for the callback executor it occupies`() {
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            // Increasing tokens: the engine adopts no token at or below one it released, as a real backend never grants.
+            val tokens = AtomicLong()
+            val backend = object : LeaseBackend by GrantingBackend() {
+                override fun acquire(session: SessionId, names: Set<LeaseName>): Map<LeaseName, AcquireResult> =
+                    names.associateWith { AcquireResult.Granted(tokens.incrementAndGet()) }
+            }
+            Simba.builder().backend(backend).callbackExecutor(executor).build().use { client ->
                 val lock = client.lock("chained")
                 lock.acquireAsync(Duration.ofSeconds(WAIT)).thenAccept { it.close() }
                     .toCompletableFuture().get(WAIT, TimeUnit.SECONDS)

@@ -75,8 +75,8 @@ class EngineTerm(
         )
     }
 
-    override val revoked: CompletionStage<RevokeReason>
-        get() = revokedFuture.minimalCompletionStage()
+    /** One stage for every read, so that callers registering on it do not add a node to [revokedFuture] each time. */
+    override val revoked: CompletionStage<RevokeReason> = revokedFuture.minimalCompletionStage()
 
     fun revoke(reason: RevokeReason) {
         revokeReason = reason

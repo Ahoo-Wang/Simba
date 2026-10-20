@@ -158,6 +158,8 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
             "terms" to footprint.terms,
             "abandoned" to footprint.abandoned,
             "running" to running.size,
+            // Lock attempts wait on the close future; an abandoned or finished one must leave no node behind.
+            "closeWaiters" to closed.numberOfDependents,
         )
     }
 
@@ -196,6 +198,10 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
 
     /** Waits for [stage] unless the caller is a callback or leader work of this client. */
     private fun join(stage: CompletionStage<Void>) {
+        // A stage already complete needs no wait, wherever the caller runs (on the loop too).
+        if ((stage as? LoopGuardedStage<*>)?.isDone == true) {
+            return
+        }
         if (EngineShell.isDispatching() || WorkListener.isWorking()) {
             return
         }
@@ -357,6 +363,8 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
         init {
             result.whenComplete { term, _ ->
                 timer.cancel()
+                // Ends every pending wait of this attempt, so none stays registered on the client's close future.
+                deadline.complete(null)
                 val abandoned = synchronized(lock) { current.takeIf { term == null || term !== won } }
                 abandoned?.let { stopRun(name, it) }
             }
@@ -395,6 +403,9 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
         }
 
         private fun afterLocalWait() {
+            if (result.isDone) {
+                return
+            }
             if (deadline.isDone && !closing.get()) {
                 timedOut()
             } else {
@@ -403,6 +414,10 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
         }
 
         private fun settle(run: Run, listener: LockListener) {
+            if (result.isDone) {
+                // Abandoned: the completion of the result already stopped the run.
+                return
+            }
             val term = listener.elected.getNow(null)
             if (term != null && term.isValid) {
                 val held = ShellLockTerm(term) { stopRun(name, run) }
@@ -440,18 +455,7 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
          * run and a blocking `close()` in them does not wait for the executor they occupy.
          */
         private fun finish(complete: () -> Unit) {
-            val completion = object : Runnable {
-                override fun run() {
-                    EngineShell.runAsCallback(complete)
-                }
-
-                override fun toString(): String = "LockCompletion($name)"
-            }
-            try {
-                callbackExecutor.execute(completion)
-            } catch (_: RejectedExecutionException) {
-                completion.run()
-            }
+            completeAsCallback("LockCompletion($name)", complete)
         }
 
         private fun anyOf(vararg futures: CompletableFuture<*>?): CompletableFuture<Any> =
@@ -473,11 +477,40 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
         }
     }
 
+    /**
+     * Runs [complete] on the callback executor marked as a callback (on the caller when the executor rejects it), so
+     * that dependents of what it completes run where callbacks run, never on the event loop unless callbacks do, and a
+     * blocking `close()` in them does not wait for the executor they occupy.
+     */
+    private fun completeAsCallback(label: String, complete: () -> Unit) {
+        val completion = object : Runnable {
+            override fun run() {
+                EngineShell.runAsCallback(complete)
+            }
+
+            override fun toString(): String = label
+        }
+        try {
+            callbackExecutor.execute(completion)
+        } catch (_: RejectedExecutionException) {
+            completion.run()
+        }
+    }
+
     private inner class ShellLockTerm(
         private val term: Term,
         private val release: () -> CompletableFuture<Void>,
     ) : LockTerm, Term by term {
-        private val released by lazy { release() }
+        /** The release, completed like a lock result: on the callback executor, never directly on the loop. */
+        private val released by lazy {
+            val relayed = CompletableFuture<Void>()
+            release().whenComplete { _, error ->
+                completeAsCallback("LockRelease(${term.name})") {
+                    if (error == null) relayed.complete(null) else relayed.completeExceptionally(error)
+                }
+            }
+            relayed
+        }
 
         override fun releaseAsync(): CompletionStage<Void> = released.loopGuarded()
 
@@ -649,6 +682,8 @@ internal fun <T> CompletableFuture<T>.loopGuarded(): CompletionStage<T> = LoopGu
  */
 internal class LoopGuardedStage<T>(private val future: CompletableFuture<T>) :
     CompletionStage<T> by future.minimalCompletionStage() {
+    val isDone: Boolean get() = future.isDone
+
     override fun toCompletableFuture(): CompletableFuture<T> {
         check(future.isDone || !EngineShell.isLoopThread()) {
             "Waiting for this stage on the Simba event loop would block the loop that completes it; chain on it instead."

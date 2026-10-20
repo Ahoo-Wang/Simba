@@ -144,9 +144,11 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   re-acquired, but `acquire(timeout)` keeps contending until its timeout when the term it won ended before it
   returned. `acquireAsync` / `tryAcquireAsync` wait without a thread and complete on the callback executor, marked as
   a callback (`close()` in a dependent does not wait), and never with a term that already ended (the lock contends
-  again); the blocking calls check the loop before starting an attempt and wait on it. Cancelling one (or
-  interrupting a blocking caller) abandons the attempt and releases a term it already won. Timers that are no longer
-  needed (lock deadlines, schedule wake-ups, call timeouts) are cancelled.
+  again); `LockTerm.releaseAsync()` completes the same way. The blocking calls check the loop before starting an
+  attempt and wait on it. Cancelling one (or interrupting a blocking caller) abandons the attempt, releases a term it
+  already won and ends its waits, so nothing stays registered on the client's close future (`footprint()`
+  `closeWaiters`). A blocking `close()` of a stage already complete returns at once, on the loop too. Timers that are
+  no longer needed (lock deadlines, schedule wake-ups, call timeouts) are cancelled.
 - Groups: the engine joins the group with every session and publishes member views (`Effect.Members`); each node runs
   the partitions `PartitionAssignment` gives it over the session ids and hands the others over. Leaving while a join
   is in flight sends the leave once the join answers (even a failed one); a failed leave retries; the membership of
