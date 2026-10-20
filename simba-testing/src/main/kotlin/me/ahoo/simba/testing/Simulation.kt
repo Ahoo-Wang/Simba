@@ -51,8 +51,8 @@ import java.util.concurrent.TimeoutException
  *   [selfExitShare] within [maxWork], and otherwise within [maxWork] after its term is revoked (often after the
  *   handover timed out).
  * @property selfExpiringLeases runs [InMemoryLeaseBackend] with leases that expire on their own, as on Redis.
- * @property sessionBoundGrants with [selfExpiringLeases], a grant lasts only as long as its session has left, as on a
- *   single Redis node, instead of one full lease.
+ * @property sessionBoundGrants with [selfExpiringLeases], a grant lasts only as long as its session has left, as on
+ *   Redis, instead of one full lease.
  * @property truncatedGrantShare share of runs whose backend reports less time than it grants (a factor drawn from
  *   `[0.3, 0.95]` per run), as a Zookeeper server capping the session timeout does; below two renew intervals of
  *   local validity the engine renews more often (`SessionLeaseShortened`).
