@@ -40,8 +40,14 @@ Simba 在源码层面遵循 [语义化版本](https://semver.org/lang/zh-CN/)：
 - 新的可选模块 `simba-coroutines` 提供挂起版的锁调用、`withLock`、`Term.awaitRevoked()` 和 `SimbaEventFlow`；它依赖
   `kotlinx-coroutines-core`，`simba-core` 不依赖它。
 - `simba-testing`：`InMemoryLeaseBackend.builder()` 还可以设置 `sessionBoundGrants`，让一次授予只持续会话剩余的时长，与 Redis
-  相同；`SimulationParams` 新增 `sessionBoundGrants`、`truncatedGrantShare`、`meanInjectionInterval`、
-  `groupPartitions` 和 `earlyCloseShare`（参阅[测试](/zh/guide/testing#deterministic-simulation)）。已有的构造器和参数保持不变。
+  相同；新增的方法可以在测试中驱动后端侧行为：`beginSlotAcquire`（返回一个 `SlotAcquire`，其 `grant` 稍后才拿到租约，
+  与 Cluster 上租约槽的脚本相同）、`peekOwner` 和 `peekExpiry`（无副作用的读取）、`expireSession` 和 `loseLease`
+  （服务器提前结束会话、存储丢失租约及其 token）。`SimulationParams` 新增 `sessionBoundGrants`、`truncatedGrantShare`、
+  `meanInjectionInterval`、`groupPartitions`、`earlyCloseShare` 和 `backendHints`（参阅[测试](/zh/guide/testing#deterministic-simulation)）。
+  已有的构造器和参数保持不变。
+- 模拟器更严格了：各节点的时钟速率现在会随时间变化（在 `clockRateSpread` 范围内），I1 还会检查有效的任期就是后端记录的
+  持有者、永远不会比后端的授予持续得更久，以及一旦失效就不会再变为有效。因此你自己的模拟测试、以及在 5.0 上通过的 seed，
+  在 5.1 上可能失败，暴露出之前就存在的问题；请重放失败的 seed 来排查。
 - Redis 开启 `routeBySlot`（Cluster）时，一次调用先在会话所在的槽运行脚本，再为每个租约或组所在的槽各运行一个脚本
   （[Cluster](/zh/guide/backends#cluster)）：
   - 从发出会话调用起经过的时间达到会话剩余时长后，获取和加入不再向其他槽发送任何脚本，并以 `SimbaException` 失败。回复晚于这个时长才到达的获取会释放它开始的任期（包括已经授予成功的槽）并失败；引擎会像其他失败的调用一样重试。

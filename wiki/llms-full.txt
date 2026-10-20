@@ -1605,9 +1605,16 @@ versions can run side by side:
 - The new optional module `simba-coroutines` adds suspending lock calls, `withLock`, `Term.awaitRevoked()` and
   `SimbaEventFlow`; it depends on `kotlinx-coroutines-core`, which `simba-core` does not.
 - `simba-testing`: `InMemoryLeaseBackend.builder()` also sets `sessionBoundGrants`, a grant lasting only what the
-  session has left, as on Redis, and `SimulationParams` adds `sessionBoundGrants`, `truncatedGrantShare`,
-  `meanInjectionInterval`, `groupPartitions` and `earlyCloseShare` (see [Testing](/guide/testing#deterministic-simulation)).
-  The existing constructors and parameters are unchanged.
+  session has left, as on Redis; new methods drive backend-side behavior from a test: `beginSlotAcquire` (returning a
+  `SlotAcquire` whose `grant` takes the leases later, as a Cluster's lease-slot scripts do), `peekOwner` and
+  `peekExpiry` (read without side effects), `expireSession` and `loseLease` (a server ending a session early, a store
+  losing a lease and its token). `SimulationParams` adds `sessionBoundGrants`, `truncatedGrantShare`,
+  `meanInjectionInterval`, `groupPartitions`, `earlyCloseShare` and `backendHints` (see
+  [Testing](/guide/testing#deterministic-simulation)). The existing constructors and parameters are unchanged.
+- The simulation is stricter: node clocks now change their rate over time (within `clockRateSpread`), and I1 also
+  checks that a valid term is the backend's owner, never outlasts the backend's grant, and never becomes valid again
+  once invalid. Your own simulation tests, and seeds that passed on 5.0, may therefore fail on 5.1 and expose a
+  problem that was there before; replay a failing seed to investigate.
 - Redis with `routeBySlot` (a Cluster), where one call runs a script on the session's slot and then one per lease or
   group slot ([Cluster](/guide/backends#cluster)):
   - Acquire and join fail with `SimbaException` and send nothing to the other slots once the session's remaining
