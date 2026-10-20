@@ -103,6 +103,9 @@ implementation("org.springframework.boot:spring-boot-starter-data-redis")
 
 // or Zookeeper
 implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
+
+// optional, since 5.1: suspending lock calls, withLock, event Flow
+implementation("me.ahoo.simba:simba-coroutines:${simbaVersion}")
 ```
 
 ```xml [Maven]
@@ -117,11 +120,17 @@ implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
     <artifactId>simba-spring-redis</artifactId>
     <version>${simba.version}</version>
 </dependency>
+<!-- optional, since 5.1: coroutine adapters -->
+<dependency>
+    <groupId>me.ahoo.simba</groupId>
+    <artifactId>simba-coroutines</artifactId>
+    <version>${simba.version}</version>
+</dependency>
 ```
 
 :::
 
-`simba-bom` aligns the versions of every Simba module. Without Spring, depend on `simba-core` plus a backend module:
+`simba-bom` aligns the versions of every Simba module. `simba-coroutines` (since 5.1) adds suspending lock calls, `withLock` and a `Flow` of events on top of any backend; see [Locks](/guide/locks#coroutines). Without Spring, depend on `simba-core` plus a backend module:
 `simba-jdbc`, `simba-zookeeper`, or for Redis `simba-spring-redis` (which brings `simba-redis`). `simba-redis` alone
 only defines the `RedisScripting` port: use it without `simba-spring-redis` only with your own adapter for another
 Redis client.
@@ -1075,13 +1084,15 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 |---|---|
 | `acquire(timeout)` | Waits up to `timeout` (on the client's clock) for a term; throws `LockTimeoutException` when none was won in time. A term that ends right after it was won does not end the wait: the lock contends again until the timeout. A timeout too large for nanoseconds waits `Long.MAX_VALUE` ns. Interrupting the caller abandons the attempt and rethrows `InterruptedException` (declared for Java). Calling it on the engine loop (only reachable with a direct callback executor) throws `IllegalStateException`. |
 | `tryAcquire()` | One attempt: the term when this client wins the first answered attempt; `null` when another session or this client holds the lease, or when no attempt is answered within one lease duration (backend unreachable). |
-| `acquireAsync(timeout)` | `acquire` without blocking (since 5.1): a `CompletionStage<LockTerm>` that completes with the term, or exceptionally with `LockTimeoutException` (timeout) or `IllegalStateException` (client closed). |
+| `acquireAsync(timeout)` | `acquire` without blocking (since 5.1): a `CompletionStage<LockTerm>` that completes with the term, or exceptionally with `LockTimeoutException` (timeout), `IllegalStateException` (client closed) or `IllegalArgumentException` (negative timeout); it never throws. |
 | `tryAcquireAsync()` | `tryAcquire` without blocking (since 5.1): a `CompletionStage<LockTerm?>` that completes with the term or `null`. |
 
 ### Without Blocking
 
 `acquireAsync` and `tryAcquireAsync` wait without a thread and complete on the client's callback executor (on its
-event loop only with a direct callback executor, as callbacks do). **Cancelling** the returned future (`toCompletableFuture().cancel(...)`) abandons the attempt and
+event loop only with a direct callback executor, as callbacks do). Their dependents run like callbacks: `close()` on
+the term there releases without waiting. A term that ends before the stage could complete with it is never returned:
+the lock contends again. **Cancelling** the returned future (`toCompletableFuture().cancel(...)`) abandons the attempt and
 releases a term it already won, so a cancelled acquisition never leaves the lock held. Reactor users can wrap the
 stage with `Mono.fromCompletionStage`.
 
@@ -1505,14 +1516,17 @@ backends run this spec in Simba's own build; see [Contributing](/contributing/#a
 <doc title="Upgrading" path="guide/upgrading.md">
 # Upgrading
 
-Simba follows [Semantic Versioning](https://semver.org/). Breaking changes of the following only happen in a major
-version:
+Simba follows [Semantic Versioning](https://semver.org/) at the source level: within a major version, code that
+compiled against an earlier release compiles against a later one unchanged, so recompile when you upgrade. Binary
+compatibility (running code compiled against another release without recompiling) is not promised. Source-breaking
+changes of the following only happen in a major version:
 
 | Area | Covered |
 |---|---|
 | Core API | Public types of `me.ahoo.simba`, `me.ahoo.simba.partition`, `me.ahoo.simba.event`, `me.ahoo.simba.spi` |
 | Backends | Public classes of `simba-jdbc`, `simba-redis`, `simba-spring-redis`, `simba-zookeeper` (`JdbcLeaseBackend`, `Dialect`, `RedisLeaseBackend`, `RedisScripting`, `SpringRedisScripting`, `ZookeeperLeaseBackend`, ...) |
 | Spring Boot starter | Public types and annotations (`@SimbaScheduled`, `@SimbaPartitioned`, the `*Properties` classes, `SimbaLifecycle`, `MicrometerSimbaEventListener`, `SimbaEndpoint`, `SimbaHealthIndicator`), the `simba.*` properties, bean names and conditions |
+| Coroutines | `simba-coroutines` (since 5.1): the functions and types of `me.ahoo.simba.coroutines` (`awaitAcquire`, `awaitTryAcquire`, `withLock`, `awaitRevoked`, `SimbaEventFlow`) |
 | Test kits | `simba-testing` (`InMemoryLeaseBackend`, `VirtualClock`, `VirtualScheduler`, `Simulation`) and `simba-tck` (`LeaseBackendSpec`, `FencingSpec`) |
 | Observability | Metric names and tag keys, the Actuator endpoint's and the health indicator's JSON fields |
 | Storage | The JDBC schema, the Redis keys and messages, the Zookeeper paths |
@@ -1531,6 +1545,16 @@ enums and events tolerantly. Types marked `@InternalSimbaApi` (the engine, `Simb
 Minor and patch releases keep the storage format, so nodes of different 5.x versions can contend for the same names
 and you can roll an upgrade node by node. Release notes list every change:
 [GitHub Releases](https://github.com/Ahoo-Wang/Simba/releases).
+
+### 5.0 to 5.1 {#from-5-0-to-5-1}
+
+5.1 only adds API and keeps 5.0's storage, so nodes of both versions can run side by side:
+
+- `DistributedLock.acquireAsync(timeout)` and `tryAcquireAsync()` acquire a lock without blocking; see
+  [Locks](/guide/locks#without-blocking). They are default methods, so your own `DistributedLock` implementations
+  keep compiling unchanged.
+- The new optional module `simba-coroutines` adds suspending lock calls, `withLock`, `Term.awaitRevoked()` and
+  `SimbaEventFlow`; it depends on `kotlinx-coroutines-core`, which `simba-core` does not.
 </doc>
 
 <doc title="Migrating from 4.x to 5.0" path="guide/migration.md">

@@ -42,6 +42,9 @@ implementation("org.springframework.boot:spring-boot-starter-data-redis")
 
 // 或 Zookeeper：设置 simba.zookeeper.connect-string
 implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
+
+// 可选（5.1 起）：挂起版的锁调用、withLock 和事件 Flow（依赖 kotlinx-coroutines）
+implementation("me.ahoo.simba:simba-coroutines:${simbaVersion}")
 ```
 
 starter 会基于类路径上的后端创建一个 `Simba` bean。类路径上有多个后端模块时，设置 `simba.backend=jdbc|redis|zookeeper`。

@@ -32,8 +32,8 @@ This file records what is not obvious from the code. Describe the code as it is;
 | `simba-jdbc` | Docker: Testcontainers `mysql:8.4` and `postgres:17` (`LeaseDatabaseFixture`, schema from `simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-*.sql`) |
 
 CI (`.github/workflows/integration-test.yml`; job names are required checks, keep them): `Simba Core Test` (core,
-testing, tck, coroutines, starter), `Simba Spring Redis Test` (simba-redis and simba-spring-redis), `Simba Zookeeper Test`,
-`Simba Jdbc Test`, `Simba Example (jdbc|redis|zookeeper)`, `Simba Test (JDK 25)`. Wiki commands are in
+testing, tck, coroutines, starter), `Simba Spring Redis Test` (simba-redis and simba-spring-redis),
+`Simba Zookeeper Test`, `Simba Jdbc Test`, `Simba Example (jdbc|redis|zookeeper)`, `Simba Test (JDK 25)`. Wiki commands are in
 `wiki/AGENTS.md`.
 
 ## Architecture
@@ -141,9 +141,11 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   `LeaderTask` or `LockTerm` stops only its own run (closing it again never touches a later run of the name).
 - `lock(name)`: one holder per name per client; a lock term lost other than by release is released for good, not
   re-acquired, but `acquire(timeout)` keeps contending until its timeout when the term it won ended before it
-  returned. `acquireAsync` / `tryAcquireAsync` wait without a thread and complete on the callback executor; the
-  blocking calls wait on them, and cancelling one (or interrupting a blocking caller) abandons the attempt and releases
-  a term it already won. Timers that are no longer needed (lock deadlines, schedule wake-ups, call timeouts) are cancelled.
+  returned. `acquireAsync` / `tryAcquireAsync` wait without a thread and complete on the callback executor, marked as
+  a callback (`close()` in a dependent does not wait), and never with a term that already ended (the lock contends
+  again); the blocking calls check the loop before starting an attempt and wait on it. Cancelling one (or
+  interrupting a blocking caller) abandons the attempt and releases a term it already won. Timers that are no longer
+  needed (lock deadlines, schedule wake-ups, call timeouts) are cancelled.
 - Groups: the engine joins the group with every session and publishes member views (`Effect.Members`); each node runs
   the partitions `PartitionAssignment` gives it over the session ids and hands the others over. Leaving while a join
   is in flight sends the leave once the join answers (even a failed one); a failed leave retries; the membership of

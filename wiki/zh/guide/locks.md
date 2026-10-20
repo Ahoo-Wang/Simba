@@ -32,12 +32,13 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 |---|---|
 | `acquire(timeout)` | 最多等待 `timeout`（按客户端时钟）以获得一个任期；未能及时赢得时抛出 `LockTimeoutException`。刚赢得就结束的任期不会结束等待：锁会继续竞争直到超时。超出纳秒表示范围的超时按 `Long.MAX_VALUE` 纳秒等待。中断调用方会放弃本次尝试并重新抛出 `InterruptedException`（对 Java 已声明）。在引擎循环上调用（只有直接执行的回调执行器才会走到）会抛出 `IllegalStateException`。 |
 | `tryAcquire()` | 只尝试一次：本客户端赢得第一个得到应答的尝试时返回任期；当另一个会话或本客户端持有该租约，或在一个租约时长内没有尝试得到应答（后端不可达）时返回 `null`。 |
-| `acquireAsync(timeout)` | 不阻塞的 `acquire`（5.1 起）：返回 `CompletionStage<LockTerm>`，以任期完成；超时则以 `LockTimeoutException`、客户端关闭则以 `IllegalStateException` 异常完成。 |
+| `acquireAsync(timeout)` | 不阻塞的 `acquire`（5.1 起）：返回 `CompletionStage<LockTerm>`，以任期完成；超时则以 `LockTimeoutException`、客户端关闭则以 `IllegalStateException`、超时为负数则以 `IllegalArgumentException` 异常完成；它本身不抛异常。 |
 | `tryAcquireAsync()` | 不阻塞的 `tryAcquire`（5.1 起）：返回 `CompletionStage<LockTerm?>`，以任期或 `null` 完成。 |
 
 ### 不阻塞地获取 {#without-blocking}
 
-`acquireAsync` 和 `tryAcquireAsync` 等待时不占用线程，在客户端的回调执行器上完成（与回调一样，只有使用直接执行的回调执行器时才会在事件循环上完成）。**取消**返回的
+`acquireAsync` 和 `tryAcquireAsync` 等待时不占用线程，在客户端的回调执行器上完成（与回调一样，只有使用直接执行的回调执行器时才会在事件循环上完成）。它的后续操作像回调一样运行：在其中对任期调用
+`close()` 会释放但不等待。在 stage 完成之前就已结束的任期绝不会被返回：锁会继续竞争。**取消**返回的
 future（`toCompletableFuture().cancel(...)`）会放弃本次尝试，并释放已经赢得的任期，因此被取消的获取绝不会让锁一直被持有。
 Reactor 用户可以用 `Mono.fromCompletionStage` 包装它。
 

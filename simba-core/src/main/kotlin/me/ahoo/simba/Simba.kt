@@ -292,14 +292,24 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
     // region locks
 
     private inner class ShellLock(override val name: LeaseName) : DistributedLock {
+        // The loop check comes before the attempt starts: an attempt nobody waits for would win a term nobody holds.
         @Throws(InterruptedException::class)
-        override fun acquire(timeout: Duration): LockTerm = await(acquireAsync(timeout))
+        override fun acquire(timeout: Duration): LockTerm {
+            EngineShell.checkNotOnLoop("Acquiring a lock")
+            require(!timeout.isNegative) { "timeout must not be negative." }
+            return await(acquireAsync(timeout))
+        }
 
         @Throws(InterruptedException::class)
-        override fun tryAcquire(): LockTerm? = await(tryAcquireAsync())
+        override fun tryAcquire(): LockTerm? {
+            EngineShell.checkNotOnLoop("Acquiring a lock")
+            return await(tryAcquireAsync())
+        }
 
         override fun acquireAsync(timeout: Duration): CompletableFuture<LockTerm> {
-            require(!timeout.isNegative) { "timeout must not be negative." }
+            if (timeout.isNegative) {
+                return CompletableFuture.failedFuture(IllegalArgumentException("timeout must not be negative."))
+            }
             @Suppress("UNCHECKED_CAST")
             return LockAttempt(name, timeout, probe = false).result as CompletableFuture<LockTerm>
         }
@@ -308,9 +318,8 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
             LockAttempt(name, config.leaseDuration, probe = true).result
 
         /** Waits for [future]; interrupting the caller cancels it, which abandons the attempt. */
-        private fun <T> await(future: CompletableFuture<T>): T {
-            EngineShell.checkNotOnLoop("Acquiring a lock")
-            return try {
+        private fun <T> await(future: CompletableFuture<T>): T =
+            try {
                 future.get()
             } catch (error: InterruptedException) {
                 future.cancel(false)
@@ -318,7 +327,6 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
             } catch (error: ExecutionException) {
                 throw error.cause ?: error
             }
-        }
     }
 
     /**
@@ -326,9 +334,11 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
      * [timeout] passes on the client's clock (one answered attempt with [probe]). A term revoked right after it began
      * does not end the wait: the lock contends again within the timeout.
      *
-     * [result] completes on the callback executor (on the event loop only with a direct one, as callbacks do).
-     * Completing it other than with the term this attempt won (cancelling it) abandons the attempt: the current run
-     * stops and a term already won is released. The deadline timer is cancelled once [result] completes.
+     * [result] completes on the callback executor (on the event loop only with a direct one, as callbacks do), and its
+     * dependents run there like callbacks: `close()` in them does not wait. A term that ended before [result] could
+     * complete with it is not returned: the lock contends again. Completing [result] other than with the term this
+     * attempt won (cancelling it) abandons the attempt: the current run stops and a term already won is released.
+     * The deadline timer is cancelled once [result] completes.
      */
     private inner class LockAttempt(
         private val name: LeaseName,
@@ -398,12 +408,19 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
                 val held = ShellLockTerm(term) { stopRun(name, run) }
                 synchronized(lock) { won = held }
                 finish {
-                    if (!result.complete(held)) {
-                        held.releaseAsync()
+                    when {
+                        // Revoked while the completion waited for the callback executor: contend again.
+                        !held.isValid -> lost(run)
+                        !result.complete(held) -> held.releaseAsync()
                     }
                 }
                 return
             }
+            lost(run)
+        }
+
+        /** [run] ended without a term to return: stop it, then contend again unless the attempt is over. */
+        private fun lost(run: Run) {
             stopRun(name, run)
             when {
                 closing.get() -> contend()
@@ -418,12 +435,22 @@ class Simba private constructor(builder: Builder) : AutoCloseable {
             finish { result.completeExceptionally(LockTimeoutException(name, timeout)) }
         }
 
-        /** Completes [result] on the callback executor, so that its dependents run where callbacks run. */
+        /**
+         * Completes [result] on the callback executor, marked as a callback, so that its dependents run where callbacks
+         * run and a blocking `close()` in them does not wait for the executor they occupy.
+         */
         private fun finish(complete: () -> Unit) {
+            val completion = object : Runnable {
+                override fun run() {
+                    EngineShell.runAsCallback(complete)
+                }
+
+                override fun toString(): String = "LockCompletion($name)"
+            }
             try {
-                callbackExecutor.execute(complete)
+                callbackExecutor.execute(completion)
             } catch (_: RejectedExecutionException) {
-                complete()
+                completion.run()
             }
         }
 
