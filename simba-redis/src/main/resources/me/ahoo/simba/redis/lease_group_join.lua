@@ -11,15 +11,12 @@
 
 -- Adds a session to groups (ADR 0010 §7.2).
 -- ARGV[1]: '1' when KEYS start with the session keys (session hash, group index), else '0'; ARGV[2]: session id;
--- ARGV[3]: without the session keys, how long the memberships last in milliseconds; ARGV[4..]: with the session
--- keys, the group keys to record in the group index (keep-alive extends them, closing the session leaves them);
--- ARGV[4]: without the session keys, the Redis time (of the session's node) before which this call must run: the
--- session call's time plus the session lease plus the allowed clock skew.
+-- ARGV[3]: without the session keys, how long the memberships last in milliseconds (what the session has left, as
+-- the caller measured it since the session call answered); ARGV[4..]: with the session
+-- keys, the group keys to record in the group index (keep-alive extends them, closing the session leaves them).
 -- KEYS: [session keys,] group sorted sets `simba:group:{group}`, scored by expiry in Redis time.
--- A membership lasts as long as the session does now, or ARGV[3] (one full session lease on a Cluster) but never
--- beyond ARGV[4].
--- Returns {-1} when the session expired, {-2} when a call without the session keys ran at or after ARGV[4] (it
--- changes nothing); else {remaining, session lease, Redis time}.
+-- A membership lasts as long as the session does now: its PTTL, or ARGV[3] on a Cluster.
+-- Returns {-1} when the session expired; else {remaining, session lease}.
 local withSession = ARGV[1] == '1'
 local sid = ARGV[2]
 local ttl = tonumber(ARGV[3])
@@ -41,14 +38,7 @@ end
 
 local time = redis.call('TIME')
 local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
-if not withSession then
-    local deadline = tonumber(ARGV[4])
-    if now >= deadline then
-        return { -2 }
-    end
-    ttl = math.min(ttl, deadline - now)
-end
 for i = first, #KEYS do
     redis.call('ZADD', KEYS[i], now + ttl, sid)
 end
-return { ttl, lease, now }
+return { ttl, lease }

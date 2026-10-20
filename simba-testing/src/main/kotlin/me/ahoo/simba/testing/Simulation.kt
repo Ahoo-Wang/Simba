@@ -48,8 +48,8 @@ import java.util.concurrent.TimeoutException
  *   [selfExitShare] within [maxWork], and otherwise within [maxWork] after its term is revoked (often after the
  *   handover timed out).
  * @property selfExpiringLeases runs [InMemoryLeaseBackend] with leases that expire on their own, as on Redis.
- * @property sessionBoundGrants with [selfExpiringLeases], a grant lasts only as long as its session has left, as on a
- *   single Redis node, instead of one full lease.
+ * @property sessionBoundGrants with [selfExpiringLeases], a grant lasts only as long as its session has left, as on
+ *   Redis, instead of one full lease.
  */
 class SimulationParams private constructor(builder: Builder) {
     /** The defaults; see [builder] to change knobs. */

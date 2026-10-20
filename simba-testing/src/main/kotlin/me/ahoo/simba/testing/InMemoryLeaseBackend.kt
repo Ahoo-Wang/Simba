@@ -34,20 +34,23 @@ import java.util.concurrent.CopyOnWriteArrayList
  *
  * By default leases belong to sessions: a lease is free when released or when its session expired. With
  * [selfExpiringLeases] a lease instead expires on its own, like on Redis: a grant lasts one full lease of its
- * session (a Redis Cluster), or with [sessionBoundGrants] only as long as the session has left (a single Redis
- * node); keep-alive extends every lease the session owns, acquiring an owned lease extends it the same way, and a
+ * session, or with [sessionBoundGrants] only as long as the session has left (as Redis grants); keep-alive extends every lease the session owns, acquiring an owned lease extends it the same way, and a
  * lease outlives an expired session until its own expiry. Either way a lease's token never resets, and expired
  * sessions are forgotten on first sight and never revived.
  */
-class InMemoryLeaseBackend @JvmOverloads constructor(
-    private val ticker: Ticker = Ticker.SYSTEM,
-    private val selfExpiringLeases: Boolean = false,
-    private val sessionBoundGrants: Boolean = false,
-    private val sessionIds: () -> SessionId = SessionId::random,
+class InMemoryLeaseBackend(
+    private val ticker: Ticker,
+    private val selfExpiringLeases: Boolean,
+    private val sessionBoundGrants: Boolean,
+    private val sessionIds: () -> SessionId,
 ) : LeaseBackend {
-    /** The 5.0 signature, without [sessionBoundGrants]. */
-    constructor(ticker: Ticker, selfExpiringLeases: Boolean, sessionIds: () -> SessionId) :
-        this(ticker, selfExpiringLeases, false, sessionIds)
+    // The 5.0 signature, kept binary compatible (with its synthetic default-arguments constructor).
+    @JvmOverloads
+    constructor(
+        ticker: Ticker = Ticker.SYSTEM,
+        selfExpiringLeases: Boolean = false,
+        sessionIds: () -> SessionId = SessionId::random,
+    ) : this(ticker, selfExpiringLeases, false, sessionIds)
 
     private class Session(val id: SessionId, var expiresAt: Long, var lease: Long)
 
@@ -103,7 +106,7 @@ class InMemoryLeaseBackend @JvmOverloads constructor(
         withHints { hints ->
             LeaseBackend.requireBatch(names)
             val live = live(session, hints) ?: throw SessionExpiredException(session)
-            // A grant lasts as long as the session, or one full lease when leases expire on their own on a Cluster.
+            // A grant lasts as long as the session, or one full lease when leases expire on their own (unless bound).
             val until = if (selfExpiringLeases && !sessionBoundGrants) now() + live.lease else live.expiresAt
             names.associateWith { name ->
                 val lease = leases.getOrPut(name) { Lease(null, 0) }
