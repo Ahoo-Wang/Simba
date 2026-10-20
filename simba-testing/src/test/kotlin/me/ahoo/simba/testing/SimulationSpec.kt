@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
+import java.time.Duration
 
 class SimulationSpec {
     private val seeds = System.getProperty("simba.simulation.seeds")?.toLong() ?: DEFAULT_SEEDS
@@ -56,16 +57,36 @@ class SimulationSpec {
     }
 
     @Test
+    fun `invariants hold without backend hints, as on JDBC`() {
+        val range = only?.let { it..it } ?: 0 until seeds
+        var elections = 0L
+        for (seed in range) {
+            elections += Simulation(seed, NO_HINTS).run().elections
+        }
+        elections.assert().isGreaterThan(0)
+    }
+
+    @Test
+    fun `groups joined again while leaving still run their partitions`() {
+        // Seeds that left a partition without a leader before joins during a leave were fixed (#649).
+        Simulation(217, SELF_EXPIRING).run()
+        Simulation(200, NO_HINTS).run()
+        Simulation(1286).run()
+        Simulation(4026).run()
+    }
+
+    @Test
     fun `a seed replays exactly`() {
         Simulation(SAMPLE_SEED).run().assert().isEqualTo(Simulation(SAMPLE_SEED).run())
     }
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = ["owned", "self-expiring", "session-bound"])
+    @ValueSource(strings = ["owned", "self-expiring", "session-bound", "no-hints"])
     fun `every fault path actually happens`(mode: String) {
         val params = when (mode) {
             "self-expiring" -> SELF_EXPIRING
             "session-bound" -> SESSION_BOUND
+            "no-hints" -> NO_HINTS
             else -> SimulationParams()
         }
         val results = (0L until COVERAGE_SEEDS).map { Simulation(it, params).run() }
@@ -90,7 +111,12 @@ class SimulationSpec {
             "path:partitionHandedOver",
             "path:earlyClose",
             "path:closeWhileLeading",
+            // The backend losing a lease restarts its tokens: I2 breaks by the backend's fault, counted, not failed.
+            "premise:tokenReset",
         ).forEach { path -> (events[path] ?: 0).assert().isGreaterThan(0) }
+        if (mode == "no-hints") {
+            (events["path:noHintRun"] ?: 0).assert().isEqualTo(COVERAGE_SEEDS.toInt())
+        }
         results.sumOf { it.sessions - it.nodes }.assert().isGreaterThan(0)
     }
 
@@ -100,6 +126,18 @@ class SimulationSpec {
         results.sumOf { it.handovers }.assert().isGreaterThan(0)
         results.sumOf { it.handoverTimeouts }.assert().isGreaterThan(0)
         (results.sumOf { it.handovers } > results.sumOf { it.handoverTimeouts }).assert().isTrue()
+    }
+
+    @Test
+    fun `the checker catches a term outliving its lease between events`() {
+        // No drift allowance and no margin, but clocks running up to 30% fast: deadlines outlast the backend's grant.
+        val config = SimulationParams().config.toBuilder().drift(0.0).margin(Duration.ZERO).build()
+        val broken = SimulationParams.builder().config(config).clockRateSpread(0.3).groupPartitions(0)
+            .meanInjectionInterval(Duration.ZERO).build()
+        val failure = assertThrows<SimulationFailure> {
+            (0L until 200L).forEach { Simulation(it, broken).run() }
+        }
+        failure.message.assert().contains("after the backend frees its lease")
     }
 
     @Test
@@ -118,6 +156,7 @@ class SimulationSpec {
         const val SAMPLE_SEED = 42L
         const val COVERAGE_SEEDS = 50L
         val SELF_EXPIRING = SimulationParams.builder().selfExpiringLeases(true).build()
+        val NO_HINTS = SimulationParams.builder().backendHints(false).build()
         val SESSION_BOUND = SimulationParams.builder().selfExpiringLeases(true).sessionBoundGrants(true).build()
     }
 }

@@ -200,7 +200,11 @@ class ReviewTwoClientTest {
         val params = SimulationParams.builder().minNodes(3).clockRateSpread(0.002).build()
         params.toBuilder().build().assert().isEqualTo(params)
         params.maxPause.assert().isEqualTo(params.config.leaseDuration.multipliedBy(2))
-        SimulationParams().clockRateSpread.assert().isEqualTo(SimulationParams().config.drift)
+        val defaults = SimulationParams()
+        // Beyond the drift by half of what the margin covers over a lease, so the margin is needed.
+        defaults.clockRateSpread.assert().isEqualTo(
+            defaults.config.drift + defaults.config.margin.toNanos().toDouble() / defaults.config.leaseDuration.toNanos() / 2
+        )
     }
 
     @Test

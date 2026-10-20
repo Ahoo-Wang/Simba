@@ -195,6 +195,62 @@ class GroupsAndProbesTest : EngineHarness() {
         calls<BackendRequest.Join>().assert().isEqualTo(listOf(BackendRequest.Join(session, group)))
     }
 
+    /** The rejoined group must see a view even when the members are the same as before the leave. */
+    private fun rejoinPublishes() {
+        on(Event.Reply(call<BackendRequest.Join>().requestId, BackendResult.Done))
+        on(Event.Reply(call<BackendRequest.Members>().requestId, BackendResult.Members(listOf(session, other))))
+        effects.filterIsInstance<Effect.Members>().single().assert()
+            .isEqualTo(Effect.Members(group, session, listOf(session, other)))
+    }
+
+    @Test
+    fun `a rejoin republishes an unchanged view whatever the pending leave answers`() {
+        for (answer in listOf(BackendResult.Done, BackendResult.Failed(IllegalStateException("lost reply")))) {
+            state = EngineState.initial(config, 7)
+            open()
+            joined()
+            on(Event.Leave(group))
+            val leave = call<BackendRequest.Leave>()
+            on(Event.Join(group)).assert().isEmpty()
+            // A failed reply may hide a leave that went through: join again rather than trust the old membership.
+            on(Event.Reply(leave.requestId, answer))
+            rejoinPublishes()
+        }
+    }
+
+    @Test
+    fun `a members view without the joined session joins again`() {
+        open()
+        joined()
+        on(Event.Timer(effects.filterIsInstance<Effect.Arm>().single().id), now = SECOND)
+        // A leave that timed out before the rejoin reached the backend after it: we are no longer a member.
+        on(Event.Reply(call<BackendRequest.Members>().requestId, BackendResult.Members(listOf(other))), now = SECOND)
+        effects.assert().contains(Effect.Members(group, session, listOf(other)))
+        calls<BackendRequest.Join>().assert().isEqualTo(listOf(BackendRequest.Join(session, group)))
+        rejoinPublishes()
+    }
+
+    @Test
+    fun `a leave answering session expired forgets the group`() {
+        open()
+        joined()
+        on(Event.Leave(group))
+        val leave = call<BackendRequest.Leave>()
+        on(Event.Reply(leave.requestId, BackendResult.Failed(SessionExpiredException(session))))
+        state.groups.assert().isEmpty()
+    }
+
+    @Test
+    fun `a rejoin after a leave already failed joins at once`() {
+        open()
+        joined()
+        on(Event.Leave(group))
+        on(Event.Reply(call<BackendRequest.Leave>().requestId, BackendResult.Failed(IllegalStateException("timeout"))))
+        // The leave waits for its retry timer; joining again must not wait for it, nor only refresh members.
+        on(Event.Join(group))
+        rejoinPublishes()
+    }
+
     @Test
     fun `a session ending while leaving forgets the group`() {
         open()

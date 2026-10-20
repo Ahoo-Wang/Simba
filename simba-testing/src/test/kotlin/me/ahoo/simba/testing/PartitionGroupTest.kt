@@ -18,7 +18,9 @@ import me.ahoo.simba.Simba
 import me.ahoo.simba.event.SimbaEvent
 import me.ahoo.simba.partition.GroupTask
 import me.ahoo.simba.partition.PartitionAssignment
+import me.ahoo.simba.spi.LeaseBackend
 import me.ahoo.simba.spi.LeaseName
+import me.ahoo.simba.spi.SessionId
 import me.ahoo.simba.testing.VirtualSimba.Companion.WAIT
 import me.ahoo.simba.testing.VirtualSimba.Companion.next
 import me.ahoo.test.asserts.assert
@@ -28,6 +30,7 @@ import java.time.Duration
 import java.util.Collections
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** `Simba.group` on virtual time: rendezvous assignment over live sessions, hand-over before release. */
 class PartitionGroupTest {
@@ -138,6 +141,32 @@ class PartitionGroupTest {
         }
         simba.advance(Duration.ZERO)
         setOf(runs.next(), runs.next()).assert().isEqualTo(setOf(0, 1))
+    }
+
+    @Test
+    fun `a group started again right after stop runs its partitions even when the leave's reply was lost`() {
+        val loseLeaveReplies = AtomicBoolean(true)
+        val lossy = object : LeaseBackend by simba.backend {
+            override fun leave(session: SessionId, group: String) {
+                simba.backend.leave(session, group)
+                if (loseLeaveReplies.get()) {
+                    throw IllegalStateException("reply lost")
+                }
+            }
+        }
+        val client = simba.client { backend(lossy) }
+        val first = LinkedBlockingQueue<Int>()
+        val task = client.group(GROUP, 2).runWhileLeader { _, partition -> first += partition }
+        simba.settle()
+        setOf(first.next(), first.next()).assert().isEqualTo(setOf(0, 1))
+        // The leave went through, but the engine only saw it fail: it would retry, believing it is still a member.
+        task.stop().toCompletableFuture().get(WAIT, TimeUnit.SECONDS)
+        simba.settle()
+
+        val second = LinkedBlockingQueue<Int>()
+        client.group(GROUP, 2).runWhileLeader { _, partition -> second += partition }
+        simba.settle()
+        setOf(second.next(), second.next()).assert().isEqualTo(setOf(0, 1))
     }
 
     @Test

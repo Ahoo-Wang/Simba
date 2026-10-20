@@ -126,7 +126,8 @@ val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
 ### 主从切换后 token 回退 {#token-regression-after-a-failover}
 
 Redis 复制是异步的。当主节点在副本收到最新的 `token` 递增之前故障时，被提升的副本可能分配一个已经用过的 token，或更小的 token。
-此时检查 token 的资源可能接受一个任期在时间上更新但 token 更小的节点的写入，或拒绝合法的持有者。
+此时检查 token 的资源可能接受一个任期在时间上更新但 token 更小的节点的写入，或拒绝合法的持有者。客户端无法阻止这种情况：
+确定性模拟会注入这类数据丢失，并确认 token 随之回退（`premise:tokenReset`），所以下面的缓解措施都在后端一侧。
 
 - 设置 `simba.redis.wait-replicas`（构造参数 `waitReplicas`）：只有当这么多副本通过 `WAIT` 确认后，新任期才算数，否则获取失败。
   这会缩小窗口，但不能消除它，并且在 Cluster 上不可用。

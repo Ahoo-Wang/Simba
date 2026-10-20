@@ -108,6 +108,56 @@ class InMemoryLeaseBackendTest {
     }
 
     @Test
+    fun `peeks read owners and expiries without ending sessions or sending hints`() {
+        backend.peekOwner(name).assert().isNull()
+        backend.peekExpiry(name).assert().isNull()
+        val session = backend.openSession(lease).id
+        backend.acquire(session, setOf(name))
+        backend.peekExpiry(name).assert().isEqualTo(lease.toNanos())
+        hints.clear()
+        clock.advance(lease)
+        backend.peekOwner(name).assert().isNull()
+        backend.peekExpiry(name).assert().isNull()
+        hints.assert().isEmpty()
+        // The real read still sees the expired session and ends it.
+        backend.owner(name).assert().isNull()
+        hints.assert().isEqualTo(listOf(BackendHint.Released(name)))
+    }
+
+    @Test
+    fun `a session expired by the backend frees owned leases but not self-expiring ones`() {
+        val owned = backend.openSession(lease).id
+        backend.acquire(owned, setOf(name))
+        backend.expireSession(owned)
+        backend.peekOwner(name).assert().isNull()
+
+        val selfExpiring = InMemoryLeaseBackend(clock, selfExpiringLeases = true) { SessionId("x${++ids}") }
+        val session = selfExpiring.openSession(lease).id
+        selfExpiring.acquire(session, setOf(name))
+        selfExpiring.expireSession(session)
+        selfExpiring.peekOwner(name).assert().isEqualTo(InMemoryLeaseBackend.Owner(session, 1))
+        selfExpiring.peekExpiry(name).assert().isEqualTo(clock.nanoTime() + lease.toNanos())
+    }
+
+    @Test
+    fun `a lost lease restarts its tokens`() {
+        val session = backend.openSession(lease).id
+        backend.acquire(session, setOf(name)).assert().isEqualTo(mapOf(name to AcquireResult.Granted(1)))
+        backend.release(session, mapOf(name to 1L))
+        backend.acquire(session, setOf(name)).assert().isEqualTo(mapOf(name to AcquireResult.Granted(2)))
+        hints.clear()
+        backend.loseLease(name)
+        hints.assert().isEqualTo(listOf(BackendHint.Released(name)))
+        backend.token(name).assert().isEqualTo(0L)
+        backend.acquire(session, setOf(name)).assert().isEqualTo(mapOf(name to AcquireResult.Granted(1)))
+        backend.release(session, mapOf(name to 1L))
+        hints.clear()
+        backend.loseLease(name)
+        backend.loseLease(LeaseName("never"))
+        hints.assert().isEmpty()
+    }
+
+    @Test
     fun `session ids are never reused`() {
         val fixed = InMemoryLeaseBackend(clock) { SessionId("same") }
         fixed.openSession(lease)
