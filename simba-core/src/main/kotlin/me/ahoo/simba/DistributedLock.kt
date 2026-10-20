@@ -55,6 +55,10 @@ interface DistributedLock {
      * [IllegalArgumentException] for a negative [timeout]; it never throws. The client's own locks wait without a
      * thread and complete on its callback executor, where `close()` in a dependent does not wait (as in a callback);
      * this default runs [acquire] on a virtual thread and interrupts it on cancellation.
+     *
+     * A callback executor that rejects tasks never delivers the `onElected` of a won term: as for any election, the
+     * engine steps the lock's election down for one lease duration and the attempt never sees that term, so it keeps
+     * waiting until its [timeout] (or until it wins a later term).
      */
     fun acquireAsync(timeout: Duration): CompletionStage<LockTerm> = acquireOnVirtualThread { acquire(timeout) }
 
