@@ -58,13 +58,16 @@ suspend fun <R> DistributedLock.withLock(timeout: Duration, block: suspend (Lock
 
 /**
  * Suspends until the term is revoked and returns why. Cancelling the coroutine stops the wait only; the term is not
- * affected, and the wait leaves nothing behind: every wait on a term shares one registration on [Term.revoked].
+ * affected, and the wait leaves nothing behind: every wait on a term shares one registration on [Term.revoked], made
+ * once per term (even when [Term.revoked] returns a new stage on every read).
  */
-suspend fun Term.awaitRevoked(): RevokeReason = relays.computeIfAbsent(revoked, ::RevocationRelay).await()
+suspend fun Term.awaitRevoked(): RevokeReason = relays.computeIfAbsent(this) { RevocationRelay(it.revoked) }.await()
 
-/** One relay per revocation stage, weakly keyed, so that waits on a term never pile up callbacks on its stage. */
-private val relays: MutableMap<CompletionStage<RevokeReason>, RevocationRelay> =
-    Collections.synchronizedMap(WeakHashMap())
+/**
+ * One relay per term, weakly keyed by the term, so that waits on it never pile up callbacks on its revocation; the
+ * relay holds no reference back to the term.
+ */
+private val relays: MutableMap<Term, RevocationRelay> = Collections.synchronizedMap(WeakHashMap())
 
 /** Registers once on [stage] and resumes the waits still suspended on it; a cancelled wait leaves the relay. */
 private class RevocationRelay(stage: CompletionStage<RevokeReason>) {
@@ -110,9 +113,12 @@ private suspend fun <T> CompletionStage<T>.awaitCompletion(): T =
  * coroutine was cancelled is released rather than lost.
  */
 private suspend fun <T : LockTerm?> CompletionStage<T>.awaitTerm(): T {
+    // Cancel through the future, but listen on the original stage: when it is not a CompletableFuture,
+    // toCompletableFuture() is a copy, and a term the original delivers after the copy was cancelled must still be
+    // released.
     val future = toCompletableFuture()
     return suspendCancellableCoroutine { continuation ->
-        future.whenComplete { term, error ->
+        whenComplete { term, error ->
             if (error == null) {
                 continuation.resume(term) { _, value, _ -> value?.releaseAsync() }
             } else {

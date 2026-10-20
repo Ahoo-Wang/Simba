@@ -23,7 +23,10 @@ testImplementation("me.ahoo.simba:simba-tck:${simbaVersion}")
 ## 内存后端 {#in-memory-backend}
 
 `InMemoryLeaseBackend` 在内存中实现完整的 `LeaseBackend` 契约（会话、token 永不重置的租约、组、释放以及成员变化提示）。
-它不需要任何基础设施，因此适合对任何接受 `Simba` 的代码做单元测试：
+它不需要任何基础设施，因此适合对任何接受 `Simba` 的代码做单元测试。默认情况下租约与会话同生共死（如 JDBC、Zookeeper）；
+`selfExpiringLeases = true` 让租约自行过期，每次授予持续一个完整租期；四参数构造器
+`InMemoryLeaseBackend(ticker, selfExpiringLeases, sessionBoundGrants, sessionIds)`（5.1 起）配合
+`sessionBoundGrants = true`，让一次授予只持续其会话剩余的时间，与 Redis 相同：
 
 ```kotlin
 @Test
@@ -102,6 +105,15 @@ class FailoverTest {
 ```bash
 ./gradlew simba-testing:test -Psimba.simulation.seed=42
 ```
+
+| `SimulationParams`（5.1 起） | 默认值 | 含义 |
+|---|---|---|
+| `sessionBoundGrants` | `false` | 配合 `selfExpiringLeases`，一次授予只持续其会话剩余的时间，与 Redis 相同 |
+| `truncatedGrantShare` | `0.3` | 后端报告的时长短于实际授予时长的运行所占比例（如 Zookeeper 服务器限制会话超时） |
+| `meanInjectionInterval` | `20s` | 后端侧故障（后端自行使会话过期、删除或丢失租约）的平均间隔；`Duration.ZERO` 表示关闭 |
+| `groupPartitions` | `3` | 节点随机加入和离开的一个组的分区数；`0` 表示不使用组 |
+| `earlyCloseShare` | `0.02` | 故障阶段中永久关闭某个节点的随机操作所占比例 |
+| `backendHints` | `true` | 后端发送释放和成员变化提示；`false` 模拟不发提示的 JDBC |
 
 ## 验证 fencing 资源 {#verifying-a-fencing-resource}
 

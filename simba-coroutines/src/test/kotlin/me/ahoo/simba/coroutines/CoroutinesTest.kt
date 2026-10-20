@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
@@ -276,6 +277,105 @@ class CoroutinesTest {
     }
 
     @Test
+    fun `awaitRevoked registers once per term even when each read of revoked is a new stage`() {
+        val revoked = CompletableFuture<RevokeReason>()
+        // Like a term that hands out a fresh minimal stage on every read of `revoked`.
+        val term = object : Term by FakeTerm(revoked) {
+            override val revoked: CompletionStage<RevokeReason> get() = revoked.minimalCompletionStage()
+        }
+
+        runBlocking {
+            repeat(CANCELLED_WAITS) {
+                val waiting = launch { term.awaitRevoked() }
+                yield()
+                waiting.cancel()
+            }
+        }
+        revoked.numberOfDependents.assert().isEqualTo(1)
+    }
+
+    @Test
+    fun `cancelled awaitRevoked waits on a real lock term leave one registration on its revocation`() {
+        val client = client()
+        val term = await { client.lock(name.value).awaitAcquire(Duration.ofSeconds(1)) }
+        val revocation = revokedFutureOf(term)
+
+        runBlocking {
+            repeat(CANCELLED_WAITS) {
+                val waiting = launch { term.awaitRevoked() }
+                yield()
+                waiting.cancel()
+            }
+        }
+        // Only the term's own cached stage; the one shared relay registers on that stage, not on the future.
+        revocation.numberOfDependents.assert().isEqualTo(1)
+        val waiting = scope.async { term.awaitRevoked() }
+        term.close()
+        await { waiting.await() }.assert().isEqualTo(RevokeReason.STOPPED)
+    }
+
+    @Test
+    fun `a term delivered by a non-future stage after cancellation is released`() {
+        val acquiring = CompletableFuture<LockTerm?>()
+        val released = CompletableFuture<Unit>()
+        val lock = object : DistributedLock {
+            override val name = LeaseName("minimal")
+
+            override fun acquire(timeout: Duration): LockTerm = error("not used")
+
+            override fun tryAcquire(): LockTerm? = error("not used")
+
+            // Not a CompletableFuture: toCompletableFuture() is a copy, so cancelling it does not reach this attempt.
+            override fun tryAcquireAsync(): CompletionStage<LockTerm?> = acquiring.minimalCompletionStage()
+        }
+        val term = object : LockTerm, Term by FakeTerm(CompletableFuture()) {
+            override fun releaseAsync(): CompletionStage<Void> {
+                released.complete(Unit)
+                return CompletableFuture.completedFuture(null)
+            }
+
+            override fun close() {
+                releaseAsync()
+            }
+        }
+
+        runBlocking {
+            val waiting = launch { lock.awaitTryAcquire() }
+            yield()
+            waiting.cancel()
+        }
+        acquiring.complete(term)
+        released.isDone.assert().isTrue()
+    }
+
+    @Test
+    fun `cancelled awaitAcquire calls leave no waiter on the client`() {
+        val first = client()
+        val second = client()
+        val held = await { first.lock(name.value).awaitAcquire(Duration.ofSeconds(1)) }
+        runBlocking {
+            repeat(CANCELLED_ACQUIRES) {
+                val waiting =
+                    launch(Dispatchers.Default) { second.lock(name.value).awaitAcquire(Duration.ofMinutes(10)) }
+                waiting.cancelAndJoin()
+            }
+        }
+        settle()
+        second.isIdle().assert().isTrue()
+        held.close()
+    }
+
+    /**
+     * The engine's future behind [term]'s `revoked` stage, read reflectively: the lock term wraps the engine term,
+     * which keeps the future private.
+     */
+    private fun revokedFutureOf(term: LockTerm): CompletableFuture<*> {
+        val engineTerm = term.javaClass.getDeclaredField("term").apply { isAccessible = true }.get(term)
+        return engineTerm.javaClass.getDeclaredField("revokedFuture").apply { isAccessible = true }
+            .get(engineTerm) as CompletableFuture<*>
+    }
+
+    @Test
     fun `SimbaEventFlow rejects a buffer capacity below one`() {
         runCatching { SimbaEventFlow(0) }.exceptionOrNull().assert().isInstanceOf(IllegalArgumentException::class.java)
     }
@@ -294,5 +394,6 @@ class CoroutinesTest {
         const val WAIT_SECONDS = 5L
         const val WAIT_MILLIS = WAIT_SECONDS * 1000
         const val CANCELLED_WAITS = 1_000
+        const val CANCELLED_ACQUIRES = 200
     }
 }

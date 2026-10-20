@@ -24,7 +24,10 @@ brings in; with `simba-testing` alone, add `me.ahoo.test:fluent-assert-core` or 
 
 `InMemoryLeaseBackend` implements the full `LeaseBackend` contract in memory (sessions, leases with never-resetting
 tokens, groups, release and membership hints). It needs no infrastructure, so it fits unit tests of anything that
-takes a `Simba`:
+takes a `Simba`. By default leases live as long as their session (JDBC, Zookeeper); `selfExpiringLeases = true` makes
+them expire on their own, each grant lasting one full lease, and the four-argument constructor
+`InMemoryLeaseBackend(ticker, selfExpiringLeases, sessionBoundGrants, sessionIds)` (since 5.1) with
+`sessionBoundGrants = true` limits a grant to the time its session has left, as on Redis:
 
 ```kotlin
 @Test
@@ -106,13 +109,23 @@ within the backend's expiry of its lease, no term valid again once invalid, stri
 callbacks, liveness of names and partitions after faults stop, no leaked lease, and the handover order. Terms a
 backend-side fault removed are exempt from the first checks until revoked, since such a fault breaks the backend's
 contract; a lost lease restarting its tokens is counted (`premise:tokenReset`) rather than failed, because only a
-backend that never loses data keeps tokens increasing. `SimulationParams.builder()` sets the knobs, and `SimulationResult.events`
+backend that never loses data keeps tokens increasing. `SimulationParams.builder()` sets the knobs (the table lists those added in 5.1),
+and `SimulationResult.events`
 counts the events and the exercised paths (`path:*`). Simba runs it over 10⁴ seeds in its own build; it is available to anyone changing the engine, and a failing seed
 replays exactly:
 
 ```bash
 ./gradlew simba-testing:test -Psimba.simulation.seed=42
 ```
+
+| `SimulationParams` (since 5.1) | Default | Meaning |
+|---|---|---|
+| `sessionBoundGrants` | `false` | With `selfExpiringLeases`, a grant lasts only as long as its session has left, as on Redis |
+| `truncatedGrantShare` | `0.3` | Share of runs whose backend reports less time than it grants (as a Zookeeper server capping the session timeout) |
+| `meanInjectionInterval` | `20s` | Mean interval of backend-side faults (a session expired, a lease deleted or lost by the backend); `Duration.ZERO` disables them |
+| `groupPartitions` | `3` | Partitions of one group the nodes join and leave at random; `0` disables groups |
+| `earlyCloseShare` | `0.02` | Share of random operations that close a node for good during the fault phase |
+| `backendHints` | `true` | The backend sends release and membership hints; `false` models JDBC, which sends none |
 
 ## Verifying a Fencing Resource
 

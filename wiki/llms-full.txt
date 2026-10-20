@@ -130,7 +130,9 @@ implementation("me.ahoo.simba:simba-coroutines:${simbaVersion}")
 
 :::
 
-`simba-bom` aligns the versions of every Simba module. `simba-coroutines` (since 5.1) adds suspending lock calls, `withLock` and a `Flow` of events on top of any backend; see [Locks](/guide/locks#coroutines). Without Spring, depend on `simba-core` plus a backend module:
+`simba-bom` aligns the versions of every Simba module. `simba-coroutines` (since 5.1) adds suspending lock calls,
+`withLock` and a `Flow` of events on top of any backend; see [Locks](/guide/locks#coroutines). Without Spring, depend
+on `simba-core` plus a backend module:
 `simba-jdbc`, `simba-zookeeper`, or for Redis `simba-spring-redis` (which brings `simba-redis`). `simba-redis` alone
 only defines the `RedisScripting` port: use it without `simba-spring-redis` only with your own adapter for another
 Redis client.
@@ -569,6 +571,7 @@ it to move leadership off a node before a deploy or to drain it. `stop()` ends t
 | Keep-alive shows the lease owned by someone else | Term revoked (`TAKEN_OVER`). |
 | Clock rate differs by more than `drift` | The safety argument no longer holds; raise `drift`. |
 | Redis failover loses recent writes | A token can go back; see [Backends](/guide/backends#token-regression-after-a-failover). |
+| Redis evicts keys under memory pressure (`allkeys-*` policy) | An evicted lease hash restarts its token at 1, so tokens go back; use `noeviction` or a dedicated instance, see [Backends](/guide/backends#memory-eviction). |
 | Failover to an asynchronous database replica (MySQL replica, PostgreSQL standby promotion) | Like a Redis failover: recent token increments and keep-alives can be lost, so a token can go back. Use synchronous replication when fencing must hold; see [Backends](/guide/backends#operating-notes). |
 | Backend host's clock steps (NTP step, VM migration) | JDBC and Redis measure leases with that clock, so every lease shortens (forward step) or lengthens (backward step) at once. A forward step can expire a holder's lease on the backend while its local deadline has not passed: another node can win a term while the old holder still reads `isValid`. This is not rate drift and `drift` does not cover it; only the fencing token protects. Run the backend hosts with slewing time sync. |
 </doc>
@@ -692,16 +695,16 @@ val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
 Release publishes `released` on the lease key's channel (`simba:lease:{name}`); it is the only broadcast and lets
 candidates take over at once. Every time decision uses Redis `TIME` inside the scripts.
 
-Leases expire on their own: a new term lasts as long as its session, and a
-keep-alive extends every lease the session holds, found through its lease index, so a lease acquired while a
-keep-alive was in flight is extended too. Closing a session deletes it first, then frees its leases and memberships,
-then drops its indexes, so a close repeated after a failure finishes the job.
+Leases expire on their own: a new term lasts as long as its session, and a keep-alive extends every lease the session
+holds, found through its lease index, so a lease acquired while a keep-alive was in flight is extended too. Closing a
+session deletes it first, then frees its leases and memberships, then drops its indexes, so a close repeated after a
+failure finishes the job.
 
 ### Cluster
 
 On a Redis Cluster (`RedisScripting.clustered`, or `simba.redis.route-by-slot=true`) every script call keeps to one
 hash slot: a call first touches the session's slot, then runs one script per slot of the remaining keys. Those later
-scripts can reach Redis long after the first one (a starved thread, a driver holding commands until it reconnects),
+scripts can reach Redis long after the first one (a starved I/O thread, a driver holding commands until it reconnects),
 when the session may have died, and their nodes' clocks may differ from the session node's. Only durations cross
 nodes, so a fixed skew between node clocks changes nothing:
 
@@ -728,6 +731,18 @@ can prevent this: the deterministic simulation injects such data loss and confir
 - Enable persistence (AOF) so a restart of a single node does not reset tokens.
 - When fencing must hold across failovers, use JDBC on synchronous replication or Zookeeper (quorum commits).
 - Leases are measured with Redis `TIME`: a step of the Redis hosts' clocks shortens or lengthens every lease at once.
+
+### Memory Eviction
+
+Lease hashes never expire, and their `token` field is what keeps tokens increasing. If Redis evicts one under memory
+pressure (any `allkeys-*` `maxmemory-policy`), the next acquire of that name starts again at token 1: a resource that
+checks tokens then rejects the new owner, or a stale owner's lower token looks valid again. Session hashes carry a TTL,
+so `volatile-*` policies can evict them, which ends the session early.
+
+- Run the Redis that Simba uses with `maxmemory-policy noeviction` (the Redis default), so a full instance fails
+  writes instead of dropping keys; Simba then reports failed calls and terms end at their deadline.
+- Or make sure the `simba:*` keys can never be evicted, e.g. a dedicated instance with its own memory budget. A
+  separate logical database on the same instance does not help: the policy and the memory limit are per instance.
 
 ## Zookeeper
 
@@ -1104,6 +1119,10 @@ the lock contends again. **Cancelling** the returned future (`toCompletableFutur
 releases a term it already won, so a cancelled acquisition never leaves the lock held. Reactor users can wrap the
 stage with `Mono.fromCompletionStage`.
 
+A callback executor that rejects tasks never delivers the `onElected` of a won term (see
+[Callbacks and Lifecycle](/guide/correctness#callbacks-and-lifecycle)): the lock's election steps down for one lease
+duration and the attempt never sees that term, so it keeps waiting until its timeout or a later term.
+
 ```kotlin
 simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
     .thenCompose { term ->
@@ -1149,7 +1168,9 @@ name for both.
 
 - It is **not bound to a thread**: hand it to another thread or coroutine and close it there.
 - `close()` revokes the term and releases the lease, and waits for that (except inside a leadership callback or leader
-  work). `releaseAsync()` does the same without waiting. Both are idempotent.
+  work). `releaseAsync()` does the same without waiting; its stage completes on the callback executor like a lock
+  result, so `close()` in its dependents returns at once. Both are idempotent, and closing a term whose release
+  already completed never waits (also on the event loop).
 - `token`, `isValid`, `remaining()` and `ensureValid()` behave as for any term.
 
 ## Losing a Lock Early
@@ -1382,7 +1403,10 @@ brings in; with `simba-testing` alone, add `me.ahoo.test:fluent-assert-core` or 
 
 `InMemoryLeaseBackend` implements the full `LeaseBackend` contract in memory (sessions, leases with never-resetting
 tokens, groups, release and membership hints). It needs no infrastructure, so it fits unit tests of anything that
-takes a `Simba`:
+takes a `Simba`. By default leases live as long as their session (JDBC, Zookeeper); `selfExpiringLeases = true` makes
+them expire on their own, each grant lasting one full lease, and the four-argument constructor
+`InMemoryLeaseBackend(ticker, selfExpiringLeases, sessionBoundGrants, sessionIds)` (since 5.1) with
+`sessionBoundGrants = true` limits a grant to the time its session has left, as on Redis:
 
 ```kotlin
 @Test
@@ -1464,13 +1488,23 @@ within the backend's expiry of its lease, no term valid again once invalid, stri
 callbacks, liveness of names and partitions after faults stop, no leaked lease, and the handover order. Terms a
 backend-side fault removed are exempt from the first checks until revoked, since such a fault breaks the backend's
 contract; a lost lease restarting its tokens is counted (`premise:tokenReset`) rather than failed, because only a
-backend that never loses data keeps tokens increasing. `SimulationParams.builder()` sets the knobs, and `SimulationResult.events`
+backend that never loses data keeps tokens increasing. `SimulationParams.builder()` sets the knobs (the table lists those added in 5.1),
+and `SimulationResult.events`
 counts the events and the exercised paths (`path:*`). Simba runs it over 10⁴ seeds in its own build; it is available to anyone changing the engine, and a failing seed
 replays exactly:
 
 ```bash
 ./gradlew simba-testing:test -Psimba.simulation.seed=42
 ```
+
+| `SimulationParams` (since 5.1) | Default | Meaning |
+|---|---|---|
+| `sessionBoundGrants` | `false` | With `selfExpiringLeases`, a grant lasts only as long as its session has left, as on Redis |
+| `truncatedGrantShare` | `0.3` | Share of runs whose backend reports less time than it grants (as a Zookeeper server capping the session timeout) |
+| `meanInjectionInterval` | `20s` | Mean interval of backend-side faults (a session expired, a lease deleted or lost by the backend); `Duration.ZERO` disables them |
+| `groupPartitions` | `3` | Partitions of one group the nodes join and leave at random; `0` disables groups |
+| `earlyCloseShare` | `0.02` | Share of random operations that close a node for good during the fault phase |
+| `backendHints` | `true` | The backend sends release and membership hints; `false` models JDBC, which sends none |
 
 ## Verifying a Fencing Resource
 
@@ -1566,6 +1600,10 @@ and you can roll an upgrade node by node. Release notes list every change:
   keep compiling unchanged.
 - The new optional module `simba-coroutines` adds suspending lock calls, `withLock`, `Term.awaitRevoked()` and
   `SimbaEventFlow`; it depends on `kotlinx-coroutines-core`, which `simba-core` does not.
+- `simba-testing`: `InMemoryLeaseBackend(ticker, selfExpiringLeases, sessionBoundGrants, sessionIds)` models Redis's
+  session-bound grants, and `SimulationParams` adds `sessionBoundGrants`, `truncatedGrantShare`,
+  `meanInjectionInterval`, `groupPartitions` and `earlyCloseShare` (see [Testing](/guide/testing#deterministic-simulation)).
+  The existing constructors and parameters are unchanged.
 </doc>
 
 <doc title="Migrating from 4.x to 5.0" path="guide/migration.md">
@@ -1930,6 +1968,7 @@ graph BT
     starter["simba-spring-boot-starter"]
     testing["simba-testing<br>in-memory backend, virtual time"]
     tck["simba-tck<br>LeaseBackendSpec, FencingSpec"]
+    coroutines["simba-coroutines<br>suspend, withLock, Flow"]
     jdbc --> core
     redis --> core
     sredis --> redis
@@ -1939,6 +1978,7 @@ graph BT
     starter --> zk
     testing --> core
     tck --> core
+    coroutines --> core
     style core fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style jdbc fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style redis fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
@@ -1947,6 +1987,7 @@ graph BT
     style starter fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style testing fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style tck fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
+    style coroutines fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 
 `simba-core` knows no backend and depends only on kotlin-logging. `simba-redis` must not depend on Spring; the
@@ -2073,7 +2114,7 @@ You need JDK 21 and Docker.
 
 | Module | Test infrastructure |
 |---|---|
-| `simba-core`, `simba-testing`, `simba-tck` | None |
+| `simba-core`, `simba-testing`, `simba-tck`, `simba-coroutines` | None |
 | `simba-zookeeper` | Embedded Curator `TestingServer` |
 | `simba-redis` (also covers `simba-spring-redis`) | Testcontainers `redis:7.4-alpine` (`RedisFixture`) |
 | `simba-jdbc` | Testcontainers `mysql:8.4` and `postgres:17` (`LeaseDatabaseFixture`) |

@@ -276,6 +276,36 @@ class AsyncLockTest {
     }
 
     @Test
+    fun `cancelled acquisitions leave no waiter on the client's close future`() {
+        val first = simba.client()
+        val second = simba.client()
+        val held = first.lock(name.value).acquire(Duration.ofSeconds(1))
+        val local = second.lock("local").acquire(Duration.ofSeconds(1))
+        simba.settle()
+
+        repeat(CANCELLED_ACQUIRES) {
+            // One waiting on another session, one waiting for a holder of this client.
+            second.lock(name.value).acquireAsync(Duration.ofMinutes(10)).toCompletableFuture().cancel(false)
+            second.lock("local").acquireAsync(Duration.ofMinutes(10)).toCompletableFuture().cancel(false)
+        }
+        simba.settle()
+
+        second.footprint()["closeWaiters"].assert().isEqualTo(0)
+        local.close()
+        simba.settle()
+        second.isIdle().assert().isTrue()
+        held.close()
+    }
+
+    @Test
+    fun `a term hands out one revocation stage for every read`() {
+        val term = simba.client().lock(name.value).acquire(Duration.ofSeconds(1))
+
+        (term.revoked === term.revoked).assert().isTrue()
+        term.close()
+    }
+
+    @Test
     fun `the default acquireAsync interrupts a cancelled blocking acquire`() {
         val started = CountDownLatch(1)
         val interrupted = CompletableFuture<Boolean>()
@@ -371,5 +401,6 @@ class AsyncLockTest {
 
     companion object {
         const val RETRY_STEPS = 100
+        const val CANCELLED_ACQUIRES = 1_000
     }
 }

@@ -42,6 +42,9 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 future（`toCompletableFuture().cancel(...)`）会放弃本次尝试，并释放已经赢得的任期，因此被取消的获取绝不会让锁一直被持有。
 Reactor 用户可以用 `Mono.fromCompletionStage` 包装它。
 
+回调执行器拒绝任务时，赢得的任期的 `onElected` 不会被投递（参阅 [回调与生命周期](/zh/guide/correctness#callbacks-and-lifecycle)）：锁的选举会
+退让一个租约时长，本次尝试看不到这个任期，因此会一直等待，直到超时或赢得之后的任期。
+
 ```kotlin
 simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
     .thenCompose { term ->
@@ -85,7 +88,8 @@ simba.lock("invoice-42").withLock(Duration.ofSeconds(5)) { term ->
 
 - 它**不绑定线程**：可以交给另一个线程或协程，并在那里关闭。
 - `close()` 撤销任期并释放租约，并等待其完成（在 leader 身份回调或 leader 任务内部除外）。`releaseAsync()`
-  做同样的事但不等待。两者都是幂等的。
+  做同样的事但不等待；它返回的 stage 与锁的获取结果一样在回调执行器上完成，因此在其后续操作里调用 `close()` 会立即返回。
+  两者都是幂等的；关闭一个释放已经完成的任期绝不会等待（在事件循环上也一样）。
 - `token`、`isValid`、`remaining()` 和 `ensureValid()` 的行为与任何任期相同。
 
 ## 提前失去锁 {#losing-a-lock-early}

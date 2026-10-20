@@ -44,6 +44,10 @@ the lock contends again. **Cancelling** the returned future (`toCompletableFutur
 releases a term it already won, so a cancelled acquisition never leaves the lock held. Reactor users can wrap the
 stage with `Mono.fromCompletionStage`.
 
+A callback executor that rejects tasks never delivers the `onElected` of a won term (see
+[Callbacks and Lifecycle](/guide/correctness#callbacks-and-lifecycle)): the lock's election steps down for one lease
+duration and the attempt never sees that term, so it keeps waiting until its timeout or a later term.
+
 ```kotlin
 simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
     .thenCompose { term ->
@@ -89,7 +93,9 @@ name for both.
 
 - It is **not bound to a thread**: hand it to another thread or coroutine and close it there.
 - `close()` revokes the term and releases the lease, and waits for that (except inside a leadership callback or leader
-  work). `releaseAsync()` does the same without waiting. Both are idempotent.
+  work). `releaseAsync()` does the same without waiting; its stage completes on the callback executor like a lock
+  result, so `close()` in its dependents returns at once. Both are idempotent, and closing a term whose release
+  already completed never waits (also on the event loop).
 - `token`, `isValid`, `remaining()` and `ensureValid()` behave as for any term.
 
 ## Losing a Lock Early
