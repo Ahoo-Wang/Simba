@@ -1,8 +1,16 @@
 name: Codecov
-on: [ push, pull_request ]
+# Pushes to branches other than main are covered by their pull request; running both doubled every PR's coverage run.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
 
 permissions:
   contents: read
+
+concurrency:
+  group: codecov-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   codecov:
@@ -18,6 +26,8 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
+          # Dependencies and the Gradle distribution, keyed by the build files; main's Codecov run fills it.
+          cache: gradle
           server-id: github
           settings-path: ${{ github.workspace }}
 
