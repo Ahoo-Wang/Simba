@@ -25,7 +25,10 @@ import me.ahoo.simba.engine.Event
 import me.ahoo.simba.engine.TermRegistry
 import me.ahoo.simba.engine.execute
 import me.ahoo.simba.engine.step
+import me.ahoo.simba.partition.PartitionAssignment
+import me.ahoo.simba.spi.KeepAliveResult
 import me.ahoo.simba.spi.LeaseName
+import me.ahoo.simba.spi.SessionGrant
 import me.ahoo.simba.spi.SessionId
 import java.time.Duration
 import java.util.Objects
@@ -50,6 +53,17 @@ import java.util.concurrent.TimeoutException
  * @property selfExpiringLeases runs [InMemoryLeaseBackend] with leases that expire on their own, as on Redis.
  * @property sessionBoundGrants with [selfExpiringLeases], a grant lasts only as long as its session has left, as on a
  *   single Redis node, instead of one full lease.
+ * @property truncatedGrantShare share of runs whose backend reports less time than it grants (a factor drawn from
+ *   `[0.3, 0.95]` per run), as a Zookeeper server capping the session timeout does; below two renew intervals of
+ *   local validity the engine renews more often (`SessionLeaseShortened`).
+ * @property meanInjectionInterval mean interval of backend-side faults during the fault phase: the backend expires a
+ *   live session on its own, or deletes a held lease (which another node may then take over); `Duration.ZERO`
+ *   disables them. Such faults break the backend's contract, so terms they hit are exempt from I1 and I2 (a grant in
+ *   flight when its lease is deleted may be adopted after a later one) until revoked.
+ * @property groupPartitions partitions of one group the nodes join and leave at random; each node runs the
+ *   partitions `PartitionAssignment` gives it in its latest view. `0` disables groups.
+ * @property earlyCloseShare share of random operations that close a node for good during the fault phase (never the
+ *   last open node), with elections, work and pauses in any state.
  */
 class SimulationParams private constructor(builder: Builder) {
     /** The defaults; see [builder] to change knobs. */
@@ -74,6 +88,10 @@ class SimulationParams private constructor(builder: Builder) {
     val maxWork: Duration = builder.maxWork ?: config.leaseDuration.multipliedBy(2)
     val selfExpiringLeases: Boolean = builder.selfExpiringLeases
     val sessionBoundGrants: Boolean = builder.sessionBoundGrants
+    val truncatedGrantShare: Double = builder.truncatedGrantShare
+    val meanInjectionInterval: Duration = builder.meanInjectionInterval
+    val groupPartitions: Int = builder.groupPartitions
+    val earlyCloseShare: Double = builder.earlyCloseShare
 
     /**
      * I4 bound, measured from the start of the quiet phase: fault-phase messages land within two delays, a cooldown
@@ -106,8 +124,37 @@ class SimulationParams private constructor(builder: Builder) {
             .maxWork(maxWork)
             .selfExpiringLeases(selfExpiringLeases)
             .sessionBoundGrants(sessionBoundGrants)
+            .truncatedGrantShare(truncatedGrantShare)
+            .meanInjectionInterval(meanInjectionInterval)
+            .groupPartitions(groupPartitions)
+            .earlyCloseShare(earlyCloseShare)
 
-    private fun values(): List<Any> = listOf(config, minNodes, maxNodes, minNames, maxNames, maxDelay, maxDropRate, quietMaxDelay, clockRateSpread, meanPauseInterval, maxPause, meanOperationInterval, faultPhase, quietPhase, workShare, selfExitShare, maxWork, selfExpiringLeases, sessionBoundGrants)
+    private fun values(): List<Any> =
+        listOf(
+            config,
+            minNodes,
+            maxNodes,
+            minNames,
+            maxNames,
+            maxDelay,
+            maxDropRate,
+            quietMaxDelay,
+            clockRateSpread,
+            meanPauseInterval,
+            maxPause,
+            meanOperationInterval,
+            faultPhase,
+            quietPhase,
+            workShare,
+            selfExitShare,
+            maxWork,
+            selfExpiringLeases,
+            sessionBoundGrants,
+            truncatedGrantShare,
+            meanInjectionInterval,
+            groupPartitions,
+            earlyCloseShare,
+        )
 
     override fun equals(other: Any?): Boolean = this === other || other is SimulationParams && values() == other.values()
 
@@ -119,7 +166,9 @@ class SimulationParams private constructor(builder: Builder) {
             "maxNames=$maxNames, maxDelay=$maxDelay, maxDropRate=$maxDropRate, quietMaxDelay=$quietMaxDelay, " +
             "clockRateSpread=$clockRateSpread, meanPauseInterval=$meanPauseInterval, maxPause=$maxPause, meanOperationInterval=$meanOperationInterval, " +
             "faultPhase=$faultPhase, quietPhase=$quietPhase, workShare=$workShare, selfExitShare=$selfExitShare, " +
-            "maxWork=$maxWork, selfExpiringLeases=$selfExpiringLeases, sessionBoundGrants=$sessionBoundGrants)"
+            "maxWork=$maxWork, selfExpiringLeases=$selfExpiringLeases, sessionBoundGrants=$sessionBoundGrants, " +
+            "truncatedGrantShare=$truncatedGrantShare, meanInjectionInterval=$meanInjectionInterval, " +
+            "groupPartitions=$groupPartitions, earlyCloseShare=$earlyCloseShare)"
 
     /** Builds [SimulationParams]; `clockRateSpread` defaults to the config's drift, `maxPause` and `maxWork` to two leases. */
     class Builder internal constructor() {
@@ -167,6 +216,14 @@ class SimulationParams private constructor(builder: Builder) {
             private set
         internal var sessionBoundGrants: Boolean = false
             private set
+        internal var truncatedGrantShare: Double = 0.3
+            private set
+        internal var meanInjectionInterval: Duration = Duration.ofSeconds(20)
+            private set
+        internal var groupPartitions: Int = 3
+            private set
+        internal var earlyCloseShare: Double = 0.02
+            private set
 
         fun config(config: SimbaConfig) = apply { this.config = config }
 
@@ -207,6 +264,16 @@ class SimulationParams private constructor(builder: Builder) {
         fun selfExpiringLeases(selfExpiringLeases: Boolean) = apply { this.selfExpiringLeases = selfExpiringLeases }
 
         fun sessionBoundGrants(sessionBoundGrants: Boolean) = apply { this.sessionBoundGrants = sessionBoundGrants }
+
+        fun truncatedGrantShare(truncatedGrantShare: Double) = apply { this.truncatedGrantShare = truncatedGrantShare }
+
+        fun meanInjectionInterval(meanInjectionInterval: Duration) = apply {
+            this.meanInjectionInterval = meanInjectionInterval
+        }
+
+        fun groupPartitions(groupPartitions: Int) = apply { this.groupPartitions = groupPartitions }
+
+        fun earlyCloseShare(earlyCloseShare: Double) = apply { this.earlyCloseShare = earlyCloseShare }
 
         fun build(): SimulationParams = SimulationParams(this)
     }
@@ -257,13 +324,18 @@ class SimulationFailure(val seed: Long, message: String, trace: String) :
 
 /**
  * Deterministic simulation (ADR 0010 §12): several engines driven through the pure [step] function against one
- * [InMemoryLeaseBackend], in virtual time, with random message delays and losses, process pauses, clock drift and
- * random start/stop/step-down operations. A fault phase is followed by a quiet phase (no losses, pauses or
- * operations), then every election stops and every node closes.
+ * [InMemoryLeaseBackend], in virtual time, with random message delays and losses, process pauses, clock drift,
+ * random start/stop/step-down operations, groups joined and left (partition elections follow each node's view),
+ * nodes closed for good, grants reported shorter than granted, and backend-side faults (a session expired or a lease
+ * deleted by the backend on its own). A fault phase is followed by a quiet phase (no losses, pauses, faults or
+ * operations), then every election stops and every open node closes. [SimulationResult.events] counts the published
+ * [me.ahoo.simba.event.SimbaEvent]s by class name and the exercised paths under `path:` keys.
  *
  * Checked continuously:
- * - **I1 safety**: at any instant at most one valid term per name; a valid term is also the backend's owner;
+ * - **I1 safety**: at any instant at most one valid term per name (partitions included); a valid term is also the
+ *   backend's owner;
  * - **I2 monotonic**: tokens of a name strictly increase in the order terms are created;
+ * (terms whose session or lease a backend-side fault removed are exempt from I1 and I2 until revoked)
  * - **I3 pairing**: per node and name, `onElected` and `onRevoked` alternate for the same term; no callback after a
  *   stop completed (until the next start) or after close; at the end no term is open;
  * - **I4 liveness**: during the quiet phase, after [SimulationParams.livenessBound], every name has a valid term;
@@ -296,6 +368,17 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
 
     private val names = List(random.nextInt(params.minNames, params.maxNames + 1)) { LeaseName("lease-$it") }
     private val nodes = List(random.nextInt(params.minNodes, params.maxNodes + 1)) { Node(it) }
+
+    /** Reported remaining ÷ granted remaining for this run; below 1 the backend reports less than it grants. */
+    private val truncation =
+        if (random.nextDouble() < params.truncatedGrantShare) TRUNCATION_MIN + random.nextDouble() * TRUNCATION_SPAN else 1.0
+    private val partitions = List(params.groupPartitions) { LeaseName("$GROUP.$it") }
+    private val partitionNames = partitions.toHashSet()
+    private val allNames = names + partitions
+
+    /** Sessions the backend expired and leases it deleted on its own: their terms are exempt from I1. */
+    private val expiredSessions = HashSet<SessionId>()
+    private val deletedLeases = HashSet<Pair<LeaseName, Long>>()
 
     private val lastToken = HashMap<LeaseName, Long>()
     private var elections = 0
@@ -334,6 +417,7 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
         val works = HashMap<Long, Work>()
         var closeRequested = false
         var closed = false
+        var inGroup = false
 
         val paused: Boolean get() = clock.nanoTime() < pausedUntil
 
@@ -350,8 +434,21 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
                 schedule(random.nextLong(0, MILLIS * 200)) { start(node, name) }
             }
         }
+        if (truncation < 1.0) {
+            count("path:truncatedGrantRun")
+        }
+        if (partitions.isNotEmpty()) {
+            for (node in nodes) {
+                if (random.nextDouble() < INITIAL_JOIN_SHARE) {
+                    schedule(random.nextLong(0, MILLIS * 500)) { toggleGroup(node, join = true) }
+                }
+            }
+        }
         schedulePoisson(params.meanPauseInterval) { pauseSomeone() }
         schedulePoisson(params.meanOperationInterval) { operateSomeone() }
+        if (!params.meanInjectionInterval.isZero) {
+            schedulePoisson(params.meanInjectionInterval) { injectBackendFault() }
+        }
         schedule(faultEnd) { quiet() }
         schedule(quietEnd) { shutdown() }
         drain()
@@ -436,6 +533,7 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
             }
 
             is Event.Stop -> node.stopEpochs[event.done] = node.starts[event.name] ?: 0
+            is Event.Close -> if (node.openTerms.isNotEmpty()) count("path:closeWhileLeading")
             else -> Unit
         }
         val (next, effects) = step(node.state, event, node.ticker.nanoTime())
@@ -471,12 +569,15 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
             }
 
             is Effect.Publish -> events.merge(effect.event.javaClass.simpleName, 1, Int::plus)
-            is Effect.Members -> Unit
+            is Effect.Members -> onView(node, effect)
         }
     }
 
     private fun call(node: Node, effect: Effect.Call) {
         checkHandover(node, effect.request)
+        if (effect.timeout < engineConfig.renewInterval) {
+            count("path:shortenedCallTimeout")
+        }
         node.unresolved += effect.requestId
         after(effect.timeout) {
             if (node.unresolved.remove(effect.requestId)) {
@@ -484,7 +585,7 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
             }
         }
         send {
-            val result = backend.execute(effect.request)
+            val result = truncate(backend.execute(effect.request))
             val at = clock.nanoTime()
             record { "${millis(at)} backend ${effect.request} -> $result" }
             send {
@@ -496,7 +597,7 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
     }
 
     private fun start(node: Node, name: LeaseName) {
-        if (node.started.add(name)) {
+        if (!node.closeRequested && node.started.add(name)) {
             deliver(node, Event.Start(name, work = random.nextDouble() < params.workShare))
         }
     }
@@ -542,6 +643,17 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
 
     private fun operateSomeone() {
         val node = nodes[random.nextInt(nodes.size)]
+        if (node.closeRequested) {
+            return
+        }
+        if (random.nextDouble() < params.earlyCloseShare && nodes.count { !it.closeRequested } > 1) {
+            closeEarly(node)
+            return
+        }
+        if (partitions.isNotEmpty() && random.nextDouble() < GROUP_SHARE) {
+            toggleGroup(node, join = !node.inGroup)
+            return
+        }
         val name = names[random.nextInt(names.size)]
         if (name !in node.started) {
             start(node, name)
@@ -567,16 +679,106 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
         deliver(node, Event.Stop(name, done))
     }
 
+    /** Reports less remaining time than the backend grants, as a backend capping the session timeout does. */
+    private fun truncate(result: BackendResult): BackendResult {
+        if (truncation >= 1.0) {
+            return result
+        }
+        fun scaled(remaining: Duration) = Duration.ofNanos((remaining.toNanos() * truncation).toLong())
+        return when {
+            result is BackendResult.Opened -> BackendResult.Opened(
+                SessionGrant(result.grant.id, scaled(result.grant.remaining))
+            )
+            result is BackendResult.KeptAlive && result.result is KeepAliveResult.Live -> {
+                val live = result.result as KeepAliveResult.Live
+                BackendResult.KeptAlive(KeepAliveResult.Live(scaled(live.remaining), live.owned))
+            }
+
+            else -> result
+        }
+    }
+
+    /** The backend expires a session that holds a lease, or deletes a held lease, on its own. */
+    private fun injectBackendFault() {
+        val held = allNames.mapNotNull { name -> backend.owner(name)?.let { name to it } }
+        if (held.isEmpty()) {
+            return
+        }
+        val (name, owner) = held[random.nextInt(held.size)]
+        if (random.nextBoolean()) {
+            expiredSessions += owner.session
+            count("path:injectSessionExpiry")
+            record { "${millis(clock.nanoTime())} backend expires ${owner.session}" }
+            backend.closeSession(owner.session)
+        } else {
+            deletedLeases += name to owner.token
+            count("path:injectLeaseDelete")
+            record { "${millis(clock.nanoTime())} backend deletes $name#${owner.token}" }
+            backend.release(owner.session, mapOf(name to owner.token))
+        }
+    }
+
+    private fun toggleGroup(node: Node, join: Boolean) {
+        if (node.closeRequested || node.inGroup == join) {
+            return
+        }
+        node.inGroup = join
+        if (join) {
+            count("path:join")
+            deliver(node, Event.Join(GROUP))
+        } else {
+            count("path:leave")
+            deliver(node, Event.Leave(GROUP))
+            node.started.filter { it in partitionNames }.forEach { stop(node, it) }
+        }
+    }
+
+    /** Runs the partitions the node's latest view gives it, and stops the others (work first, then the lease). */
+    private fun onView(node: Node, view: Effect.Members) {
+        count("path:groupView")
+        if (!node.inGroup || node.closeRequested) {
+            return
+        }
+        val session = view.session
+        val mine = if (session == null || session !in view.members) {
+            emptySet()
+        } else {
+            PartitionAssignment.partitionsOf(session.value, partitions.size, view.members.map { it.value })
+                .mapTo(HashSet()) { partitions[it] }
+        }
+        node.started.filter { it in partitionNames && it !in mine }.forEach {
+            count("path:partitionHandedOver")
+            stop(node, it)
+        }
+        mine.forEach { start(node, it) }
+    }
+
+    /** Closes [node] for good now, whatever its elections, work and pauses are doing. */
+    private fun closeEarly(node: Node) {
+        count("path:earlyClose")
+        node.closeRequested = true
+        node.inGroup = false
+        node.started.clear()
+        val done = CompletableFuture<Void>()
+        node.waiting += done
+        deliver(node, Event.Close(done))
+    }
+
+    private fun count(path: String) {
+        events.merge(path, 1, Int::plus)
+    }
+
     private fun quiet() {
         faulty = false
         record { "${millis(clock.nanoTime())} quiet phase" }
-        for (node in nodes) {
+        for (node in nodes.filterNot { it.closeRequested }) {
             names.forEach { start(node, it) }
         }
     }
 
     private fun shutdown() {
-        for (node in nodes) {
+        for (node in nodes.filterNot { it.closeRequested }) {
+            node.inGroup = false
             node.started.toList().forEach { stop(node, it) }
             val done = CompletableFuture<Void>()
             node.waiting += done
@@ -601,11 +803,21 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
         }
         node.openTerms[term.name]?.let { fail("I3: $node elected $term while $it is still open") }
         node.openTerms[term.name] = term
+        if (term.name in partitionNames) {
+            count("path:partitionElected")
+        }
         startWork(node, term)
         if (term.token <= 0) {
             fail("I2: $node elected non-positive token $term")
         }
         val last = lastToken[term.name] ?: 0
+        if (compromised(term)) {
+            // A grant still in flight when the backend deleted that lease (or expired its session) on its own can be
+            // adopted after a later one: no client can tell before its next keep-alive, which revokes it.
+            count("path:compromisedElected")
+            lastToken[term.name] = maxOf(last, term.token)
+            return
+        }
         if (term.token <= last) {
             fail("I2: $node elected $term after token $last was already granted")
         }
@@ -634,11 +846,11 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
     }
 
     private fun checkSafety() {
-        for (name in names) {
+        for (name in allNames) {
             var valid: EngineTerm? = null
             var holder: Node? = null
             for (node in nodes) {
-                val term = node.terms.active.firstOrNull { it.name == name && it.isValid } ?: continue
+                val term = node.terms.active.firstOrNull { it.name == name && it.isValid && !compromised(it) } ?: continue
                 if (valid != null) {
                     fail("I1: $holder holds $valid and $node holds $term, both valid")
                 }
@@ -651,6 +863,10 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
             }
         }
     }
+
+    /** A term the backend broke its contract on (expired its session or deleted its lease on its own). */
+    private fun compromised(term: EngineTerm): Boolean =
+        term.session in expiredSessions || (term.name to term.token) in deletedLeases
 
     /** I5: a release or session close must not free the lease of a handover whose work runs and has time left. */
     private fun checkHandover(node: Node, request: BackendRequest) {
@@ -719,6 +935,11 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
         const val STOP_SHARE = 0.3
         const val TRACE_SIZE = 400
         const val DRAIN_LEASES = 10
+        const val GROUP = "group"
+        const val GROUP_SHARE = 0.15
+        const val INITIAL_JOIN_SHARE = 0.7
+        const val TRUNCATION_MIN = 0.3
+        const val TRUNCATION_SPAN = 0.65
 
         fun millis(nanos: Long): String = "%.3fs".format(nanos / 1e9)
     }

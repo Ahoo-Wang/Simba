@@ -237,7 +237,10 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
 ## Change Playbooks
 
 - **Engine:** change `step()` and cover it with `EngineTest`-style table tests (events in, effects out); keep
-  `SimulationSpec` (I1–I5 over 10⁴ seeds) green. Threaded-client tests run on virtual time: `VirtualScheduler`, direct
+  `SimulationSpec` (I1–I5 over 10⁴ seeds, three backend modes) green. The simulation also truncates grants, expires
+  sessions and deletes leases backend-side (those terms are exempt from I1/I2 until revoked), drives a partition
+  group and closes nodes mid-fault; `every fault path actually happens` asserts each path (`path:*` in
+  `SimulationResult.events`, every `RevokeReason`) is reached. Threaded-client tests run on virtual time: `VirtualScheduler`, direct
   I/O and callback executors, `awaitIdle()` between timers (see `VirtualSimba`); never sleep. Work runs on real
   threads that `awaitIdle()` does not cover: wait for the work to start before stopping it (work revoked before it
   starts never runs), start contenders one at a time when a test needs a particular winner, and keep session ids
