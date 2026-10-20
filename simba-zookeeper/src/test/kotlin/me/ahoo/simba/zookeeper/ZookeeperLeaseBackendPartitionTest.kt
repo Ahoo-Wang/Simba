@@ -24,7 +24,6 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
-import java.net.Socket
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
@@ -45,7 +44,8 @@ class ZookeeperLeaseBackendPartitionTest {
 
     @BeforeEach
     fun setup() {
-        specs = List(SERVERS) { InstanceSpec(null, -1, -1, -1, true, it + 1, TICK_MILLIS, -1) }
+        val ensemble = Ensemble(SERVERS, TICK_MILLIS)
+        specs = ensemble.specs
         val views = specs.associateWith { self ->
             specs.map { peer ->
                 if (peer == self) {
@@ -65,6 +65,7 @@ class ZookeeperLeaseBackendPartitionTest {
                 }
             }
         }
+        ensemble.release()
         cluster = TestingCluster(views).apply { start() }
     }
 
@@ -89,7 +90,8 @@ class ZookeeperLeaseBackendPartitionTest {
 
                 // The follower would still answer a plain read for about syncLimit ticks.
                 assertThrows<SimbaException> { isolated.keepAlive(session, LEASE, setOf(name)) }
-                val other = contender.openSession(LEASE).id
+                // Polled without keep-alives: a lease longer than the test keeps the watchdog off this session.
+                val other = contender.openSession(CONTENDER_LEASE).id
                 awaitTrue { contender.acquire(other, setOf(name)).getValue(name) is AcquireResult.Granted }
             }
         }
@@ -99,7 +101,7 @@ class ZookeeperLeaseBackendPartitionTest {
     private fun awaitRoles(): Pair<InstanceSpec, InstanceSpec> {
         var roles: Pair<InstanceSpec, InstanceSpec>? = null
         awaitTrue {
-            val modes = specs.associateWith(::mode)
+            val modes = specs.associateWith { serverMode(it.port) }
             val leader = modes.entries.singleOrNull { it.value == "leader" }?.key
             val follower = modes.entries.firstOrNull { it.value == "follower" }?.key
             if (leader != null && follower != null) {
@@ -109,15 +111,6 @@ class ZookeeperLeaseBackendPartitionTest {
         }
         return checkNotNull(roles)
     }
-
-    /** The server's `Mode` from the `srvr` four-letter command (enabled by default). */
-    private fun mode(spec: InstanceSpec): String? = runCatching {
-        Socket("127.0.0.1", spec.port).use { socket ->
-            socket.getOutputStream().write("srvr".toByteArray())
-            socket.getOutputStream().flush()
-            socket.getInputStream().readBytes().decodeToString()
-        }
-    }.getOrNull()?.lineSequence()?.firstOrNull { it.startsWith("Mode: ") }?.removePrefix("Mode: ")?.trim()
 
     private fun awaitTrue(condition: () -> Boolean) {
         val done = CompletableFuture<Unit>()
@@ -146,5 +139,6 @@ class ZookeeperLeaseBackendPartitionTest {
 
         /** The servers grant at most 20 ticks. */
         private val LEASE = Duration.ofSeconds(4)
+        private val CONTENDER_LEASE = Duration.ofSeconds(TIMEOUT_SECONDS)
     }
 }

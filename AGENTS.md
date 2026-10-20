@@ -210,7 +210,9 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   A name is a keep-alive candidate from before its create is sent (under the session's send lock, so a keep-alive read
   sent earlier cannot drop it); keep-alive reports candidates the session owns and forgets the others. Releases of a
   session are serialized (the czxid check and the delete are not atomic). Lease paths of a batch are validated before
-  any request; `members` syncs the group path, then leaves a children watch (an exists watch on a missing group). A
+  any request; `members` reads through the client of the session that last joined or left the group here (its own
+  change is ordered; else the reader), `sync`s first (no barrier on the leader, which answers it locally), then leaves
+  a children watch (an exists watch on a missing group). A
   closed backend opens no session. Group names follow the `LeaseName` rules. Every client adds `authInfo` and uses
   `clientConfig`; every node the backend creates gets `aclProvider`'s ACL (default open; existing parents keep theirs, also
   when the backend may not create in their parent: `NoAuth` on an existing ancestor is ignored).

@@ -93,8 +93,10 @@ import java.util.concurrent.atomic.AtomicLong
  * Parents that already exist keep their ACL; the ACL of `{root}/leases` and `{root}/groups/{group}` decides who may
  * create or delete their children.
  *
- * [members] reads through a separate client, so it first `sync`s the group path: a member that just joined through a
- * session client is always in the view.
+ * [members] reads through the client of the session that last joined or left the group here, so that change is
+ * always in the view (Zookeeper orders the requests of one session); without one, through a separate reader client.
+ * It `sync`s the group path first, which brings a follower up to date with the leader. `sync` is no barrier on the
+ * leader itself, which answers it locally: there a change made through another client can show a moment later.
  *
  * @param connectString Zookeeper connect string, shared by every session client and the client [members] reads with.
  * @param root parent path of the lease and group nodes.
@@ -135,6 +137,9 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
     private val groupsPath = "${this.root}/groups"
     private val sessions = ConcurrentHashMap<SessionId, Session>()
     private val listeners = CopyOnWriteArrayList<BackendHintListener>()
+
+    /** Per group, the session that last joined or left it here: [members] reads through its client. */
+    private val groupWriters = ConcurrentHashMap<String, Session>()
     private val epochs = AtomicLong()
 
     @Volatile
@@ -295,9 +300,11 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
             repeat(MAX_ATTEMPTS) {
                 try {
                     live.zooKeeper.create(path, EMPTY, aclFor(path), CreateMode.EPHEMERAL)
+                    groupWriters[group] = live
                     publish(BackendHint.MembersChanged(group))
                     return@expiringOn
                 } catch (_: KeeperException.NodeExistsException) {
+                    groupWriters[group] = live
                     return@expiringOn
                 } catch (_: KeeperException.NoNodeException) {
                     // The group container is missing or was just reaped.
@@ -320,11 +327,15 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
             } catch (_: KeeperException.NoNodeException) {
                 // Not a member.
             }
+            groupWriters[group] = live
         }
     }
 
     override fun members(group: String): List<SessionId> {
         val path = groupPath(group)
+        groupWriters[group]?.takeIf(Session::isConnected)?.let { writer ->
+            writer.expiringOn { writer.members(group, path) }?.let { return it }
+        }
         sync(path)
         repeat(MAX_ATTEMPTS) {
             try {
@@ -450,6 +461,26 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         fun remaining(lease: Duration): Duration =
             minOf(lease, Duration.ofMillis(zooKeeper.sessionTimeout * REMAINING_TWELFTHS / TWELFTHS))
 
+        fun isConnected(): Boolean = !expired && zooKeeper.state == ZooKeeper.States.CONNECTED
+
+        /** The members of [group] read after a `sync`, with a children (or, while missing, exists) watch. */
+        fun members(group: String, path: String): List<SessionId> {
+            val code = zooKeeper.syncAsync(path).await()
+            if (code != KeeperException.Code.OK && code != KeeperException.Code.NONODE) {
+                throw KeeperException.create(code, path)
+            }
+            repeat(MAX_ATTEMPTS) {
+                try {
+                    return zooKeeper.getChildren(path, groupWatcher).map(::SessionId).sortedBy { it.value }
+                } catch (_: KeeperException.NoNodeException) {
+                    if (zooKeeper.exists(path, groupWatcher) == null) {
+                        return emptyList()
+                    }
+                }
+            }
+            throw SimbaException("Group [$group] kept appearing and disappearing while reading its members.")
+        }
+
         fun ensureConnected() {
             val state = zooKeeper.state
             if (!state.isAlive) {
@@ -502,6 +533,7 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
                 check?.cancel(false)
             }
             sessions.remove(id, this)
+            groupWriters.values.removeIf { it === this }
             // ZooKeeper.close() swallows a pending interrupt: close uninterrupted and restore the flag afterwards.
             var interrupted = Thread.interrupted()
             try {

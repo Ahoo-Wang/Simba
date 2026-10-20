@@ -28,7 +28,9 @@ class ZookeeperLeaseBackendClusterTest {
 
     @BeforeEach
     fun setup() {
-        cluster = TestingCluster(3).apply { start() }
+        val ensemble = Ensemble(SERVERS)
+        ensemble.release()
+        cluster = TestingCluster(ensemble.specs).apply { start() }
         backend = ZookeeperLeaseBackend(cluster.connectString)
     }
 
@@ -38,6 +40,7 @@ class ZookeeperLeaseBackendClusterTest {
         cluster.close()
     }
 
+    /** [ZookeeperLeaseBackend.members] reads through the joining session's client, which orders its own writes. */
     @Test
     fun membersReadsTheJoinThatJustReturned() {
         val sessions = List(SESSIONS) { backend.openSession(Duration.ofSeconds(30)).id }
@@ -53,6 +56,7 @@ class ZookeeperLeaseBackendClusterTest {
     }
 
     companion object {
+        private const val SERVERS = 3
         private const val SESSIONS = 4
         private const val ROUNDS = 10
     }

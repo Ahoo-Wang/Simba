@@ -202,7 +202,10 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
   is lost or restored from an older snapshot. Session timeouts are tracked with the servers' elapsed time, so a wall
   clock step on an ensemble host does not shorten them.
 - Group names follow the `LeaseName` rules (1–128 characters of `[A-Za-z0-9._:-]`, not `.` or `..`), as on every
-  backend. `members` syncs the group path first, so a join that just returned is always in the view.
+  backend. `members` reads through the client of the session that last joined or left the group on this node, so
+  that change is always in the view (Zookeeper orders the requests of a session), after a `sync` that brings a
+  follower up to date with the leader. A `sync` is answered locally on the leader, so a change made by another node can
+  show there a moment later; membership hints and the periodic refresh pick it up.
 
 ### Security
 

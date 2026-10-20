@@ -169,8 +169,9 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
   会话超时按服务器的流逝时间计算，因此集群主机的墙钟跳变不会缩短它们。
 - `simba.zookeeper.connection-timeout` 限制打开会话所需的最长时间，默认等于续约间隔，超过它引擎就会放弃这次调用。之后才连上的会话不会被续约，
   看门狗会在 `leaseDuration` 之后关闭它。
-- 组名遵循 `LeaseName` 的规则（1–128 个 `[A-Za-z0-9._:-]` 字符，且不能是 `.` 或 `..`），与所有后端一致。`members` 先对组路径执行
-  sync，因此刚刚返回的 join 一定出现在视图中。
+- 组名遵循 `LeaseName` 的规则（1–128 个 `[A-Za-z0-9._:-]` 字符，且不能是 `.` 或 `..`），与所有后端一致。`members` 通过本节点上最近一次 join 或 leave 该组的会话的客户端读取，
+  因此这次变化一定出现在视图中（Zookeeper 按顺序处理同一会话的请求）；读取前先执行 `sync`，让 follower 追上 leader。leader 会在本地直接应答
+  `sync`，所以其他节点的变化在 leader 上可能稍晚才出现，成员变化提示和定期刷新会补上。
 
 ### 安全 {#security}
 
