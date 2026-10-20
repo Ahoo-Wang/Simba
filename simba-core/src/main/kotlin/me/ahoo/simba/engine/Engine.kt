@@ -623,8 +623,13 @@ private class Transition(state: EngineState, private val now: Long) {
             groups[group] = GroupState()
             joinGroup(group)
         } else if (state.leaving) {
-            // Joined again while leaving: the pending leave still completes, then the group is joined anew.
-            groups[group] = state.copy(leaving = false)
+            // Joined again while leaving. The leave may already have gone through, so forget the membership, and the
+            // new joiner has seen no view yet, so forget the one published last too. A leave in flight joins anew when
+            // it answers; otherwise join now.
+            groups[group] = state.copy(leaving = false, joined = null, session = null, members = null)
+            if (state.request == null) {
+                joinGroup(group)
+            }
         }
     }
 
@@ -651,19 +656,23 @@ private class Transition(state: EngineState, private val now: Long) {
         groups[group] = state.copy(request = call(BackendRequest.Leave(current.id, group)), refreshTimer = null)
     }
 
-    /** A leave that succeeded forgets the group, or joins it again when it was joined meanwhile; a failure retries. */
+    /**
+     * A leave that succeeded forgets the group and a failed one retries; once the group was joined again meanwhile,
+     * any answer joins anew, since a leave whose reply failed may still have gone through.
+     */
     private fun onLeft(requestId: Long, request: BackendRequest.Leave, result: BackendResult) {
         val state = groups[request.group]?.takeIf { it.request == requestId } ?: return
+        val done = result == BackendResult.Done ||
+            result is BackendResult.Failed && result.cause is SessionExpiredException
         when {
-            result == BackendResult.Done ||
-                result is BackendResult.Failed && result.cause is SessionExpiredException ->
-                if (state.leaving) {
-                    groups.remove(request.group)
-                } else {
-                    groups[request.group] = state.copy(joined = null, request = null)
-                    joinGroup(request.group)
-                }
+            // Joined again meanwhile: the leave may have gone through even when its reply failed, so join anew
+            // (joining is idempotent) rather than trust the old membership.
+            !state.leaving -> {
+                groups[request.group] = state.copy(joined = null, request = null)
+                joinGroup(request.group)
+            }
 
+            done -> groups.remove(request.group)
             else -> groups[request.group] = state.copy(request = null, refreshTimer = arm(now + retryDelay()))
         }
     }
