@@ -66,6 +66,15 @@ class SimulationSpec {
     }
 
     @Test
+    fun `groups joined again while leaving still run their partitions`() {
+        // Seeds that left a partition without a leader before joins during a leave were fixed (#649).
+        Simulation(217, SELF_EXPIRING).run()
+        Simulation(200, NO_HINTS).run()
+        Simulation(1286).run()
+        Simulation(4026).run()
+    }
+
+    @Test
     fun `a seed replays exactly`() {
         Simulation(SAMPLE_SEED).run().assert().isEqualTo(Simulation(SAMPLE_SEED).run())
     }

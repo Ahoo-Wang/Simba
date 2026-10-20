@@ -738,6 +738,12 @@ private class Transition(state: EngineState, private val now: Long) {
         }
         val next = state.copy(request = null, refreshTimer = arm(now + config.renewInterval))
         groups[request.group] = publishView(request.group, next, viewer, result.members)
+        if (viewer != null && viewer !in result.members && !state.leaving) {
+            // Joined, yet not a member: a leave that timed out may have reached the backend after the rejoin. Join
+            // again (idempotent) rather than stay out of the group for good.
+            groups[request.group] = groups.getValue(request.group).copy(joined = null)
+            joinGroup(request.group)
+        }
     }
 
     private fun publishView(group: String, state: GroupState, viewer: SessionId?, members: List<SessionId>): GroupState {

@@ -154,7 +154,8 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   is in flight sends the leave once the join answers (even a failed one); a failed leave retries; the membership of
   an ended session ends with it. Joining again while leaving forgets the membership and the published view (the new
   joiner has seen none): a pending leave joins anew whatever it answers (a failed reply may hide a leave that went
-  through), and without one the group joins at once. `GroupTask.stop()` also waits for partitions still handing over.
+  through), and without one the group joins at once. A members view without the session it was joined with (a timed-
+  out leave that reached the backend after the rejoin) joins again. `GroupTask.stop()` also waits for partitions still handing over.
 - Events are delivered in order on one serial dispatcher over the callback executor, never on the loop, and
   `close()` waits for them; listener failures are logged and ignored. On a loop thread (reachable only with a direct
   callback executor) `snapshot()` / `footprint()` read in place and blocking calls (`acquire`, blocking `close()`,

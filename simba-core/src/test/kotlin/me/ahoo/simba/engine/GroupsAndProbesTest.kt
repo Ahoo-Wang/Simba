@@ -219,6 +219,18 @@ class GroupsAndProbesTest : EngineHarness() {
     }
 
     @Test
+    fun `a members view without the joined session joins again`() {
+        open()
+        joined()
+        on(Event.Timer(effects.filterIsInstance<Effect.Arm>().single().id), now = SECOND)
+        // A leave that timed out before the rejoin reached the backend after it: we are no longer a member.
+        on(Event.Reply(call<BackendRequest.Members>().requestId, BackendResult.Members(listOf(other))), now = SECOND)
+        effects.assert().contains(Effect.Members(group, session, listOf(other)))
+        calls<BackendRequest.Join>().assert().isEqualTo(listOf(BackendRequest.Join(session, group)))
+        rejoinPublishes()
+    }
+
+    @Test
     fun `a rejoin after a leave already failed joins at once`() {
         open()
         joined()
