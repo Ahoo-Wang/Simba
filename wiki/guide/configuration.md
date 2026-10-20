@@ -29,7 +29,7 @@ indicator.
 | `simba.zookeeper.enabled` | `true` | Enables the Zookeeper backend |
 | `simba.zookeeper.connect-string` | `localhost:2181` | Ensemble the backend opens its sessions on |
 | `simba.zookeeper.root` | `/simba` | Parent path of the lease and group nodes |
-| `simba.zookeeper.connection-timeout` | `15s` | How long opening a session may take |
+| `simba.zookeeper.connection-timeout` | `simba.session.renew-interval` | How long opening a session may take |
 | `simba.zookeeper.auth.scheme` | `digest` | Authentication scheme every Zookeeper client adds |
 | `simba.zookeeper.auth.credentials` | — | Auth data of the scheme (UTF-8), e.g. `user:password` for `digest`; unset: no authentication |
 | `simba.zookeeper.acl` | `auto` | ACL of the nodes the backend creates: `open` (`OPEN_ACL_UNSAFE`), `creator` (`CREATOR_ALL_ACL`, needs credentials) or `auto` (`creator` with credentials, else `open`); an `ACLProvider` bean takes precedence |

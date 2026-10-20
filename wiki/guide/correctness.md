@@ -113,7 +113,9 @@ Build it with `SimbaConfig.builder()` (`toBuilder()` derives a variant); `build(
 A backend may grant less than `leaseDuration` — a Zookeeper server caps the session timeout at its
 `maxSessionTimeout`. When two keep-alives at `renewInterval` no longer fit in the local validity it grants, the client
 renews every third of that validity instead and publishes `SessionLeaseShortened` (and a warning) once per session,
-rather than letting every term end with `DEADLINE_PASSED`.
+rather than letting every term end with `DEADLINE_PASSED`. Zookeeper always grants less: a keep-alive proves the
+session alive at the leader only up to `5/12` of the session timeout (see
+[Backends](/guide/backends#zookeeper)), so with the default lease it renews about every two seconds.
 
 How to choose:
 
@@ -283,6 +285,7 @@ it to move leadership off a node before a deploy or to drain it. `stop()` ends t
 | Backend reports the session expired | Every term revoked (`SESSION_EXPIRED`), new session, contend again. |
 | Leader paused longer than the lease (GC, VM freeze) | On waking, `term.isValid` is already `false`; the engine revokes the term. Writes already in flight can still land: the [fencing token](#fencing-tokens) is the only defense. |
 | Keep-alive shows the lease owned by someone else | Term revoked (`TAKEN_OVER`). |
+| Zookeeper follower loses the leader | The follower still answers reads for up to `syncLimit` ticks while the leader stops seeing the session and expires it. Keep-alives `sync` through the leader, so they fail on such a follower and the local deadline runs out; it never outlasts the leader's view of the session. |
 | Clock rate differs by more than `drift` | The safety argument no longer holds; raise `drift`. |
 | Redis failover loses recent writes | A token can go back; see [Backends](/guide/backends#token-regression-after-a-failover). |
 | Failover to an asynchronous database replica (MySQL replica, PostgreSQL standby promotion) | Like a Redis failover: recent token increments and keep-alives can be lost, so a token can go back. Use synchronous replication when fencing must hold; see [Backends](/guide/backends#operating-notes). |

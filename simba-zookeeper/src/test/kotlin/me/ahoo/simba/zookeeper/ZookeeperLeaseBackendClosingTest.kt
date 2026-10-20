@@ -21,13 +21,8 @@ import org.apache.curator.test.TestingServer
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import java.net.InetSocketAddress
-import java.net.ServerSocket
-import java.net.Socket
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -89,57 +84,7 @@ class ZookeeperLeaseBackendClosingTest {
         }
     }
 
-    /** Forwards bytes to the server until [freeze]; then holds everything the client sends. */
-    private class FreezingProxy(target: Int) : AutoCloseable {
-        private val listener = ServerSocket().apply { bind(InetSocketAddress("127.0.0.1", 0)) }
-        private val sockets = CopyOnWriteArrayList<Socket>()
-
-        @Volatile
-        private var frozen: CountDownLatch? = null
-        val port: Int = listener.localPort
-
-        init {
-            Thread {
-                while (!listener.isClosed) {
-                    val client = runCatching { listener.accept() }.getOrNull() ?: break
-                    val upstream = Socket("127.0.0.1", target)
-                    sockets += client
-                    sockets += upstream
-                    pump(client, upstream, fromClient = true)
-                    pump(upstream, client, fromClient = false)
-                }
-            }.apply { isDaemon = true }.start()
-        }
-
-        /** Stops forwarding; the latch opens once the client sent anything since. */
-        fun freeze(): CountDownLatch = CountDownLatch(1).also { frozen = it }
-
-        private fun pump(from: Socket, to: Socket, fromClient: Boolean) {
-            Thread {
-                val buffer = ByteArray(BUFFER_BYTES)
-                runCatching {
-                    var read = from.getInputStream().read(buffer)
-                    while (read >= 0) {
-                        val latch = frozen
-                        if (latch == null) {
-                            to.getOutputStream().write(buffer, 0, read)
-                        } else if (fromClient) {
-                            latch.countDown()
-                        }
-                        read = from.getInputStream().read(buffer)
-                    }
-                }
-            }.apply { isDaemon = true }.start()
-        }
-
-        override fun close() {
-            listener.close()
-            sockets.forEach { runCatching { it.close() } }
-        }
-    }
-
     companion object {
         private const val TICK_MILLIS = 100
-        private const val BUFFER_BYTES = 8192
     }
 }

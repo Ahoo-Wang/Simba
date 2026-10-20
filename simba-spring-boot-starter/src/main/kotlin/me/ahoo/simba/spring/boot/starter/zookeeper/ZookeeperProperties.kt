@@ -27,6 +27,8 @@ import java.time.Duration
  * `simba.zookeeper.*`: the ensemble that [ZookeeperLeaseBackend] opens one ZooKeeper session per Simba session on.
  *
  * @param root parent path of the lease and group nodes.
+ * @param connectionTimeout how long opening a session may wait for the ensemble; default the session renew interval,
+ *   after which the engine gives up on the call anyway.
  * @param auth authentication every client adds; none when [Auth.credentials] is unset.
  * @param acl ACL of the nodes the backend creates; an `ACLProvider` bean takes precedence.
  */
@@ -35,7 +37,7 @@ data class ZookeeperProperties(
     val enabled: Boolean = true,
     val connectString: String = "localhost:2181",
     val root: String = ZookeeperLeaseBackend.DEFAULT_ROOT,
-    val connectionTimeout: Duration = Duration.ofSeconds(DEFAULT_CONNECTION_TIMEOUT_SECONDS),
+    val connectionTimeout: Duration? = null,
     val auth: Auth = Auth(),
     val acl: Acl = Acl.AUTO,
 ) {
@@ -88,6 +90,5 @@ data class ZookeeperProperties(
 
     companion object {
         const val PREFIX = SimbaProperties.PREFIX + ".zookeeper"
-        private const val DEFAULT_CONNECTION_TIMEOUT_SECONDS = 15L
     }
 }

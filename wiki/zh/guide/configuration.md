@@ -28,7 +28,7 @@ description: 所有 simba.* 属性、Spring Boot starter 创建的 bean、关闭
 | `simba.zookeeper.enabled` | `true` | 启用 Zookeeper 后端 |
 | `simba.zookeeper.connect-string` | `localhost:2181` | 后端在其上打开会话的 ensemble |
 | `simba.zookeeper.root` | `/simba` | 租约节点和组节点的父路径 |
-| `simba.zookeeper.connection-timeout` | `15s` | 打开一个会话允许花费的时间 |
+| `simba.zookeeper.connection-timeout` | `simba.session.renew-interval` | 打开一个会话允许花费的时间 |
 | `simba.zookeeper.auth.scheme` | `digest` | 每个 Zookeeper 客户端添加的认证方案 |
 | `simba.zookeeper.auth.credentials` | — | 该方案的认证数据（UTF-8），例如 `digest` 的 `user:password`；不设置则不认证 |
 | `simba.zookeeper.acl` | `auto` | 后端创建的节点的 ACL：`open`（`OPEN_ACL_UNSAFE`）、`creator`（`CREATOR_ALL_ACL`，需要凭据）或 `auto`（有凭据时为 `creator`，否则为 `open`）；`ACLProvider` bean 优先 |

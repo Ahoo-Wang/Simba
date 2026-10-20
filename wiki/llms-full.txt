@@ -388,7 +388,9 @@ Build it with `SimbaConfig.builder()` (`toBuilder()` derives a variant); `build(
 A backend may grant less than `leaseDuration` — a Zookeeper server caps the session timeout at its
 `maxSessionTimeout`. When two keep-alives at `renewInterval` no longer fit in the local validity it grants, the client
 renews every third of that validity instead and publishes `SessionLeaseShortened` (and a warning) once per session,
-rather than letting every term end with `DEADLINE_PASSED`.
+rather than letting every term end with `DEADLINE_PASSED`. Zookeeper always grants less: a keep-alive proves the
+session alive at the leader only up to `5/12` of the session timeout (see
+[Backends](/guide/backends#zookeeper)), so with the default lease it renews about every two seconds.
 
 How to choose:
 
@@ -558,6 +560,7 @@ it to move leadership off a node before a deploy or to drain it. `stop()` ends t
 | Backend reports the session expired | Every term revoked (`SESSION_EXPIRED`), new session, contend again. |
 | Leader paused longer than the lease (GC, VM freeze) | On waking, `term.isValid` is already `false`; the engine revokes the term. Writes already in flight can still land: the [fencing token](#fencing-tokens) is the only defense. |
 | Keep-alive shows the lease owned by someone else | Term revoked (`TAKEN_OVER`). |
+| Zookeeper follower loses the leader | The follower still answers reads for up to `syncLimit` ticks while the leader stops seeing the session and expires it. Keep-alives `sync` through the leader, so they fail on such a follower and the local deadline runs out; it never outlasts the leader's view of the session. |
 | Clock rate differs by more than `drift` | The safety argument no longer holds; raise `drift`. |
 | Redis failover loses recent writes | A token can go back; see [Backends](/guide/backends#token-regression-after-a-failover). |
 | Failover to an asynchronous database replica (MySQL replica, PostgreSQL standby promotion) | Like a Redis failover: recent token increments and keep-alives can be lost, so a token can go back. Use synchronous replication when fencing must hold; see [Backends](/guide/backends#operating-notes). |
@@ -743,14 +746,23 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
   released by the engine. Releases of one session run one at a time.
 - The Zookeeper client heartbeats on its own, so a local watchdog closes a session that no keep-alive renewed within
   the lease: a node that stopped renewing never keeps its leases through heartbeats alone.
-- Remaining time is `min(leaseDuration, negotiated session timeout)`. While the client is disconnected, keep-alive and
-  acquire fail, so the local deadline runs out; when Zookeeper reports the session expired, the session is `Expired`.
+- Only the leader expires sessions, and a follower answers reads from its own state until it notices it lost the
+  leader (`syncLimit` ticks), while it reports the session's activity to the leader only on its next ping. So a
+  keep-alive first `sync`s through the leader, and its remaining time is `min(leaseDuration, 5/12 × negotiated session
+  timeout)`: the client sends at least every third of the timeout and the leader pings every half tick (at most a
+  quarter of the timeout), so the leader saw the session at most `7/12` of the timeout before the reply. With the
+  default lease the client therefore renews about every two seconds and publishes `SessionLeaseShortened` once per
+  session.
+- While the client is disconnected, or on a follower cut off from the leader, keep-alive and acquire fail, so the local
+  deadline runs out; when Zookeeper reports the session expired, the session is `Expired`.
 
 ### Operating Notes
 
 - The session timeout requested is `leaseDuration`; the ensemble clamps it to `[minSessionTimeout,
   maxSessionTimeout]` (by default 2 to 20 ticks). Failover after a crash takes the negotiated timeout.
-- `simba.zookeeper.connection-timeout` bounds how long opening a session may take.
+- `simba.zookeeper.connection-timeout` bounds how long opening a session may take; it defaults to the renew interval,
+  after which the engine gives up on the call. A session that connects later anyway is never kept alive, and the
+  watchdog closes it after `leaseDuration`.
 - Writes commit through a quorum, so a leader change keeps every token; tokens can only go back if the ensemble's data
   is lost or restored from an older snapshot. Session timeouts are tracked with the servers' elapsed time, so a wall
   clock step on an ensemble host does not shorten them.
@@ -817,7 +829,7 @@ indicator.
 | `simba.zookeeper.enabled` | `true` | Enables the Zookeeper backend |
 | `simba.zookeeper.connect-string` | `localhost:2181` | Ensemble the backend opens its sessions on |
 | `simba.zookeeper.root` | `/simba` | Parent path of the lease and group nodes |
-| `simba.zookeeper.connection-timeout` | `15s` | How long opening a session may take |
+| `simba.zookeeper.connection-timeout` | `simba.session.renew-interval` | How long opening a session may take |
 | `simba.zookeeper.auth.scheme` | `digest` | Authentication scheme every Zookeeper client adds |
 | `simba.zookeeper.auth.credentials` | — | Auth data of the scheme (UTF-8), e.g. `user:password` for `digest`; unset: no authentication |
 | `simba.zookeeper.acl` | `auto` | ACL of the nodes the backend creates: `open` (`OPEN_ACL_UNSAFE`), `creator` (`CREATOR_ALL_ACL`, needs credentials) or `auto` (`creator` with credentials, else `open`); an `ACLProvider` bean takes precedence |

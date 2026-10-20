@@ -14,6 +14,7 @@
 package me.ahoo.simba.spring.boot.starter.zookeeper
 
 import me.ahoo.simba.spi.LeaseBackend
+import me.ahoo.simba.spring.boot.starter.SimbaProperties
 import me.ahoo.simba.zookeeper.ZookeeperLeaseBackend
 import org.apache.curator.framework.api.ACLProvider
 import org.apache.zookeeper.client.ZKClientConfig
@@ -37,12 +38,13 @@ class SimbaZookeeperAutoConfiguration {
     @ConditionalOnMissingBean(LeaseBackend::class)
     fun zookeeperLeaseBackend(
         properties: ZookeeperProperties,
+        simbaProperties: SimbaProperties,
         aclProvider: ObjectProvider<ACLProvider>,
         clientConfig: ObjectProvider<ZKClientConfig>,
     ): ZookeeperLeaseBackend = ZookeeperLeaseBackend(
         connectString = properties.connectString,
         root = properties.root,
-        connectionTimeout = properties.connectionTimeout,
+        connectionTimeout = properties.connectionTimeout ?: simbaProperties.session.toConfig().renewInterval,
         authInfo = properties.authInfo(),
         aclProvider = aclProvider.getIfAvailable(properties::aclProvider),
         clientConfig = clientConfig.ifAvailable,

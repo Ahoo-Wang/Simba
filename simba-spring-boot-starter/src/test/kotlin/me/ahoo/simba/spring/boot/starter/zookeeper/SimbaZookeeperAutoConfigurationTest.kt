@@ -63,6 +63,16 @@ class SimbaZookeeperAutoConfigurationTest {
     }
 
     @Test
+    fun `opening a session waits at most the renew interval unless configured`() {
+        contextRunner.withPropertyValues("simba.session.lease-duration=9s").run {
+            it.getBean(ZookeeperLeaseBackend::class.java).connectionTimeout.assert().isEqualTo(Duration.ofSeconds(3))
+        }
+        contextRunner.withPropertyValues("simba.zookeeper.connection-timeout=2s").run {
+            it.getBean(ZookeeperLeaseBackend::class.java).connectionTimeout.assert().isEqualTo(Duration.ofSeconds(2))
+        }
+    }
+
+    @Test
     fun `selecting another backend leaves the zookeeper backend off`() {
         contextRunner.withPropertyValues("simba.backend=redis").run {
             assertThat(it).doesNotHaveBean(LeaseBackend::class.java).doesNotHaveBean(Simba::class.java)
