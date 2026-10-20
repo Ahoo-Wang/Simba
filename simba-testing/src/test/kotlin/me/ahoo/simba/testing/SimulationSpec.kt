@@ -20,6 +20,7 @@ import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
 import java.time.Duration
+import java.util.stream.LongStream
 
 class SimulationSpec {
     private val seeds = System.getProperty("simba.simulation.seeds")?.toLong() ?: DEFAULT_SEEDS
@@ -27,43 +28,31 @@ class SimulationSpec {
 
     @Test
     fun `invariants hold under delays losses pauses and drift`() {
-        val range = only?.let { it..it } ?: 0 until seeds
-        var elections = 0L
-        for (seed in range) {
-            val result = Simulation(seed).run()
-            elections += result.elections
-        }
-        elections.assert().isGreaterThan(0)
+        runSeeds(SimulationParams()).assert().isGreaterThan(0)
     }
 
     @Test
     fun `invariants hold when leases expire on their own`() {
-        val range = only?.let { it..it } ?: 0 until seeds
-        var elections = 0L
-        for (seed in range) {
-            elections += Simulation(seed, SELF_EXPIRING).run().elections
-        }
-        elections.assert().isGreaterThan(0)
+        runSeeds(SELF_EXPIRING).assert().isGreaterThan(0)
     }
 
     @Test
     fun `invariants hold when self-expiring grants last only as long as the session has left`() {
-        val range = only?.let { it..it } ?: 0 until seeds
-        var elections = 0L
-        for (seed in range) {
-            elections += Simulation(seed, SESSION_BOUND).run().elections
-        }
-        elections.assert().isGreaterThan(0)
+        runSeeds(SESSION_BOUND).assert().isGreaterThan(0)
     }
 
     @Test
     fun `invariants hold without backend hints, as on JDBC`() {
-        val range = only?.let { it..it } ?: 0 until seeds
-        var elections = 0L
-        for (seed in range) {
-            elections += Simulation(seed, NO_HINTS).run().elections
-        }
-        elections.assert().isGreaterThan(0)
+        runSeeds(NO_HINTS).assert().isGreaterThan(0)
+    }
+
+    /**
+     * Runs every seed (or only `-Psimba.simulation.seed`) and returns the elections they held. Seeds are independent and
+     * deterministic (virtual time, one random source each), so they run in parallel; a failure still names its seed.
+     */
+    private fun runSeeds(params: SimulationParams): Long {
+        val range = only?.let { LongStream.rangeClosed(it, it) } ?: LongStream.range(0, seeds)
+        return range.parallel().map { seed -> Simulation(seed, params).run().elections.toLong() }.sum()
     }
 
     @Test
