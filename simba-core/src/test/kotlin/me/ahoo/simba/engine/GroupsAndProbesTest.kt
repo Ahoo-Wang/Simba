@@ -231,6 +231,16 @@ class GroupsAndProbesTest : EngineHarness() {
     }
 
     @Test
+    fun `a leave answering session expired forgets the group`() {
+        open()
+        joined()
+        on(Event.Leave(group))
+        val leave = call<BackendRequest.Leave>()
+        on(Event.Reply(leave.requestId, BackendResult.Failed(SessionExpiredException(session))))
+        state.groups.assert().isEmpty()
+    }
+
+    @Test
     fun `a rejoin after a leave already failed joins at once`() {
         open()
         joined()

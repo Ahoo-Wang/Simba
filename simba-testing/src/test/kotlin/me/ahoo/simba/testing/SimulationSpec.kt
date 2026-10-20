@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
+import java.time.Duration
 
 class SimulationSpec {
     private val seeds = System.getProperty("simba.simulation.seeds")?.toLong() ?: DEFAULT_SEEDS
@@ -125,6 +126,18 @@ class SimulationSpec {
         results.sumOf { it.handovers }.assert().isGreaterThan(0)
         results.sumOf { it.handoverTimeouts }.assert().isGreaterThan(0)
         (results.sumOf { it.handovers } > results.sumOf { it.handoverTimeouts }).assert().isTrue()
+    }
+
+    @Test
+    fun `the checker catches a term outliving its lease between events`() {
+        // No drift allowance and no margin, but clocks running up to 30% fast: deadlines outlast the backend's grant.
+        val config = SimulationParams().config.toBuilder().drift(0.0).margin(Duration.ZERO).build()
+        val broken = SimulationParams.builder().config(config).clockRateSpread(0.3).groupPartitions(0)
+            .meanInjectionInterval(Duration.ZERO).build()
+        val failure = assertThrows<SimulationFailure> {
+            (0L until 200L).forEach { Simulation(it, broken).run() }
+        }
+        failure.message.assert().contains("after the backend frees its lease")
     }
 
     @Test
