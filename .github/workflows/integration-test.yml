@@ -231,9 +231,10 @@ jobs:
           # Dependencies and the Gradle distribution, keyed by the build files; main's Codecov run fills it.
           cache: gradle
 
+      # SimulationSpec's full 10^4 seeds run in Simba Core Test; 10^3 here are enough to catch a runtime regression.
       - name: Test on JDK 25
         run: >-
-          ./gradlew test -PtestJavaVersion=25
+          ./gradlew test -PtestJavaVersion=25 -Psimba.simulation.seeds=1000
           -Porg.gradle.java.installations.fromEnv=JAVA_HOME_21_X64,JAVA_HOME_25_X64
 
       - name: Upload test reports
