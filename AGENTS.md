@@ -33,8 +33,12 @@ This file records what is not obvious from the code. Describe the code as it is;
 
 CI (`.github/workflows/integration-test.yml`; job names are required checks, keep them): `Simba Core Test` (core,
 testing, tck, coroutines, starter), `Simba Spring Redis Test` (simba-redis and simba-spring-redis),
-`Simba Zookeeper Test`, `Simba Jdbc Test`, `Simba Example (jdbc|redis|zookeeper)`, `Simba Test (JDK 25)`. Wiki commands are in
-`wiki/AGENTS.md`.
+`Simba Zookeeper Test`, `Simba Jdbc Test`, `Simba Example (jdbc|redis|zookeeper)`, `Simba Test (JDK 25)`; they run in
+parallel. A pull request changing only documentation (`wiki/**`, `docs/**`, `skills/**`, `llms.txt`, `*.md`; decided
+by `.github/actions/changes`) skips them, Codecov and the Java / Kotlin CodeQL analysis through `if:` conditions, never
+`paths-ignore` (a workflow skipped by path leaves its required checks pending): a job skipped by `if:` reports success,
+matrix jobs skip their steps instead, and every condition builds unless that action answered `false`. Codecov then
+posts `codecov/patch` and `codecov/project` itself. Wiki commands are in `wiki/AGENTS.md`.
 
 ## Architecture
 

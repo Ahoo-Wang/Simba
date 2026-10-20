@@ -23,8 +23,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Documentation-only pull requests skip the build (see the Changes action). Required checks stay reported: a job
+  # skipped by its `if:` reports success, while a matrix job skips its steps instead (a skipped matrix job reports under
+  # its unexpanded name). Every condition builds unless Changes answered 'false', so a failed Changes job runs the
+  # tests instead of skipping them into a passed check. The test jobs run in parallel; none waits for Simba Core Test.
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: .github/actions
+
+      - name: Detect code changes
+        id: changes
+        uses: ./.github/actions/changes
+
   simba-core-test:
     name: Simba Core Test
+    needs: [ changes ]
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -57,7 +81,8 @@ jobs:
 
   simba-example-test:
     name: Simba Example (${{ matrix.backend }})
-    needs: [ simba-core-test ]
+    needs: [ changes ]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -65,9 +90,11 @@ jobs:
         backend: [jdbc, redis, zookeeper]
     steps:
       - name: Checkout
+        if: needs.changes.outputs.code != 'false'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK 21
+        if: needs.changes.outputs.code != 'false'
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
         with:
           java-version: '21'
@@ -78,6 +105,7 @@ jobs:
           settings-path: ${{ github.workspace }}
 
       - name: Test Simba-Example
+        if: needs.changes.outputs.code != 'false'
         run: ./gradlew simba-example:clean simba-example:check -PexampleBackend=${{ matrix.backend }}
 
       - name: Upload test reports
@@ -90,7 +118,8 @@ jobs:
 
   simba-spring-redis-test:
     name: Simba Spring Redis Test
-    needs: [ simba-core-test ]
+    needs: [ changes ]
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     # Redis runs through Testcontainers (Docker is available on GitHub-hosted runners).
     steps:
@@ -121,7 +150,8 @@ jobs:
 
   simba-zookeeper-test:
     name: Simba Zookeeper Test
-    needs: [ simba-core-test ]
+    needs: [ changes ]
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -150,7 +180,8 @@ jobs:
 
   simba-jdbc-test:
     name: Simba Jdbc Test
-    needs: [ simba-core-test ]
+    needs: [ changes ]
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     # MySQL and PostgreSQL run through Testcontainers, initialized with simba-jdbc's me/ahoo/simba/jdbc/init-simba-*.sql.
     steps:
@@ -180,7 +211,8 @@ jobs:
 
   jdk-25-test:
     name: Simba Test (JDK 25)
-    needs: [ simba-core-test ]
+    needs: [ changes ]
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     # Bytecode targets the JDK 21 baseline; this job runs the full suite on JDK 25 to catch runtime regressions early.
     steps:
