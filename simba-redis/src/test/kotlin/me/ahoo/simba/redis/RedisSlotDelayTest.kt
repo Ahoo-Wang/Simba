@@ -85,6 +85,27 @@ class RedisSlotDelayTest {
     }
 
     @Test
+    fun aLateAcquireWhoseReleaseFailsStillFailsAndLeavesOnlyWhatItBegan() {
+        val free = name()
+        val taken = name()
+        val other = backend.openSession(lease).id
+        val token = backend.granted(other, taken)
+        val session = backend.openSession(lease).id
+        hooked.before = { call ->
+            if (call.isSlotCall("lease_acquire")) advance(lease)
+            check(call.script.name != "lease_release") { "Connection lost before the release." }
+        }
+
+        assertThrows<SimbaException> { backend.acquire(session, setOf(free, taken)) }
+
+        // The release failed: the late term stays until it expires on its own; the other session's is untouched.
+        redis.opsForHash<String, String>().get(RedisLeaseKeys.lease(free), "session").assert().isEqualTo(session.value)
+        hooked.before = {}
+        backend.acquire(backend.openSession(lease).id, setOf(taken))
+            .assert().isEqualTo(mapOf(taken to AcquireResult.HeldBy(other, token)))
+    }
+
+    @Test
     fun keepAliveNeverLosesATermALateAcquireBegan() {
         val held = CompletableFuture<Unit>()
         val reached = CompletableFuture<Unit>()
