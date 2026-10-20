@@ -98,9 +98,8 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
    alike (`LeaseBackend.requireLease` ≥ 1 ms, `requireGroup` = `LeaseName` rules, `requireBatch` ≤ `MAX_BATCH` 64).
    `InMemoryLeaseBackend(selfExpiringLeases = true)` models Redis-style leases (a grant lasts one full lease; with
    `sessionBoundGrants = true`, as on Redis, only what the session has left); `SimulationSpec` runs all three modes.
-   Constructors of published classes keep their 5.0 signatures binary compatible, including the synthetic
-   default-arguments constructor Kotlin callers link against: add parameters through a new constructor without
-   defaults (compare with `javap` against the 5.0.0 jar).
+   Within 5.x the public API stays source compatible (Kotlin and Java callers keep compiling); binary compatibility is
+   not required.
 
 ## Invariants
 

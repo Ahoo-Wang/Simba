@@ -44,7 +44,7 @@ class InMemoryLeaseBackend(
     private val sessionBoundGrants: Boolean,
     private val sessionIds: () -> SessionId,
 ) : LeaseBackend {
-    // The 5.0 signature, kept binary compatible (with its synthetic default-arguments constructor).
+    /** Without [sessionBoundGrants], so `(ticker, selfExpiringLeases, sessionIds)` calls from Java and Kotlin compile. */
     @JvmOverloads
     constructor(
         ticker: Ticker = Ticker.SYSTEM,

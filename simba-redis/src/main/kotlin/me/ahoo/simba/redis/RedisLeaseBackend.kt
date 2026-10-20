@@ -74,7 +74,7 @@ class RedisLeaseBackend internal constructor(
     private val routeBySlot: Boolean,
     private val ticker: Ticker,
 ) : LeaseBackend {
-    // The 5.0 signature, kept binary compatible (with its synthetic default-arguments constructor).
+    /** Measures time on [Ticker.SYSTEM]. */
     @JvmOverloads
     constructor(
         scripting: RedisScripting,
