@@ -24,7 +24,9 @@ brings in; with `simba-testing` alone, add `me.ahoo.test:fluent-assert-core` or 
 
 `InMemoryLeaseBackend` implements the full `LeaseBackend` contract in memory (sessions, leases with never-resetting
 tokens, groups, release and membership hints). It needs no infrastructure, so it fits unit tests of anything that
-takes a `Simba`:
+takes a `Simba`. By default leases live as long as their session (JDBC, Zookeeper); `selfExpiringLeases = true` makes
+them expire on their own, each grant lasting one full lease, and `InMemoryLeaseBackend.builder()` (since 5.1) with
+`selfExpiringLeases(true).sessionBoundGrants(true)` limits a grant to the time its session has left, as on Redis:
 
 ```kotlin
 @Test
@@ -103,13 +105,22 @@ follow each node's view), nodes closed mid-fault, grants reported shorter than g
 session expired or a lease deleted by the backend on its own). It checks the invariants: at most one valid term per
 name (partitions included) at any moment, strictly increasing tokens, paired callbacks, liveness after faults stop,
 and the handover order; terms a backend-side fault removed are exempt from the first two until revoked, since such a
-fault breaks the backend's contract. `SimulationParams.builder()` sets the knobs, and `SimulationResult.events`
+fault breaks the backend's contract. `SimulationParams.builder()` sets the knobs (the table lists those added in 5.1),
+and `SimulationResult.events`
 counts the events and the exercised paths (`path:*`). Simba runs it over 10⁴ seeds in its own build; it is available to anyone changing the engine, and a failing seed
 replays exactly:
 
 ```bash
 ./gradlew simba-testing:test -Psimba.simulation.seed=42
 ```
+
+| `SimulationParams` (since 5.1) | Default | Meaning |
+|---|---|---|
+| `sessionBoundGrants` | `false` | With `selfExpiringLeases`, a grant lasts only as long as its session has left, as on Redis |
+| `truncatedGrantShare` | `0.3` | Share of runs whose backend reports less time than it grants (as a Zookeeper server capping the session timeout) |
+| `meanInjectionInterval` | `20s` | Mean interval of backend-side faults (a session expired or a lease deleted by the backend); `Duration.ZERO` disables them |
+| `groupPartitions` | `3` | Partitions of one group the nodes join and leave at random; `0` disables groups |
+| `earlyCloseShare` | `0.02` | Share of random operations that close a node for good during the fault phase |
 
 ## Verifying a Fencing Resource
 

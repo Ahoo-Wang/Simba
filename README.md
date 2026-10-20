@@ -39,7 +39,7 @@ implementation("me.ahoo.simba:simba-jdbc:${simbaVersion}")
 implementation("org.springframework.boot:spring-boot-starter-jdbc")
 runtimeOnly("com.mysql:mysql-connector-j") // or org.postgresql:postgresql
 
-// or Redis 7
+// or Redis 7 with maxmemory-policy noeviction (an evicted lease would reset its fencing token)
 implementation("me.ahoo.simba:simba-spring-redis:${simbaVersion}")
 implementation("org.springframework.boot:spring-boot-starter-data-redis")
 

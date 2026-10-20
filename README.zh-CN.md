@@ -36,7 +36,7 @@ implementation("me.ahoo.simba:simba-jdbc:${simbaVersion}")
 implementation("org.springframework.boot:spring-boot-starter-jdbc")
 runtimeOnly("com.mysql:mysql-connector-j") // 或 org.postgresql:postgresql
 
-// 或 Redis 7
+// 或 Redis 7，并使用 maxmemory-policy noeviction（租约被淘汰会重置 fencing token）
 implementation("me.ahoo.simba:simba-spring-redis:${simbaVersion}")
 implementation("org.springframework.boot:spring-boot-starter-data-redis")
 

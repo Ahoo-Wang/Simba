@@ -45,8 +45,10 @@ versions can run side by side:
   keep compiling unchanged.
 - The new optional module `simba-coroutines` adds suspending lock calls, `withLock`, `Term.awaitRevoked()` and
   `SimbaEventFlow`; it depends on `kotlinx-coroutines-core`, which `simba-core` does not.
-- `InMemoryLeaseBackend.builder()` also sets `sessionBoundGrants` (grants last only what the session has left, as on
-  a single Redis node); the 5.0 constructors are unchanged.
+- `simba-testing`: `InMemoryLeaseBackend.builder()` also sets `sessionBoundGrants`, a grant lasting only what the
+  session has left, as on Redis, and `SimulationParams` adds `sessionBoundGrants`, `truncatedGrantShare`,
+  `meanInjectionInterval`, `groupPartitions` and `earlyCloseShare` (see [Testing](/guide/testing#deterministic-simulation)).
+  The existing constructors and parameters are unchanged.
 - Redis with `routeBySlot` (a Cluster), where one call runs a script on the session's slot and then one per lease or
   group slot ([Cluster](/guide/backends#cluster)):
   - Acquire and join fail with `SimbaException` and send nothing to the other slots once the session's remaining

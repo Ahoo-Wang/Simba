@@ -39,8 +39,9 @@ Simba 在源码层面遵循 [语义化版本](https://semver.org/lang/zh-CN/)：
   [锁](/zh/guide/locks#without-blocking)。它们是默认方法，你自己的 `DistributedLock` 实现无需修改即可编译。
 - 新的可选模块 `simba-coroutines` 提供挂起版的锁调用、`withLock`、`Term.awaitRevoked()` 和 `SimbaEventFlow`；它依赖
   `kotlinx-coroutines-core`，`simba-core` 不依赖它。
-- `InMemoryLeaseBackend.builder()` 还可以设置 `sessionBoundGrants`（授予只持续会话剩余的时长，与单节点 Redis 相同）；5.0
-  的构造器保持不变。
+- `simba-testing`：`InMemoryLeaseBackend.builder()` 还可以设置 `sessionBoundGrants`，让一次授予只持续会话剩余的时长，与 Redis
+  相同；`SimulationParams` 新增 `sessionBoundGrants`、`truncatedGrantShare`、`meanInjectionInterval`、
+  `groupPartitions` 和 `earlyCloseShare`（参阅[测试](/zh/guide/testing#deterministic-simulation)）。已有的构造器和参数保持不变。
 - Redis 开启 `routeBySlot`（Cluster）时，一次调用先在会话所在的槽运行脚本，再为每个租约或组所在的槽各运行一个脚本
   （[Cluster](/zh/guide/backends#cluster)）：
   - 从发出会话调用起经过的时间达到会话剩余时长后，获取和加入不再向其他槽发送任何脚本，并以 `SimbaException` 失败。回复晚于这个时长才到达的获取会释放它开始的任期（包括已经授予成功的槽）并失败；引擎会像其他失败的调用一样重试。

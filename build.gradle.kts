@@ -15,6 +15,7 @@ import io.gitlab.arturbosch.detekt.DetektPlugin
 import io.gitlab.arturbosch.detekt.extensions.DetektExtension
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.jetbrains.dokka.gradle.DokkaPlugin
+import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
 import org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinVersion
 
@@ -95,7 +96,10 @@ configure(libraryProjects) {
     }
     tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         compilerOptions {
-            freeCompilerArgs.addAll("-Xjsr305=strict", "-Xjvm-default=all-compatibility")
+            freeCompilerArgs.addAll("-Xjsr305=strict")
+            // Interface methods with bodies become Java default methods, plus DefaultImpls for older Kotlin callers
+            // (the former -Xjvm-default=all-compatibility).
+            jvmDefault.set(JvmDefaultMode.ENABLE)
             javaParameters = true
         }
     }
