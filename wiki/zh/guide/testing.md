@@ -24,9 +24,8 @@ testImplementation("me.ahoo.simba:simba-tck:${simbaVersion}")
 
 `InMemoryLeaseBackend` 在内存中实现完整的 `LeaseBackend` 契约（会话、token 永不重置的租约、组、释放以及成员变化提示）。
 它不需要任何基础设施，因此适合对任何接受 `Simba` 的代码做单元测试。默认情况下租约与会话同生共死（如 JDBC、Zookeeper）；
-`selfExpiringLeases = true` 让租约自行过期，每次授予持续一个完整租期；四参数构造器
-`InMemoryLeaseBackend(ticker, selfExpiringLeases, sessionBoundGrants, sessionIds)`（5.1 起）配合
-`sessionBoundGrants = true`，让一次授予只持续其会话剩余的时间，与 Redis 相同：
+`selfExpiringLeases = true` 让租约自行过期，每次授予持续一个完整租期；`InMemoryLeaseBackend.builder()`（5.1 起）配合
+`selfExpiringLeases(true).sessionBoundGrants(true)`，让一次授予只持续其会话剩余的时间，与 Redis 相同：
 
 ```kotlin
 @Test

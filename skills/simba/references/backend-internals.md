@@ -51,9 +51,10 @@ Scripts: `lease_session_open`, `lease_keep_alive`, `lease_acquire`, `lease_relea
   remaining`; fails once the session key is gone.
 - Keep-alive extends the session and only the `held` leases still owned (leases expire on their own).
 - Release clears `session` and publishes `released` on the lease key's channel — the only broadcast.
-- `routeBySlot` (Cluster): session slot first, then one script per slot. Only durations cross nodes: each slot script
-  carries what the session has left (remaining minus client monotonic time since the session call answered) and
-  grants or extends nothing beyond its node's now plus that. Acquire and join send nothing once the session's
+- `routeBySlot` (Cluster): session slot first, then one script per slot. Only durations cross nodes: acquire and join
+  grant one full session lease on the slot node's clock (covers a keep-alive between the two calls); keep-alive's
+  slot scripts carry what the session has left and extend nothing beyond their node's now plus that. Acquire and
+  join send nothing once the session's
   remaining time passed; an acquire answering later releases what it began and fails.
 - `waitReplicas`: `WAIT n timeout` after a new term; not on Cluster. Failover can still lose a token increment.
 

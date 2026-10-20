@@ -51,8 +51,10 @@ import java.util.concurrent.TimeoutException
  *   [selfExitShare] within [maxWork], and otherwise within [maxWork] after its term is revoked (often after the
  *   handover timed out).
  * @property selfExpiringLeases runs [InMemoryLeaseBackend] with leases that expire on their own, as on Redis.
- * @property sessionBoundGrants with [selfExpiringLeases], a grant lasts only as long as its session has left, as on
- *   Redis, instead of one full lease.
+ * @property sessionBoundGrants with [selfExpiringLeases], leases are granted as on Redis: an atomic grant lasts only
+ *   as long as its session has left (a single node), and acquires run in two steps as on a Cluster
+ *   ([InMemoryLeaseBackend.beginSlotAcquire], then a full session lease from the grant), with a network delay and
+ *   anything else between them.
  * @property truncatedGrantShare share of runs whose backend reports less time than it grants (a factor drawn from
  *   `[0.3, 0.95]` per run), as a Zookeeper server capping the session timeout does; below two renew intervals of
  *   local validity the engine renews more often (`SessionLeaseShortened`).
@@ -349,9 +351,12 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
     private val random = SplittableRandom(seed)
     private val clock = VirtualClock()
     private var sessionCounter = 0
-    private val backend = InMemoryLeaseBackend(clock, params.selfExpiringLeases, params.sessionBoundGrants) {
-        SessionId("s${++sessionCounter}")
-    }
+    private val backend = InMemoryLeaseBackend.builder()
+        .ticker(clock)
+        .selfExpiringLeases(params.selfExpiringLeases)
+        .sessionBoundGrants(params.sessionBoundGrants)
+        .sessionIds { SessionId("s${++sessionCounter}") }
+        .build()
     private val engineConfig = EngineConfig.of(params.config)
     private val queue = PriorityQueue<Task>(compareBy<Task>({ it.at }, { it.seq }))
     private var seq = 0L
@@ -584,6 +589,27 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
                 deliver(node, Event.Reply(effect.requestId, BackendResult.Failed(TimeoutException("timeout"))))
             }
         }
+        val request = effect.request
+        if (params.sessionBoundGrants && request is BackendRequest.Acquire) {
+            // As on a Redis Cluster: the session slot answers first, the lease slots take the leases later.
+            send {
+                val slot = try {
+                    backend.beginSlotAcquire(request.session, request.names)
+                } catch (error: RuntimeException) {
+                    reply(node, effect, BackendResult.Failed(error))
+                    return@send
+                }
+                send {
+                    val result = try {
+                        BackendResult.Acquired(slot.grant())
+                    } catch (error: RuntimeException) {
+                        BackendResult.Failed(error)
+                    }
+                    reply(node, effect, result)
+                }
+            }
+            return
+        }
         send {
             val result = truncate(backend.execute(effect.request))
             val at = clock.nanoTime()
@@ -592,6 +618,16 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
                 if (node.unresolved.remove(effect.requestId)) {
                     deliver(node, Event.Reply(effect.requestId, result))
                 }
+            }
+        }
+    }
+
+    /** Records [result] of [effect] and sends it back to [node]. */
+    private fun reply(node: Node, effect: Effect.Call, result: BackendResult) {
+        record { "${millis(clock.nanoTime())} backend ${effect.request} -> $result" }
+        send {
+            if (node.unresolved.remove(effect.requestId)) {
+                deliver(node, Event.Reply(effect.requestId, result))
             }
         }
     }

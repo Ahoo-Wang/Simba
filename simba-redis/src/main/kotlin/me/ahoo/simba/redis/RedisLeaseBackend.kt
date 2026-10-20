@@ -52,9 +52,14 @@ import java.time.Duration
  * A script after the session's may run long after it (a starved thread, a driver holding commands until it
  * reconnects), when the session may have died. Only durations cross nodes, never a node's clock reading, so a fixed
  * skew between node clocks changes nothing:
- * - The later scripts carry what the session has left: its remaining time from the session call minus the time
- *   measured on [ticker] since that call answered. A lease node grants and extends nothing beyond its own now plus
- *   that, so a lease lasts at least as long as its session and outlasts it by at most the delay before the script ran.
+ * - Acquire and join grant one full session lease on the lease node's own clock, as 5.0 did: a keep-alive that ran
+ *   between the session call and the lease call extended the session but not the lease it did not hold yet, and the
+ *   engine adopts the term with the deadline of that keep-alive, so a grant bounded by what the session had left at
+ *   the session call could end while its holder's term is still valid. The price is liveness only: a grant to a
+ *   session that died meanwhile outlives it by up to one lease.
+ * - Keep-alive's later scripts carry what the session has left: its new remaining time minus the time measured on
+ *   [ticker] since the session call answered. A lease node extends nothing beyond its own now plus that, so a lease
+ *   lasts at least as long as its session and outlasts it by at most the delay before the script ran.
  * - Acquire and join send nothing once the time since the session call was sent reached the session's remaining
  *   time, and fail. An acquire whose reply arrives later than that releases the terms it began and fails, even when
  *   other slots granted theirs: a late grant may have missed the session's index (keep-alive drops a lost key one
@@ -161,7 +166,7 @@ class RedisLeaseBackend internal constructor(
         val replicas: Int?
         if (routeBySlot) {
             val sessionReply = sessionCall(ACQUIRE, session, RedisLeaseKeys.sessionLeases(session), keys)
-            val args = listOf(WITHOUT_SESSION, session.value, sessionReply.left("Acquiring $names").toString())
+            val args = listOf(WITHOUT_SESSION, session.value, sessionReply.grantFor("Acquiring $names").toString())
             val calls = routed(keys) { ScriptCall(ACQUIRE, it, args) }
             val result = if (calls.isEmpty()) ScriptReplies(emptyList()) else scripting.eval(calls, waitReplicas)
             replies = calls.map { it.keys }.zip(result.replies)
@@ -240,8 +245,8 @@ class RedisLeaseBackend internal constructor(
         val key = RedisLeaseKeys.group(LeaseBackend.requireGroup(group))
         if (routeBySlot) {
             val sessionReply = sessionCall(JOIN, session, RedisLeaseKeys.sessionGroups(session), listOf(key))
-            val left = sessionReply.left("Joining [$group]")
-            eval(JOIN, listOf(key), listOf(WITHOUT_SESSION, session.value, left.toString()))
+            val lease = sessionReply.grantFor("Joining [$group]")
+            eval(JOIN, listOf(key), listOf(WITHOUT_SESSION, session.value, lease.toString()))
             return
         }
         val reply = eval(
@@ -342,14 +347,19 @@ class RedisLeaseBackend internal constructor(
         }
     }
 
-    /** The answer of a [sessionCall]: what the session had left, and when (on [ticker]) the call was sent and answered. */
-    private inner class SessionReply(val session: SessionId, val remaining: Long, val sent: Long, val answered: Long) {
-        /** What the session has left now, as measured since the call answered; fails when nothing is left to grant. */
-        fun left(what: String): Long {
+    /** The answer of a [sessionCall]: what the session had left, its lease, and when (on [ticker]) the call was sent. */
+    private inner class SessionReply(
+        val session: SessionId,
+        val remaining: Long,
+        val lease: Long,
+        val sent: Long,
+    ) {
+        /** How long the lease slots grant: one full session lease; fails when the session may have expired. */
+        fun grantFor(what: String): Long {
             if (late()) {
                 throw SimbaException("$what for session [$session] came later than the session's remaining time.")
             }
-            return remaining - millisSince(answered)
+            return lease
         }
 
         /** Whether the session may have expired: its remaining time passed since the call was sent. */
@@ -358,7 +368,7 @@ class RedisLeaseBackend internal constructor(
 
     /**
      * Runs [script] on the session's slot only: checks the session is live, records [indexed] in [index], and answers
-     * the session's remaining time.
+     * the session's remaining time and lease.
      */
     private fun sessionCall(
         script: LeaseScript,
@@ -372,11 +382,10 @@ class RedisLeaseBackend internal constructor(
             listOf(RedisLeaseKeys.session(session), index),
             listOf(WITH_SESSION, session.value, "0") + indexed
         )
-        val answered = ticker.nanoTime()
         if (reply.long(0) == EXPIRED) {
             throw SessionExpiredException(session)
         }
-        return SessionReply(session, reply.long(0), sent, answered)
+        return SessionReply(session, reply.long(0), reply.long(1), sent)
     }
 
     /**
