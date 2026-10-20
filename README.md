@@ -45,6 +45,9 @@ implementation("org.springframework.boot:spring-boot-starter-data-redis")
 
 // or Zookeeper: set simba.zookeeper.connect-string
 implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
+
+// optional, since 5.1: suspending lock calls, withLock and an event Flow (kotlinx-coroutines)
+implementation("me.ahoo.simba:simba-coroutines:${simbaVersion}")
 ```
 
 The starter builds one `Simba` bean over the backend on the classpath. With several backend modules, set

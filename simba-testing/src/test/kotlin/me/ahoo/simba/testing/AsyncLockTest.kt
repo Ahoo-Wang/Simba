@@ -30,6 +30,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executor
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
@@ -228,6 +229,53 @@ class AsyncLockTest {
     }
 
     @Test
+    fun `a negative timeout fails the returned future and throws from the blocking call`() {
+        val lock = simba.client().lock(name.value)
+
+        lock.acquireAsync(Duration.ofSeconds(-1)).failure().assert().isInstanceOf(IllegalArgumentException::class.java)
+        runCatching { lock.acquire(Duration.ofSeconds(-1)) }.exceptionOrNull()
+            .assert().isInstanceOf(IllegalArgumentException::class.java)
+    }
+
+    @Test
+    fun `a term revoked before the completion runs is not returned and the lock contends again`() {
+        val holding = HoldingExecutor()
+        val client = simba.client { callbackExecutor(holding) }
+        val acquiring = client.lock(name.value).acquireAsync(Duration.ofSeconds(10)).toCompletableFuture()
+        simba.settle()
+        val first = holding.completions.next()
+        val owner = checkNotNull(simba.backend.owner(name))
+        owner.token.assert().isEqualTo(1L)
+
+        simba.backend.closeSession(owner.session)
+        simba.advance(Duration.ofSeconds(1))
+        first.run()
+        acquiring.isDone.assert().isFalse()
+        var next = holding.completions.poll()
+        repeat(RETRY_STEPS) {
+            if (next == null) {
+                simba.advance(Duration.ofMillis(100))
+                next = holding.completions.poll()
+            }
+        }
+        checkNotNull(next) { "The lock did not contend again." }.run()
+
+        val term = acquiring.get(WAIT, TimeUnit.SECONDS)
+        term.token.assert().isEqualTo(2L)
+        term.isValid.assert().isTrue()
+        term.close()
+    }
+
+    /** Runs everything at once except lock completions, which it holds for the test to run. */
+    private class HoldingExecutor : Executor {
+        val completions = LinkedBlockingQueue<Runnable>()
+
+        override fun execute(command: Runnable) {
+            if (command.toString().startsWith("LockCompletion")) completions += command else command.run()
+        }
+    }
+
+    @Test
     fun `the default acquireAsync interrupts a cancelled blocking acquire`() {
         val started = CountDownLatch(1)
         val interrupted = CompletableFuture<Boolean>()
@@ -319,5 +367,9 @@ class AsyncLockTest {
         override fun remaining(): Duration = Duration.ofSeconds(1)
 
         override fun ensureValid(minRemaining: Duration) = Unit
+    }
+
+    companion object {
+        const val RETRY_STEPS = 100
     }
 }
