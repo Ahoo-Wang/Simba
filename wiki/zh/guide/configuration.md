@@ -14,7 +14,7 @@ description: 所有 simba.* 属性、Spring Boot starter 创建的 bean、关闭
 |---|---|---|
 | `simba.enabled` | `true` | 启用整个自动配置 |
 | `simba.backend` | — | `jdbc`、`redis` 或 `zookeeper`；有多个后端模块生效时必须设置 |
-| `simba.session.lease-duration` | `15s` | 会话最后一次续约 (keep-alive) 之后，后端经过这段时间使会话过期 |
+| `simba.session.lease-duration` | `15s` | 会话最后一次续约 (keep-alive) 之后，后端经过这段时间使会话过期。在 Zookeeper 上节点只能扛住约为它 5/12 的停顿；更看重容忍停顿而不是故障转移时间时请调大（见[后端](/zh/guide/backends#zookeeper)） |
 | `simba.session.renew-interval` | `lease-duration / 3` | 续约 (keep-alive) 周期；最多为租约时长的一半 |
 | `simba.session.drift` | `0.01` | 节点与后端之间时钟速率差异的上限，取值范围 `[0, 0.5)` |
 | `simba.session.margin` | `50ms` | 从每个本地截止时刻中额外扣除的安全余量 |

@@ -212,6 +212,11 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
   quarter of the timeout), so the leader saw the session at most `7/12` of the timeout before the reply. With the
   default lease the client therefore renews about every two seconds and publishes `SessionLeaseShortened` once per
   session.
+- So a node keeps its terms through a pause (GC, network stall) of only about `5/12` of the session timeout: about
+  6 s with the default 15 s lease, against about 15 s before 5.1, and renews about three times as often, each time
+  with a round trip to the leader. `leaseDuration` keeps its meaning (after a crash the others take over within about
+  a lease), so the session timeout is not enlarged: when tolerating pauses matters more than failover time, raise
+  `simba.session.lease-duration` (for example 36 s for 5.0's tolerance, with failover after a crash in about 36 s).
 - While the client is disconnected, or on a follower cut off from the leader, keep-alive and acquire fail, so the local
   deadline runs out; when Zookeeper reports the session expired, the session is `Expired`.
 
@@ -219,6 +224,8 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 
 - The session timeout requested is `leaseDuration`; the ensemble clamps it to `[minSessionTimeout,
   maxSessionTimeout]` (by default 2 to 20 ticks). Failover after a crash takes the negotiated timeout.
+- The `5/12` bound needs a tick of at most half the session timeout, that is a `minSessionTimeout` of at least the
+  default two ticks. Do not configure the servers below it.
 - `simba.zookeeper.connection-timeout` bounds how long opening a session may take; it defaults to the renew interval,
   after which the engine gives up on the call. A session that connects later anyway is never kept alive, and the
   watchdog closes it after `leaseDuration`.

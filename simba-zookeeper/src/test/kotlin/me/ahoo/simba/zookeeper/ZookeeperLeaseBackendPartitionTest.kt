@@ -83,8 +83,12 @@ class ZookeeperLeaseBackendPartitionTest {
             ZookeeperLeaseBackend("127.0.0.1:${leader.port}").use { contender ->
                 val session = isolated.openSession(LEASE).id
                 val token = (isolated.acquire(session, setOf(name)).getValue(name) as AcquireResult.Granted).token
-                (isolated.keepAlive(session, LEASE, setOf(name)) as KeepAliveResult.Live).owned
-                    .assert().isEqualTo(mapOf(name to token))
+                val timeout = Duration.ofMillis(checkNotNull(isolated.zooKeeperOf(session)).sessionTimeout.toLong())
+                val sentAt = System.nanoTime()
+                val live = isolated.keepAlive(session, LEASE, setOf(name)) as KeepAliveResult.Live
+                live.owned.assert().isEqualTo(mapOf(name to token))
+                // The bound itself: 5/12 of the timeout, never the whole timeout.
+                live.remaining.assert().isLessThanOrEqualTo(timeout.multipliedBy(5).dividedBy(12))
 
                 proxies.filterKeys { it.first == follower.serverId }.values.forEach(FreezingProxy::freeze)
 
@@ -93,6 +97,10 @@ class ZookeeperLeaseBackendPartitionTest {
                 // Polled without keep-alives: a lease longer than the test keeps the watchdog off this session.
                 val other = contender.openSession(CONTENDER_LEASE).id
                 awaitTrue { contender.acquire(other, setOf(name)).getValue(name) is AcquireResult.Granted }
+                val takenOverAt = System.nanoTime()
+
+                // The last successful keep-alive's remaining time ended before the leader expired the session.
+                (takenOverAt - sentAt).assert().isGreaterThan(live.remaining.toNanos())
             }
         }
     }

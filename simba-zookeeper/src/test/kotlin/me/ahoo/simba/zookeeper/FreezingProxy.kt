@@ -16,6 +16,7 @@ package me.ahoo.simba.zookeeper
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -30,6 +31,9 @@ internal class FreezingProxy(private val target: Int) : AutoCloseable {
 
     @Volatile
     private var frozen: CountDownLatch? = null
+
+    /** Client ports (the connecting side's local port) whose connection alone is frozen. */
+    private val frozenClients = ConcurrentHashMap.newKeySet<Int>()
     val port: Int = listener.localPort
 
     init {
@@ -57,24 +61,29 @@ internal class FreezingProxy(private val target: Int) : AutoCloseable {
         }
         sockets += client
         sockets += upstream
-        pump(client, upstream, fromClient = true)
-        pump(upstream, client, fromClient = false)
+        pump(client, upstream, fromClient = true, clientPort = client.port)
+        pump(upstream, client, fromClient = false, clientPort = client.port)
     }
 
     /** Stops forwarding; the latch opens once the connecting side sent anything since. */
     fun freeze(): CountDownLatch = CountDownLatch(1).also { frozen = it }
 
-    private fun pump(from: Socket, to: Socket, fromClient: Boolean) {
+    /** Stops forwarding on the connection of the client whose local port is [clientPort] only. */
+    fun freezeClient(clientPort: Int) {
+        frozenClients += clientPort
+    }
+
+    private fun pump(from: Socket, to: Socket, fromClient: Boolean, clientPort: Int) {
         Thread {
             val buffer = ByteArray(BUFFER_BYTES)
             runCatching {
                 var read = from.getInputStream().read(buffer)
                 while (read >= 0) {
                     val latch = frozen
-                    if (latch == null) {
+                    if (latch == null && clientPort !in frozenClients) {
                         to.getOutputStream().write(buffer, 0, read)
                     } else if (fromClient) {
-                        latch.countDown()
+                        latch?.countDown()
                     }
                     read = from.getInputStream().read(buffer)
                 }

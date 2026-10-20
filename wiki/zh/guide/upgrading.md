@@ -33,8 +33,12 @@ Simba 在源码层面遵循 [语义化版本](https://semver.org/lang/zh-CN/)：
 
 ### 从 5.0 升级到 5.1 {#from-5-0-to-5-1}
 
-5.1 新增了 API，调整了 Redis 后端在 Cluster 上的调用计时，并沿用 5.0 的存储格式，因此两个版本的节点可以同时运行：
+5.1 新增了 API，调整了 Redis 后端在 Cluster 上的调用计时，并沿用 5.0 的存储格式，因此两个版本的节点可以同时运行；Zookeeper 后端的续约方式也有变化：
 
+- **Zookeeper 的续约改为经 leader 确认**，每次续约只留下会话超时的 `5/12`，而不是全部（与 leader 失联的 follower 可能为 leader
+  即将判定过期的会话续约）。默认 15 秒租约下，节点只能扛住约 6 秒（以前约 15 秒）的停顿而不丢失任期，并且大约每两秒续约一次。
+  要容忍更长的停顿，请调大 `simba.session.lease-duration`，崩溃后的故障转移时间会随之变长。参阅[后端](/zh/guide/backends#zookeeper)。
+- `simba.zookeeper.connection-timeout` 和 `ZookeeperLeaseBackend` 的 `connectionTimeout` 默认改为续约间隔（5 秒），而不是 15 秒。
 - `DistributedLock.acquireAsync(timeout)` 和 `tryAcquireAsync()` 以不阻塞的方式获取锁，参阅
   [锁](/zh/guide/locks#without-blocking)。它们是默认方法，你自己的 `DistributedLock` 实现无需修改即可编译。
 - 新的可选模块 `simba-coroutines` 提供挂起版的锁调用、`withLock`、`Term.awaitRevoked()` 和 `SimbaEventFlow`；它依赖

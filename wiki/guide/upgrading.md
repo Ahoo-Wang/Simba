@@ -37,9 +37,16 @@ and you can roll an upgrade node by node. Release notes list every change:
 
 ### 5.0 to 5.1 {#from-5-0-to-5-1}
 
-5.1 adds API, changes how the Redis backend times its calls on a Cluster, and keeps 5.0's storage, so nodes of both
-versions can run side by side:
+5.1 adds API, changes how the Redis backend times its calls on a Cluster and how the Zookeeper backend confirms
+keep-alives, and keeps 5.0's storage, so nodes of both versions can run side by side:
 
+- **Zookeeper keep-alives are confirmed through the leader**, and a keep-alive leaves `5/12` of the session timeout
+  instead of all of it (a follower cut off from the leader could renew a session the leader was about to expire). With
+  the default 15 s lease a node keeps its terms through a pause of about 6 s instead of about 15 s, and renews about
+  every two seconds. To tolerate longer pauses, raise `simba.session.lease-duration`; failover after a crash grows with
+  it. See [Backends](/guide/backends#zookeeper).
+- `simba.zookeeper.connection-timeout` and `ZookeeperLeaseBackend`'s `connectionTimeout` default to the renew
+  interval (5 s) instead of 15 s.
 - `DistributedLock.acquireAsync(timeout)` and `tryAcquireAsync()` acquire a lock without blocking; see
   [Locks](/guide/locks#without-blocking). They are default methods, so your own `DistributedLock` implementations
   keep compiling unchanged.

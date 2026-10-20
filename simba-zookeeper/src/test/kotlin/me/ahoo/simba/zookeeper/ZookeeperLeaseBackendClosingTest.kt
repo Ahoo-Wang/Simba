@@ -19,10 +19,12 @@ import me.ahoo.simba.spi.SessionExpiredException
 import me.ahoo.test.asserts.assert
 import org.apache.curator.test.InstanceSpec
 import org.apache.curator.test.TestingServer
+import org.apache.zookeeper.ZooKeeper
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import java.net.InetSocketAddress
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
@@ -79,12 +81,30 @@ class ZookeeperLeaseBackendClosingTest {
     }
 
     @Test
-    fun membersThroughAWriterWhoseSyncGetsNoAnswerFails() {
+    fun membersFailsWhenNeitherTheWriterNorTheReaderGetsAnAnswer() {
         val session = backend.openSession(Duration.ofSeconds(30)).id
         backend.join(session, "group")
         proxy.freeze()
 
         assertThrows<SimbaException> { backend.members("group") }
+    }
+
+    @Test
+    fun membersFallsBackToTheReaderWhenTheWriterGetsSuspended() {
+        val other = backend.openSession(Duration.ofSeconds(30)).id
+        val writer = backend.openSession(Duration.ofSeconds(30)).id
+        backend.join(other, "group")
+        backend.join(writer, "group")
+        // Only the writer's connection stops: it still looks connected, so members tries it first.
+        proxy.freezeClient(localPort(checkNotNull(backend.zooKeeperOf(writer))))
+
+        backend.members("group").assert().contains(other)
+    }
+
+    /** The client's local port, which the proxy sees as the connection's remote port. */
+    private fun localPort(zooKeeper: ZooKeeper): Int {
+        val method = ZooKeeper::class.java.getDeclaredMethod("testableLocalSocketAddress").apply { isAccessible = true }
+        return (method.invoke(zooKeeper) as InetSocketAddress).port
     }
 
     /** Waits until [caller] blocks on a Zookeeper reply, so the close starts while its request is in flight. */
