@@ -11,8 +11,8 @@
 
 -- Adds a session to groups (ADR 0010 §7.2).
 -- ARGV[1]: '1' when KEYS start with the session keys (session hash, group index), else '0'; ARGV[2]: session id;
--- ARGV[3]: without the session keys, how long the memberships last in milliseconds (what the session has left, as
--- the caller measured it since the session call answered); ARGV[4..]: with the session
+-- ARGV[3]: without the session keys, how long the memberships last in milliseconds (one full session lease);
+-- ARGV[4..]: with the session
 -- keys, the group keys to record in the group index (keep-alive extends them, closing the session leaves them).
 -- KEYS: [session keys,] group sorted sets `simba:group:{group}`, scored by expiry in Redis time.
 -- A membership lasts as long as the session does now: its PTTL, or ARGV[3] on a Cluster.

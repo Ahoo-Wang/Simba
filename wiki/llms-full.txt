@@ -708,9 +708,13 @@ scripts can reach Redis long after the first one (a starved I/O thread, a driver
 when the session may have died, and their nodes' clocks may differ from the session node's. Only durations cross
 nodes, so a fixed skew between node clocks changes nothing:
 
-- Each later script carries what the session has left: its remaining time from the session call minus the time the
-  client measured since that call answered. Its node grants and extends nothing beyond its own now plus that, so a
-  lease lasts at least as long as its session and outlasts it by at most the delay before the script ran.
+- Acquire and join grant one full session lease on the lease node's own clock. A keep-alive that runs between the
+  session call and the lease call extends the session but not a lease the session does not hold yet, and the term
+  is adopted with that keep-alive's deadline; a full lease covers it. The price is liveness only: a grant to a session
+  that died in between outlives it by up to one lease, blocking that name (or keeping a stale member) that long.
+- Keep-alive's later scripts carry what the session has left: its new remaining time minus the time the client
+  measured since the session call answered. Their node extends nothing beyond its own now plus that, so a lease lasts
+  at least as long as its session and outlasts it by at most the delay before the script ran.
 - Acquire and join send nothing once the session's remaining time passed since the session call was sent, and fail.
   An acquire answering later than that releases the terms it began and fails, even when other slots granted theirs:
   keep-alive drops a lost lease from the session's index one lease after the attempt, and `owned` would never report
@@ -1404,9 +1408,8 @@ brings in; with `simba-testing` alone, add `me.ahoo.test:fluent-assert-core` or 
 `InMemoryLeaseBackend` implements the full `LeaseBackend` contract in memory (sessions, leases with never-resetting
 tokens, groups, release and membership hints). It needs no infrastructure, so it fits unit tests of anything that
 takes a `Simba`. By default leases live as long as their session (JDBC, Zookeeper); `selfExpiringLeases = true` makes
-them expire on their own, each grant lasting one full lease, and the four-argument constructor
-`InMemoryLeaseBackend(ticker, selfExpiringLeases, sessionBoundGrants, sessionIds)` (since 5.1) with
-`sessionBoundGrants = true` limits a grant to the time its session has left, as on Redis:
+them expire on their own, each grant lasting one full lease, and `InMemoryLeaseBackend.builder()` (since 5.1) with
+`selfExpiringLeases(true).sessionBoundGrants(true)` limits a grant to the time its session has left, as on Redis:
 
 ```kotlin
 @Test
@@ -1593,17 +1596,29 @@ and you can roll an upgrade node by node. Release notes list every change:
 
 ### 5.0 to 5.1 {#from-5-0-to-5-1}
 
-5.1 only adds API and keeps 5.0's storage, so nodes of both versions can run side by side:
+5.1 adds API, changes how the Redis backend times its calls on a Cluster, and keeps 5.0's storage, so nodes of both
+versions can run side by side:
 
 - `DistributedLock.acquireAsync(timeout)` and `tryAcquireAsync()` acquire a lock without blocking; see
   [Locks](/guide/locks#without-blocking). They are default methods, so your own `DistributedLock` implementations
   keep compiling unchanged.
 - The new optional module `simba-coroutines` adds suspending lock calls, `withLock`, `Term.awaitRevoked()` and
   `SimbaEventFlow`; it depends on `kotlinx-coroutines-core`, which `simba-core` does not.
-- `simba-testing`: `InMemoryLeaseBackend(ticker, selfExpiringLeases, sessionBoundGrants, sessionIds)` models Redis's
-  session-bound grants, and `SimulationParams` adds `sessionBoundGrants`, `truncatedGrantShare`,
+- `simba-testing`: `InMemoryLeaseBackend.builder()` also sets `sessionBoundGrants`, a grant lasting only what the
+  session has left, as on Redis, and `SimulationParams` adds `sessionBoundGrants`, `truncatedGrantShare`,
   `meanInjectionInterval`, `groupPartitions` and `earlyCloseShare` (see [Testing](/guide/testing#deterministic-simulation)).
   The existing constructors and parameters are unchanged.
+- Redis with `routeBySlot` (a Cluster), where one call runs a script on the session's slot and then one per lease or
+  group slot ([Cluster](/guide/backends#cluster)):
+  - Acquire and join fail with `SimbaException` and send nothing to the other slots once the session's remaining
+    time has passed since the session call was sent. An acquire whose reply arrives later than that releases the
+    terms it began, also on slots that granted, and fails; the engine retries as after any failed call.
+  - A lease slot still grants, and extends a lease the holder acquires again, for one full session lease on its own
+    clock, as in 5.0.
+  - Keep-alive now extends leases and memberships only by what the session has left (its new remaining time minus
+    the time since the session call answered), not by a full lease from whenever the script ran: a delayed keep-alive
+    no longer keeps a lease of a dead session for up to two leases.
+  - No node's `TIME` is compared with another's.
 </doc>
 
 <doc title="Migrating from 4.x to 5.0" path="guide/migration.md">

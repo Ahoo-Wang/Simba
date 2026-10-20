@@ -188,8 +188,11 @@ class RedisLeaseBackendTest {
 
             backend.granted(session, name).assert().isEqualTo(token)
 
-            // At least as long as the session lasts, read after the lease (so a lease ending with it still passes).
-            val leaseLeft = redis.opsForHash<String, String>().get(key, "expires")!!.toLong() - redisTime()
+            // Never shorter than the first grant (as in 5.0: a Cluster grants one full lease from the later call), and
+            // at least as long as the session lasts, read after the lease (so a lease ending with it still passes).
+            val extended = redis.opsForHash<String, String>().get(key, "expires")!!.toLong()
+            extended.assert().isGreaterThanOrEqualTo(expires)
+            val leaseLeft = extended - redisTime()
             leaseLeft.assert().isGreaterThanOrEqualTo(
                 redis.getExpire(RedisLeaseKeys.session(session), TimeUnit.MILLISECONDS)
             )

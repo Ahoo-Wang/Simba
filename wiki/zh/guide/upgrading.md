@@ -33,12 +33,18 @@ Simba 在源码层面遵循 [语义化版本](https://semver.org/lang/zh-CN/)：
 
 ### 从 5.0 升级到 5.1 {#from-5-0-to-5-1}
 
-5.1 只新增 API，并沿用 5.0 的存储格式，因此两个版本的节点可以同时运行：
+5.1 新增了 API，调整了 Redis 后端在 Cluster 上的调用计时，并沿用 5.0 的存储格式，因此两个版本的节点可以同时运行：
 
 - `DistributedLock.acquireAsync(timeout)` 和 `tryAcquireAsync()` 以不阻塞的方式获取锁，参阅
   [锁](/zh/guide/locks#without-blocking)。它们是默认方法，你自己的 `DistributedLock` 实现无需修改即可编译。
 - 新的可选模块 `simba-coroutines` 提供挂起版的锁调用、`withLock`、`Term.awaitRevoked()` 和 `SimbaEventFlow`；它依赖
   `kotlinx-coroutines-core`，`simba-core` 不依赖它。
-- `simba-testing`：`InMemoryLeaseBackend(ticker, selfExpiringLeases, sessionBoundGrants, sessionIds)` 可模拟 Redis
-  与会话绑定的授予；`SimulationParams` 新增 `sessionBoundGrants`、`truncatedGrantShare`、`meanInjectionInterval`、
+- `simba-testing`：`InMemoryLeaseBackend.builder()` 还可以设置 `sessionBoundGrants`，让一次授予只持续会话剩余的时长，与 Redis
+  相同；`SimulationParams` 新增 `sessionBoundGrants`、`truncatedGrantShare`、`meanInjectionInterval`、
   `groupPartitions` 和 `earlyCloseShare`（参阅[测试](/zh/guide/testing#deterministic-simulation)）。已有的构造器和参数保持不变。
+- Redis 开启 `routeBySlot`（Cluster）时，一次调用先在会话所在的槽运行脚本，再为每个租约或组所在的槽各运行一个脚本
+  （[Cluster](/zh/guide/backends#cluster)）：
+  - 从发出会话调用起经过的时间达到会话剩余时长后，获取和加入不再向其他槽发送任何脚本，并以 `SimbaException` 失败。回复晚于这个时长才到达的获取会释放它开始的任期（包括已经授予成功的槽）并失败；引擎会像其他失败的调用一样重试。
+  - 租约槽仍按自己的时钟授予一个完整的会话租期，持有者再次获取时也按此延长，与 5.0 相同。
+  - 续约现在只按会话还剩的时长（续约后的剩余时长减去从会话调用返回起经过的时间）延长租约和成员资格，而不是从脚本执行时起延长一个完整租期：延迟的续约不会再让已死亡会话的租约多保留最多两个租期。
+  - 不再比较不同节点的 `TIME`。

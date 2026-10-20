@@ -25,9 +25,8 @@ brings in; with `simba-testing` alone, add `me.ahoo.test:fluent-assert-core` or 
 `InMemoryLeaseBackend` implements the full `LeaseBackend` contract in memory (sessions, leases with never-resetting
 tokens, groups, release and membership hints). It needs no infrastructure, so it fits unit tests of anything that
 takes a `Simba`. By default leases live as long as their session (JDBC, Zookeeper); `selfExpiringLeases = true` makes
-them expire on their own, each grant lasting one full lease, and the four-argument constructor
-`InMemoryLeaseBackend(ticker, selfExpiringLeases, sessionBoundGrants, sessionIds)` (since 5.1) with
-`sessionBoundGrants = true` limits a grant to the time its session has left, as on Redis:
+them expire on their own, each grant lasting one full lease, and `InMemoryLeaseBackend.builder()` (since 5.1) with
+`selfExpiringLeases(true).sessionBoundGrants(true)` limits a grant to the time its session has left, as on Redis:
 
 ```kotlin
 @Test

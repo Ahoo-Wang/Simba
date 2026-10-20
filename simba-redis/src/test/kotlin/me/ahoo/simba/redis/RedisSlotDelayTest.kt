@@ -63,7 +63,7 @@ class RedisSlotDelayTest {
     fun anAcquireSendsNothingToLeaseSlotsOnceTheSessionMayHaveExpired() {
         val name = name()
         val session = backend.openSession(shortLease).id
-        hooked.after = { call -> if (call.isSessionCall("lease_acquire")) delayAfterAnswer(shortLease) }
+        hooked.after = { call -> if (call.isSessionCall("lease_acquire")) advance(shortLease) }
 
         assertThrows<SimbaException> { backend.acquire(session, setOf(name)) }
 
@@ -140,20 +140,69 @@ class RedisSlotDelayTest {
     }
 
     @Test
-    fun aDelayedAcquireGrantsOnlyWhatTheSessionHasLeft() {
+    fun aDelayedAcquireStillGrantsOneFullSessionLease() {
         val name = name()
         val session = backend.openSession(lease).id
-        val delay = Duration.ofSeconds(10)
-        var left = 0L
-        hooked.after = { call -> if (call.isSessionCall("lease_acquire")) delayAfterAnswer(delay) }
-        hooked.before = { call -> if (call.isSlotCall("lease_acquire")) left = call.args[2].toLong() }
+        hooked.after = { call -> if (call.isSessionCall("lease_acquire")) advance(Duration.ofSeconds(10)) }
+        var granted = 0L
+        hooked.before = { call -> if (call.isSlotCall("lease_acquire")) granted = call.args[2].toLong() }
         val before = redisTime()
 
         backend.acquire(session, setOf(name)).assert().isEqualTo(mapOf(name to AcquireResult.Granted(1)))
 
-        val after = redisTime()
-        left.assert().isLessThanOrEqualTo(lease.minus(delay).toMillis())
-        expires(name).assert().isBetween(before + left, after + left)
+        granted.assert().isEqualTo(lease.toMillis())
+        expires(name).assert().isBetween(before + granted, redisTime() + granted)
+    }
+
+    @Test
+    fun aKeepAliveBetweenTheSessionCallAndTheLeaseCallNeverOutlivesTheGrant() {
+        val plain = routed(RedisLeaseFixture.scripting, Ticker.SYSTEM)
+        val real = HookedScripting(RedisLeaseFixture.scripting)
+        val name = name()
+        val session = plain.openSession(lease).id
+        // As if the session's last keep-alive ran most of a lease ago.
+        redis.expire(RedisLeaseKeys.session(session), Duration.ofSeconds(2)).assert().isTrue()
+        var keptAlive: KeepAliveResult? = null
+        real.before = { call ->
+            if (call.isSlotCall("lease_acquire") && keptAlive == null) {
+                keptAlive = plain.keepAlive(session, lease, emptySet())
+            }
+        }
+
+        routed(
+            real,
+            Ticker.SYSTEM
+        ).acquire(session, setOf(name)).assert().isEqualTo(mapOf(name to AcquireResult.Granted(1)))
+
+        // The engine adopts the term with the deadline of that keep-alive: the lease must last as long as the session.
+        keptAlive.assert().isEqualTo(KeepAliveResult.Live(lease, emptyMap()))
+        val leaseLeft = expires(name) - redisTime()
+        leaseLeft.assert().isGreaterThanOrEqualTo(
+            redis.getExpire(RedisLeaseKeys.session(session), TimeUnit.MILLISECONDS)
+        )
+    }
+
+    @Test
+    fun leaseSlotsWhoseClocksRunAtAnotherRateWithinTheDriftStillCoverTheTerm() {
+        val base = redisTime()
+        listOf(1 + DRIFT, 1 - DRIFT).forEach { rate ->
+            val clocked = routed(SkewedScripting(RedisLeaseFixture.scripting, 0, rate, base), Ticker.SYSTEM)
+            val name = name()
+            val group = group()
+            val session = clocked.openSession(lease).id
+
+            val token = clocked.granted(session, name)
+            clocked.join(session, group)
+            clocked.keepAlive(session, lease, emptySet())
+                .assert().isEqualTo(KeepAliveResult.Live(lease, mapOf(name to token)))
+
+            // Real time left on the lease covers the engine's local validity of the session: lease × (1 − drift).
+            val slotNow = base + Math.floor((redisTime() - base) * rate).toLong()
+            val leaseLeft = (expires(name) - slotNow) / rate
+            val sessionLeft = redis.getExpire(RedisLeaseKeys.session(session), TimeUnit.MILLISECONDS)
+            leaseLeft.assert().isGreaterThanOrEqualTo(sessionLeft * (1 - DRIFT))
+            clocked.members(group).assert().containsExactly(session)
+        }
     }
 
     @Test
@@ -202,7 +251,7 @@ class RedisSlotDelayTest {
     fun aJoinSendsNothingToTheGroupSlotOnceTheSessionMayHaveExpired() {
         val group = group()
         val session = backend.openSession(shortLease).id
-        hooked.after = { call -> if (call.isSessionCall("lease_group_join")) delayAfterAnswer(shortLease) }
+        hooked.after = { call -> if (call.isSessionCall("lease_group_join")) advance(shortLease) }
 
         assertThrows<SimbaException> { backend.join(session, group) }
 
@@ -212,7 +261,10 @@ class RedisSlotDelayTest {
     @Test
     fun leaseSlotsWhoseClocksAreSkewedBeyondALeaseStillServeTheSessionForItsTime() {
         listOf(SKEW_SECONDS, -SKEW_SECONDS).forEach { skew ->
-            val skewed = routed(SkewedScripting(RedisLeaseFixture.scripting, skew), Ticker.SYSTEM)
+            val skewed = routed(
+                SkewedScripting(RedisLeaseFixture.scripting, skew * MILLIS_PER_SECOND, 1.0, 0),
+                Ticker.SYSTEM
+            )
             val name = name()
             val group = group()
             val session = skewed.openSession(lease).id
@@ -305,11 +357,15 @@ class RedisSlotDelayTest {
     }
 
     /**
-     * Shifts Redis `TIME` by [seconds] in every script on lease and group keys only, as if their nodes' clocks ran
-     * that far from the session's node.
+     * Turns Redis `TIME` `t` (in milliseconds) into `base + (t − base) × rate + offset` in every script on lease and
+     * group keys only, as if their nodes' clocks ran that far from, or at another rate than, the session's node.
      */
-    private class SkewedScripting(private val delegate: RedisScripting, private val seconds: Long) :
-        RedisScripting by delegate {
+    private class SkewedScripting(
+        private val delegate: RedisScripting,
+        private val offset: Long,
+        private val rate: Double,
+        private val base: Long,
+    ) : RedisScripting by delegate {
         override fun eval(calls: List<ScriptCall>, wait: ReplicaWait?): ScriptReplies =
             delegate.eval(calls.map(::skew), wait)
 
@@ -318,8 +374,11 @@ class RedisSlotDelayTest {
             if (!sessionless || TIME !in call.script.source) {
                 return call
             }
-            val shifted = "$TIME\ntime = { tostring(tonumber(time[1]) + ($seconds)), time[2] }"
-            val script = LeaseScript("${call.script.name}+$seconds", call.script.source.replace(TIME, shifted))
+            val shifted = TIME + "\n" +
+                "local skewed = $base + math.floor((tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000) " +
+                "- $base) * $rate) + ($offset)\n" +
+                "time = { tostring(math.floor(skewed / 1000)), tostring((skewed % 1000) * 1000) }"
+            val script = LeaseScript("${call.script.name}+$offset*$rate", call.script.source.replace(TIME, shifted))
             return ScriptCall(script, call.keys, call.args)
         }
     }
@@ -328,6 +387,7 @@ class RedisSlotDelayTest {
         const val POLL_MILLIS = 10L
         const val SKEW_SECONDS = 60L
         const val MILLIS_PER_SECOND = 1000L
+        const val DRIFT = 0.01
         const val TIME = "local time = redis.call('TIME')"
     }
 }

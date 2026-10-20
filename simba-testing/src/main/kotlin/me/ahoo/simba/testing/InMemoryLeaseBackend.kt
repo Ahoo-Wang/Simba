@@ -13,6 +13,7 @@
 
 package me.ahoo.simba.testing
 
+import me.ahoo.simba.SimbaException
 import me.ahoo.simba.spi.AcquireResult
 import me.ahoo.simba.spi.BackendHint
 import me.ahoo.simba.spi.BackendHintListener
@@ -34,23 +35,63 @@ import java.util.concurrent.CopyOnWriteArrayList
  *
  * By default leases belong to sessions: a lease is free when released or when its session expired. With
  * [selfExpiringLeases] a lease instead expires on its own, like on Redis: a grant lasts one full lease of its
- * session, or with [sessionBoundGrants] only as long as the session has left (as Redis grants); keep-alive extends every lease the session owns, acquiring an owned lease extends it the same way, and a
- * lease outlives an expired session until its own expiry. Either way a lease's token never resets, and expired
- * sessions are forgotten on first sight and never revived.
+ * session, or with [sessionBoundGrants] only as long as the session has left (as a single Redis node grants);
+ * keep-alive extends every lease the session owns, acquiring an owned lease extends it the same way, and a lease
+ * outlives an expired session until its own expiry ([builder] sets these modes). [beginSlotAcquire] splits an acquire in two steps, as on a Redis
+ * Cluster. Either way a lease's token never resets, and expired sessions are forgotten on first sight and never
+ * revived.
  */
-class InMemoryLeaseBackend(
+class InMemoryLeaseBackend internal constructor(
     private val ticker: Ticker,
     private val selfExpiringLeases: Boolean,
     private val sessionBoundGrants: Boolean,
     private val sessionIds: () -> SessionId,
 ) : LeaseBackend {
-    /** Without [sessionBoundGrants], so `(ticker, selfExpiringLeases, sessionIds)` calls from Java and Kotlin compile. */
+    /**
+     * A backend on [ticker] whose leases expire on their own with [selfExpiringLeases], each grant lasting one full
+     * lease, and whose session ids come from [sessionIds]. [builder] also sets [sessionBoundGrants].
+     */
     @JvmOverloads
     constructor(
         ticker: Ticker = Ticker.SYSTEM,
         selfExpiringLeases: Boolean = false,
         sessionIds: () -> SessionId = SessionId::random,
     ) : this(ticker, selfExpiringLeases, false, sessionIds)
+
+    /** Builds an [InMemoryLeaseBackend]; every setting defaults as in the constructor. */
+    class Builder internal constructor() {
+        private var ticker: Ticker = Ticker.SYSTEM
+        private var selfExpiringLeases: Boolean = false
+        private var sessionBoundGrants: Boolean = false
+        private var sessionIds: () -> SessionId = SessionId::random
+
+        /** The backend clock. Default [Ticker.SYSTEM]. */
+        fun ticker(ticker: Ticker) = apply { this.ticker = ticker }
+
+        /** Whether leases expire on their own, as on Redis, instead of with their session. Default `false`. */
+        fun selfExpiringLeases(selfExpiringLeases: Boolean) = apply { this.selfExpiringLeases = selfExpiringLeases }
+
+        /**
+         * With self-expiring leases, whether an [acquire] grant lasts only as long as the session has left, as on a
+         * single Redis node, instead of one full lease. Default `false`.
+         */
+        fun sessionBoundGrants(sessionBoundGrants: Boolean) = apply { this.sessionBoundGrants = sessionBoundGrants }
+
+        /** Where session ids come from; each must be new. Default [SessionId.random]. */
+        fun sessionIds(sessionIds: () -> SessionId) = apply { this.sessionIds = sessionIds }
+
+        /** Fails when [sessionBoundGrants] is set without [selfExpiringLeases]. */
+        fun build(): InMemoryLeaseBackend {
+            require(!sessionBoundGrants || selfExpiringLeases) { "sessionBoundGrants needs selfExpiringLeases." }
+            return InMemoryLeaseBackend(ticker, selfExpiringLeases, sessionBoundGrants, sessionIds)
+        }
+    }
+
+    companion object {
+        /** A [Builder] with every setting at its default. */
+        @JvmStatic
+        fun builder(): Builder = Builder()
+    }
 
     private class Session(val id: SessionId, var expiresAt: Long, var lease: Long)
 
@@ -108,21 +149,62 @@ class InMemoryLeaseBackend(
             val live = live(session, hints) ?: throw SessionExpiredException(session)
             // A grant lasts as long as the session, or one full lease when leases expire on their own (unless bound).
             val until = if (selfExpiringLeases && !sessionBoundGrants) now() + live.lease else live.expiresAt
-            names.associateWith { name ->
-                val lease = leases.getOrPut(name) { Lease(null, 0) }
-                val holder = holder(lease, hints)
-                when {
-                    holder == session -> {
-                        lease.extend(until)
-                        AcquireResult.Granted(lease.token)
-                    }
-                    holder != null -> AcquireResult.HeldBy(holder, lease.token)
-                    else -> {
-                        lease.session = session
-                        lease.token++
-                        lease.expiresAt = until
-                        AcquireResult.Granted(lease.token)
-                    }
+            grant(session, names, until, hints)
+        }
+
+    /**
+     * The first step of an acquire split as on a Redis Cluster: checks that [session] is live and reads what it has
+     * left and its lease, as the session slot's script does. [SlotAcquire.grant] takes the leases later, as the lease
+     * slots' scripts do, with anything (a keep-alive, an expiry) in between.
+     */
+    fun beginSlotAcquire(session: SessionId, names: Set<LeaseName>): SlotAcquire =
+        withHints { hints ->
+            LeaseBackend.requireBatch(names)
+            val live = live(session, hints) ?: throw SessionExpiredException(session)
+            SlotAcquire(session, names, now(), live.expiresAt - now(), live.lease)
+        }
+
+    /** The second step of [beginSlotAcquire]. */
+    inner class SlotAcquire internal constructor(
+        private val session: SessionId,
+        private val names: Set<LeaseName>,
+        private val readAt: Long,
+        private val remaining: Long,
+        private val lease: Long,
+    ) {
+        /**
+         * Grants [names] for one full session lease from now (it covers every keep-alive since the session was read),
+         * or fails when the session's remaining time passed since it was read: the client then sends nothing.
+         */
+        fun grant(): Map<LeaseName, AcquireResult> =
+            withHints { hints ->
+                if (now() - readAt >= remaining) {
+                    throw SimbaException("Acquiring $names for session [$session] came after its remaining time.")
+                }
+                grant(session, names, now() + lease, hints)
+            }
+    }
+
+    private fun grant(
+        session: SessionId,
+        names: Set<LeaseName>,
+        until: Long,
+        hints: MutableList<BackendHint>,
+    ): Map<LeaseName, AcquireResult> =
+        names.associateWith { name ->
+            val lease = leases.getOrPut(name) { Lease(null, 0) }
+            val holder = holder(lease, hints)
+            when {
+                holder == session -> {
+                    lease.extend(until)
+                    AcquireResult.Granted(lease.token)
+                }
+                holder != null -> AcquireResult.HeldBy(holder, lease.token)
+                else -> {
+                    lease.session = session
+                    lease.token++
+                    lease.expiresAt = until
+                    AcquireResult.Granted(lease.token)
                 }
             }
         }

@@ -11,14 +11,15 @@
 
 -- Acquires leases for a session (ADR 0010 §7.2).
 -- ARGV[1]: '1' when KEYS start with the session keys (session hash, lease index), else '0'; ARGV[2]: session id;
--- ARGV[3]: without the session keys, how long the leases last in milliseconds (what the session has left, as the
--- caller measured it since the session call answered); ARGV[4..]: with the session keys, the
+-- ARGV[3]: without the session keys, how long the leases last in milliseconds (one full session lease, so a grant
+-- covers any keep-alive that ran since the session call); ARGV[4..]: with the session keys, the
 -- lease keys to record in the lease index (keep-alive extends and reports them, closing the session frees them).
 -- KEYS: [session keys,] lease keys `simba:lease:{name}`.
 -- A lease that is free or expired moves to the session with its token advanced by one; a lease the session holds
 -- answers its current token. Either way it lasts at least as long as the session does now: its PTTL on a single
 -- node, ARGV[3] from this node's own clock on a Cluster (the session lives on another node, whose clock is never
--- compared with this one). The hash never expires, so the token never resets.
+-- compared with this one; a grant to a session that died meanwhile outlives it by up to one lease). The hash never
+-- expires, so the token never resets.
 -- Returns {-1} when the session expired; else {remaining, session lease, then per lease key: token, holder, 1 when
 -- this call began the term else 0}.
 local withSession = ARGV[1] == '1'

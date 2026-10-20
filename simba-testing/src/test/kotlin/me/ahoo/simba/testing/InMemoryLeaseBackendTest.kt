@@ -133,7 +133,12 @@ class InMemoryLeaseBackendTest {
 
     @Test
     fun `session-bound grants last only as long as the session has left`() {
-        val sessionBound = InMemoryLeaseBackend(clock, true, true) { SessionId("s${++ids}") }
+        val sessionBound = InMemoryLeaseBackend.builder()
+            .ticker(clock)
+            .selfExpiringLeases(true)
+            .sessionBoundGrants(true)
+            .sessionIds { SessionId("s${++ids}") }
+            .build()
         val session = sessionBound.openSession(lease).id
         clock.advance(Duration.ofSeconds(2))
 
@@ -145,5 +150,10 @@ class InMemoryLeaseBackendTest {
         sessionBound.owner(name).assert().isNull()
         sessionBound.acquire(sessionBound.openSession(lease).id, setOf(name))[name]
             .assert().isEqualTo(AcquireResult.Granted(2))
+    }
+
+    @Test
+    fun `session-bound grants need self-expiring leases`() {
+        assertThrows<IllegalArgumentException> { InMemoryLeaseBackend.builder().sessionBoundGrants(true).build() }
     }
 }
