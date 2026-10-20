@@ -37,23 +37,61 @@ import java.util.concurrent.CopyOnWriteArrayList
  * [selfExpiringLeases] a lease instead expires on its own, like on Redis: a grant lasts one full lease of its
  * session, or with [sessionBoundGrants] only as long as the session has left (as a single Redis node grants);
  * keep-alive extends every lease the session owns, acquiring an owned lease extends it the same way, and a lease
- * outlives an expired session until its own expiry. [beginSlotAcquire] splits an acquire in two steps, as on a Redis
+ * outlives an expired session until its own expiry ([builder] sets these modes). [beginSlotAcquire] splits an acquire in two steps, as on a Redis
  * Cluster. Either way a lease's token never resets, and expired sessions are forgotten on first sight and never
  * revived.
  */
-class InMemoryLeaseBackend(
+class InMemoryLeaseBackend internal constructor(
     private val ticker: Ticker,
     private val selfExpiringLeases: Boolean,
     private val sessionBoundGrants: Boolean,
     private val sessionIds: () -> SessionId,
 ) : LeaseBackend {
-    /** Without [sessionBoundGrants], so `(ticker, selfExpiringLeases, sessionIds)` calls from Java and Kotlin compile. */
+    /**
+     * A backend on [ticker] whose leases expire on their own with [selfExpiringLeases], each grant lasting one full
+     * lease, and whose session ids come from [sessionIds]. [builder] also sets [sessionBoundGrants].
+     */
     @JvmOverloads
     constructor(
         ticker: Ticker = Ticker.SYSTEM,
         selfExpiringLeases: Boolean = false,
         sessionIds: () -> SessionId = SessionId::random,
     ) : this(ticker, selfExpiringLeases, false, sessionIds)
+
+    /** Builds an [InMemoryLeaseBackend]; every setting defaults as in the constructor. */
+    class Builder internal constructor() {
+        private var ticker: Ticker = Ticker.SYSTEM
+        private var selfExpiringLeases: Boolean = false
+        private var sessionBoundGrants: Boolean = false
+        private var sessionIds: () -> SessionId = SessionId::random
+
+        /** The backend clock. Default [Ticker.SYSTEM]. */
+        fun ticker(ticker: Ticker) = apply { this.ticker = ticker }
+
+        /** Whether leases expire on their own, as on Redis, instead of with their session. Default `false`. */
+        fun selfExpiringLeases(selfExpiringLeases: Boolean) = apply { this.selfExpiringLeases = selfExpiringLeases }
+
+        /**
+         * With self-expiring leases, whether an [acquire] grant lasts only as long as the session has left, as on a
+         * single Redis node, instead of one full lease. Default `false`.
+         */
+        fun sessionBoundGrants(sessionBoundGrants: Boolean) = apply { this.sessionBoundGrants = sessionBoundGrants }
+
+        /** Where session ids come from; each must be new. Default [SessionId.random]. */
+        fun sessionIds(sessionIds: () -> SessionId) = apply { this.sessionIds = sessionIds }
+
+        /** Fails when [sessionBoundGrants] is set without [selfExpiringLeases]. */
+        fun build(): InMemoryLeaseBackend {
+            require(!sessionBoundGrants || selfExpiringLeases) { "sessionBoundGrants needs selfExpiringLeases." }
+            return InMemoryLeaseBackend(ticker, selfExpiringLeases, sessionBoundGrants, sessionIds)
+        }
+    }
+
+    companion object {
+        /** A [Builder] with every setting at its default. */
+        @JvmStatic
+        fun builder(): Builder = Builder()
+    }
 
     private class Session(val id: SessionId, var expiresAt: Long, var lease: Long)
 

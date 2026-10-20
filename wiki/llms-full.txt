@@ -1558,13 +1558,27 @@ and you can roll an upgrade node by node. Release notes list every change:
 
 ### 5.0 to 5.1 {#from-5-0-to-5-1}
 
-5.1 only adds API and keeps 5.0's storage, so nodes of both versions can run side by side:
+5.1 adds API, changes how the Redis backend times its calls on a Cluster, and keeps 5.0's storage, so nodes of both
+versions can run side by side:
 
 - `DistributedLock.acquireAsync(timeout)` and `tryAcquireAsync()` acquire a lock without blocking; see
   [Locks](/guide/locks#without-blocking). They are default methods, so your own `DistributedLock` implementations
   keep compiling unchanged.
 - The new optional module `simba-coroutines` adds suspending lock calls, `withLock`, `Term.awaitRevoked()` and
   `SimbaEventFlow`; it depends on `kotlinx-coroutines-core`, which `simba-core` does not.
+- `InMemoryLeaseBackend.builder()` also sets `sessionBoundGrants` (grants last only what the session has left, as on
+  a single Redis node); the 5.0 constructors are unchanged.
+- Redis with `routeBySlot` (a Cluster), where one call runs a script on the session's slot and then one per lease or
+  group slot ([Cluster](/guide/backends#cluster)):
+  - Acquire and join fail with `SimbaException` and send nothing to the other slots once the session's remaining
+    time has passed since the session call was sent. An acquire whose reply arrives later than that releases the
+    terms it began, also on slots that granted, and fails; the engine retries as after any failed call.
+  - A lease slot still grants, and extends a lease the holder acquires again, for one full session lease on its own
+    clock, as in 5.0.
+  - Keep-alive now extends leases and memberships only by what the session has left (its new remaining time minus
+    the time since the session call answered), not by a full lease from whenever the script ran: a delayed keep-alive
+    no longer keeps a lease of a dead session for up to two leases.
+  - No node's `TIME` is compared with another's.
 </doc>
 
 <doc title="Migrating from 4.x to 5.0" path="guide/migration.md">

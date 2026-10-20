@@ -351,9 +351,12 @@ class Simulation(val seed: Long, private val params: SimulationParams = Simulati
     private val random = SplittableRandom(seed)
     private val clock = VirtualClock()
     private var sessionCounter = 0
-    private val backend = InMemoryLeaseBackend(clock, params.selfExpiringLeases, params.sessionBoundGrants) {
-        SessionId("s${++sessionCounter}")
-    }
+    private val backend = InMemoryLeaseBackend.builder()
+        .ticker(clock)
+        .selfExpiringLeases(params.selfExpiringLeases)
+        .sessionBoundGrants(params.sessionBoundGrants)
+        .sessionIds { SessionId("s${++sessionCounter}") }
+        .build()
     private val engineConfig = EngineConfig.of(params.config)
     private val queue = PriorityQueue<Task>(compareBy<Task>({ it.at }, { it.seq }))
     private var seq = 0L

@@ -97,7 +97,7 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
    measured by the backend's clock. Keep-alive reports every owned lease (`held` is only a hint); inputs are validated
    alike (`LeaseBackend.requireLease` ≥ 1 ms, `requireGroup` = `LeaseName` rules, `requireBatch` ≤ `MAX_BATCH` 64).
    `InMemoryLeaseBackend(selfExpiringLeases = true)` models Redis-style leases (a grant lasts one full lease; with
-   `sessionBoundGrants = true`, as on a single Redis node, only what the session has left, and in the simulation the
+   `builder().sessionBoundGrants(true)`, as on a single Redis node, only what the session has left, and in the simulation the
    Cluster's two-step acquire, `beginSlotAcquire` then `grant`, with events in between); `SimulationSpec` runs all
    three modes.
    Within 5.x the public API stays source compatible (Kotlin and Java callers keep compiling); binary compatibility is
