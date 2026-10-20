@@ -1,3 +1,4 @@
+# Pull requests only build and check the wiki (catch broken docs early); main builds and deploys to GitHub Pages.
 name: Deploy Wiki to GitHub Pages
 
 on:
@@ -5,14 +6,19 @@ on:
     branches: [main]
     paths:
       - 'wiki/**'
+      - '.github/workflows/deploy-wiki.yml'
+  pull_request:
+    paths:
+      - 'wiki/**'
+      - '.github/workflows/deploy-wiki.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: wiki-${{ github.event_name == 'pull_request' && github.ref || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -29,14 +35,15 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: 24.21.0
+          node-version: 24.22.0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
-          version: 12.11.2
+          version: 12.14.0
 
       - name: Setup Pages
+        if: ${{ github.event_name != 'pull_request' }}
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
 
       - name: Install dependencies
@@ -47,12 +54,23 @@ jobs:
         run: pnpm run build
         working-directory: wiki
 
+      # Mermaid renders in the browser, so a successful build says nothing about diagram syntax.
+      - name: Validate Mermaid diagrams
+        run: pnpm run check:mermaid
+        working-directory: wiki
+
+      - name: Check llms-full.txt
+        run: pnpm run check:llms
+        working-directory: wiki
+
       - name: Upload artifact
+        if: ${{ github.event_name != 'pull_request' }}
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: wiki/.vitepress/dist
 
   deploy:
+    if: ${{ github.event_name != 'pull_request' }}
     permissions:
       pages: write
       id-token: write

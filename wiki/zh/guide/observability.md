@@ -1,12 +1,21 @@
 ---
 title: 可观测性
-description: 用 snapshot() 读取客户端状态，接收 SimbaEvent，使用 Micrometer 指标与告警规则、simba Actuator 端点和 simba 健康指示器。
+description: 运行 Simba 时该关注什么以及为什么：快照、SimbaEvent、Micrometer 指标、告警规则、simba Actuator 端点和 simba 健康指示器。
 ---
 
 # 可观测性
 
-Simba 通过两种方式报告它在做什么：会话和每个选举在某一时刻的 `snapshot()`，以及 `SimbaEvent` 事件流。
-Spring Boot starter 基于快照构建 Actuator 端点和健康指示器，基于事件构建 Micrometer 指标。
+运行 Simba 时有三个关键问题，每个问题对应一个信号：
+
+| 问题 | 为什么重要 | 信号 |
+|---|---|---|
+| 本节点的会话是否存活？ | 没有存活的会话，节点既无法保持也无法赢得任何任期 | `session.status`、`simba.session.state`、健康指示器 |
+| 每个角色都有 leader 吗？ | 没有 leader 的角色意味着工作没有人做 | `simba.leadership`、`snapshot().elections` |
+| 是否有任期被非自愿地丢失？ | 每一次这样的丢失，都是暂停的节点可能仍在写入的时刻 | `simba.revocations{reason}` |
+
+Simba 通过两种方式报告状态：会话和每个选举在某一时刻的 `snapshot()`，以及 `SimbaEvent` 事件流。
+Spring Boot starter 基于快照构建 Actuator 端点和健康指示器，基于事件构建 Micrometer 指标。所有内容都是**本节点的视图**：
+没有任何 API 会去询问其他节点谁是 leader。
 
 ## 快照 {#snapshot}
 
@@ -22,28 +31,29 @@ Spring Boot starter 基于快照构建 Actuator 端点和健康指示器，基�
 | `leaseDuration` | 配置的会话租约 |
 | `healthy` | `notLiveFor ≤ leaseDuration` |
 
-选举的 `status` 为 `CANDIDATE`（竞争中）、`LEADER`（持有有效任期）、`COOLDOWN`（已让位，等待冷却期结束）或
-`HANDOVER`（已停止或已让位，等待其任务退出后再释放租约）。没有任期时 `token` 和 `remaining` 为 `0`。
+选举的 `status` 是[生命周期状态](/zh/guide/concepts#the-lifecycle-of-an-election)之一：`CANDIDATE`（竞争中）、
+`LEADER`（持有有效任期）、`COOLDOWN`（已让位，等待冷却期结束）或 `HANDOVER`（已停止或已让位，等待其任务退出后再释放租约）。
+没有任期时 `token` 和 `remaining` 为 `0`。
 
 ## 事件 {#events}
 
 通过 `Simba.builder().listener(...)` 注册 `SimbaEventListener`，或在使用 starter 时将其声明为 bean。事件在回调执行器上的一个串行派发器里按顺序投递，
 从不在引擎循环上运行，因此监听器可以调用 `snapshot()`、`stop()` 等客户端 API；在监听器里调用阻塞的 `close()` 方法不会等待。
 `close()` 在最后一个事件投递之后完成。监听器要快速；异常会被记录日志并忽略。事件是按值比较的普通类（没有 `copy` 和解构），
-以后的版本可以兼容地增加属性。
+因此以后的版本可以增加属性。
 
 | `SimbaEvent` | 触发时机 |
 |---|---|
 | `SessionOpened(session)` | 打开了一个新会话 |
-| `SessionRenewed(session, latency)` | 一次续约 (keep-alive) 成功 |
-| `SessionSuspended(session, cause)` | 一次续约 (keep-alive) 在本地截止时刻之前失败 |
+| `SessionRenewed(session, latency)` | 一次续约成功 |
+| `SessionSuspended(session, cause)` | 一次续约在本地截止时刻之前失败 |
 | `SessionExpired(session, reason)` | 会话结束：`reason` 为 `DEADLINE_PASSED`（本地截止时刻前没有一次续约成功）或 `SESSION_EXPIRED`（后端报告其已过期） |
-| `SessionLeaseShortened(session, remaining, renewEvery)` | 后端给出的时间少于配置的租期（例如 Zookeeper 的会话超时上限），客户端改为每 `renewEvery`（本地有效期的三分之一）续约一次；每个会话一次，同时记录 warn 日志 |
+| `SessionLeaseShortened(session, remaining, renewEvery)` | 后端授予的时间少于配置的租约（例如 Zookeeper 的会话超时上限），客户端改为每 `renewEvery`（本地有效期的三分之一）续约一次；每个会话一次，同时记录 warn 日志 |
 | `SessionClosed(session)` | 客户端已关闭（未打开会话时 `session` 为 `null`）；只发布一次 |
-| `Elected(name, token, kind)` | 本节点获得了一个任期；`kind`（`ELECTION`、`LOCK`、`GROUP`）表示选举由哪个 API 启动，指标可以按 kind 打标签，而不必按数量无界的锁名打标签 |
+| `Elected(name, token, kind)` | 本节点获得了一个任期；`kind`（`ELECTION`、`LOCK`、`GROUP`）表示选举由哪个 API 启动 |
 | `Revoked(name, token, reason, kind)` | 一个任期结束 |
 | `AcquireFailed(name, cause, kind)` | 一次获取调用失败（不包括“被他人持有”，那是正常情况） |
-| `WorkCompleted(name, token, outcome, duration, cause, kind)` | leader 任务的一次运行结束：`COMPLETED`、`FAILED` 或 `CANCELLED` |
+| `WorkCompleted(name, token, outcome, duration, cause, kind)` | Leader 任务的一次运行结束：`COMPLETED`、`FAILED` 或 `CANCELLED` |
 
 ```kotlin
 @Component
@@ -61,21 +71,21 @@ class AuditListener(private val audit: Audit) : SimbaEventListener {
 ## Micrometer 指标 {#micrometer-metrics}
 
 classpath 上有 Micrometer 且存在 `MeterRegistry` bean 时，starter 注册 `MicrometerSimbaEventListener`
-（用 `simba.metrics.enabled=false` 禁用）：
+（用 `simba.metrics.enabled=false` 禁用）。不使用 Spring 时，请自行把 `MicrometerSimbaEventListener(registry)` 加到 builder 上。
 
 | 指标 | 类型 | 标签 | 含义 |
 |---|---|---|---|
-| `simba.session.renew` | Timer | — | 成功续约 (keep-alive) 的延迟 |
+| `simba.session.renew` | Timer | — | 成功续约的延迟 |
 | `simba.session.state` | Gauge | `state`（`opening`、`live`、`suspended`、`closed`） | 当前会话状态对应的值为 `1` |
 | `simba.leadership` | Gauge | `name` | 本节点持有该选举或分区的任期时为 `1`，失去任期后为 `0` |
 | `simba.locks.held` | Gauge | — | 本节点持有的锁数量 |
 | `simba.revocations` | Counter | `reason`、`kind`（`election`、`lock`、`group`） | 已结束的任期，按 `RevokeReason`（小写）区分，包括 `stopped` 和 `stepped_down` |
-| `simba.work` | Timer | `name`、`outcome` | leader 任务的运行（`completed`、`failed`、`cancelled`） |
+| `simba.work` | Timer | `name`、`outcome` | Leader 任务的运行（`completed`、`failed`、`cancelled`） |
 
-只有选举和分区（`{group}.{partition}`）按名称打标签，它们的名称来自你的代码。锁的名称常常来自数据（如 `invoice-42`），
-因此只做汇总：`simba.locks.held` 和 `kind="lock"` 的 revocations，正常解锁不会被当成"没有 leader"。某个名称的
-`simba.leadership` 序列从它的第一个任期存在到某个任期以 `stopped` 结束（选举停止、分区迁移到其他节点或客户端关闭），
-因此停止的选举不会留下序列。不使用 Spring 时，自行把 `MicrometerSimbaEventListener(registry)` 加到 builder 上。
+只有名称来自你代码的选举和分区（`{group}.{partition}`）按名称打标签。锁的名称常常来自数据（如 `invoice-42`），
+会让序列数量无界，因此只做汇总：`simba.locks.held` 和 `kind="lock"` 的 revocations。这也使正常解锁不会被当成"没有 leader"。
+某个名称的 `simba.leadership` 序列从它的第一个任期开始存在，直到某个任期以 `stopped` 结束（选举停止、分区迁移到其他节点或客户端关闭），
+因此停止的选举不会留下序列。
 
 ## 告警规则 {#alert-rules}
 
@@ -111,7 +121,7 @@ groups:
 
 各节点在不同时刻被抓取，因此一次交接可能短暂地看起来像没有 leader 或有两个 leader；`for: 1m` 子句会过滤掉这种情况。
 `simba_leadership` 是每个节点的本地视图：两个节点报告 `1` 的时间超过一个租约，说明存在暂停的节点或丢失了写入的后端
-（例如 Redis 故障转移），而这正是 [fencing token](/zh/guide/correctness#fencing-tokens) 所防护的情况。
+（例如 Redis 故障转移），而这正是 [fencing token](/zh/guide/correctness) 所防护的情况。
 
 ## Actuator 端点 {#actuator-endpoint}
 
@@ -142,7 +152,7 @@ management:
 }
 ```
 
-`GET /actuator/simba/{name}` 返回单个选举，若该选举未在本节点启动则返回 `404`。端点只展示本节点的视图；它不会查询其他地方由谁担任 leader。
+`GET /actuator/simba/{name}` 返回单个选举，若该选举未在本节点启动则返回 `404`。
 
 ## 健康指示器 {#health-indicator}
 
@@ -168,8 +178,3 @@ management:
 该指示器**不**属于 liveness 或 readiness 组。后端故障会同时影响所有节点；重启所有节点或把它们全部摘除流量，
 会把一次协调故障变成一次应用故障。只有在你确实需要时，才自行把它加入某个组（`management.endpoint.health.group.<name>.include=simba`），
 并可用 `management.health.simba.enabled=false` 禁用它。
-
-## 相关页面 {#related-pages}
-
-- [Spring Boot](/zh/guide/configuration)：所有 `simba.*` 属性以及 starter 创建的 bean。
-- [核心概念与正确性](/zh/guide/correctness#failure-modes)：每种故障表现为什么样子。

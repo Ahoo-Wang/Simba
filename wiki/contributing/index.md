@@ -67,11 +67,15 @@ the JDBC SQL or schema, or the public `simba-core` API needs agreement before co
 | `docs/adr/` | Design decisions and their rationale |
 | `AGENTS.md` | Invariants and traps for maintainers and coding agents |
 
-Every page change is made in both languages. After editing English pages, regenerate `wiki/llms-full.txt`:
+Every page change is made in both languages; the page ownership and writing rules are in
+[`wiki/AGENTS.md`](https://github.com/Ahoo-Wang/Simba/blob/main/wiki/AGENTS.md). Mermaid diagrams render in the
+browser, so a passing build says nothing about their syntax: check them with headless Chrome. After editing English
+pages, regenerate `wiki/llms-full.txt`:
 
 ```bash
 cd wiki
 pnpm install
+pnpm run check:mermaid   # parses every diagram with the real Mermaid parser
 pnpm run sync:llms
 pnpm run build
 ```

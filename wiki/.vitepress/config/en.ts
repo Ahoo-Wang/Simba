@@ -23,17 +23,33 @@ export const en: DefaultTheme.Config = {
     sidebar: {
       '/guide/': [
         {
-          text: 'Guide',
+          text: 'Getting Started',
           items: [
-            { text: 'Introduction', link: '/guide/' },
+            { text: 'Why Simba', link: '/guide/' },
             { text: 'Quick Start', link: '/guide/quick-start' },
-            { text: 'Concepts and Correctness', link: '/guide/correctness' },
-            { text: 'Backends', link: '/guide/backends' },
-            { text: 'Spring Boot', link: '/guide/configuration' },
-            { text: 'Leader Work and Partitions', link: '/guide/leader-work' },
+            { text: 'How Simba Works', link: '/guide/concepts' },
+          ],
+        },
+        {
+          text: 'Using Simba',
+          items: [
+            { text: 'Elections and Leader Work', link: '/guide/leader-work' },
             { text: 'Locks', link: '/guide/locks' },
-            { text: 'Observability', link: '/guide/observability' },
+            { text: 'Spring Boot', link: '/guide/configuration' },
             { text: 'Testing', link: '/guide/testing' },
+          ],
+        },
+        {
+          text: 'Running in Production',
+          items: [
+            { text: 'Fencing and Failures', link: '/guide/correctness' },
+            { text: 'Backends', link: '/guide/backends' },
+            { text: 'Observability', link: '/guide/observability' },
+          ],
+        },
+        {
+          text: 'Releases',
+          items: [
             { text: 'Upgrading', link: '/guide/upgrading' },
             { text: 'Migrating from 4.x', link: '/guide/migration' },
           ],

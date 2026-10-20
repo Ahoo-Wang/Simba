@@ -1,20 +1,24 @@
 ---
 title: Testing
-description: Test code that uses Simba with the in-memory backend and virtual time, verify a fencing resource with FencingSpec, and check a backend with the LeaseBackendSpec TCK.
+description: Test code built on Simba at the right level — the in-memory backend, virtual time, deterministic simulation, FencingSpec for your token-checking resource, and the LeaseBackendSpec TCK for a backend.
 ---
 
 # Testing
 
-Two test modules help you test code built on Simba and code Simba depends on:
+Leadership code fails in the gaps: a lease that expires mid-step, a takeover during a pause, two nodes that briefly
+disagree. Those gaps are about time, so the useful question for a test is how much control over time it needs:
 
-| Module | Contents |
-|---|---|
-| `simba-testing` | `InMemoryLeaseBackend`, `VirtualClock`, `VirtualScheduler`, `Simulation` |
-| `simba-tck` | `FencingSpec` (for your token-checking resource) and `LeaseBackendSpec` (for a backend) |
+| You want to test... | Use | Time |
+|---|---|---|
+| Code that takes a `Simba`: elections, leader work, locks | `InMemoryLeaseBackend` | Real, short leases |
+| Failover, expiry, cooldowns, without waiting | `InMemoryLeaseBackend` + `VirtualScheduler` | Virtual, deterministic |
+| The engine under faults, over thousands of interleavings | `Simulation` | Virtual, seeded |
+| Your resource rejects stale owners | `FencingSpec` | — |
+| A `LeaseBackend` of your own | `LeaseBackendSpec` | The backend's |
 
 ```kotlin
-testImplementation("me.ahoo.simba:simba-testing:${simbaVersion}")
-testImplementation("me.ahoo.simba:simba-tck:${simbaVersion}")
+testImplementation("me.ahoo.simba:simba-testing:${simbaVersion}")   // in-memory backend, virtual time, simulation
+testImplementation("me.ahoo.simba:simba-tck:${simbaVersion}")       // FencingSpec, LeaseBackendSpec
 ```
 
 The examples assert with [FluentAssert](https://github.com/Ahoo-Wang/FluentAssert) (`.assert()`), which `simba-tck`
@@ -22,11 +26,15 @@ brings in; with `simba-testing` alone, add `me.ahoo.test:fluent-assert-core` or 
 
 ## In-Memory Backend
 
-`InMemoryLeaseBackend` implements the full `LeaseBackend` contract in memory (sessions, leases with never-resetting
-tokens, groups, release and membership hints). It needs no infrastructure, so it fits unit tests of anything that
-takes a `Simba`. By default leases live as long as their session (JDBC, Zookeeper); `selfExpiringLeases = true` makes
-them expire on their own, each grant lasting one full lease, and `InMemoryLeaseBackend.builder()` (since 5.1) with
-`selfExpiringLeases(true).sessionBoundGrants(true)` limits a grant to the time its session has left, as on Redis:
+`InMemoryLeaseBackend` implements the full `LeaseBackend` contract in memory: sessions, leases with never-resetting
+tokens, groups, release and membership hints. It needs no infrastructure, so it fits unit tests of anything that takes
+a `Simba`. It models each storage style:
+
+| Construction | Leases behave like |
+|---|---|
+| `InMemoryLeaseBackend()` | JDBC, Zookeeper: a lease lives as long as its session |
+| `InMemoryLeaseBackend(selfExpiringLeases = true)` | Redis: leases expire on their own, each grant lasting one full lease (as a Cluster's lease slots grant) |
+| `InMemoryLeaseBackend.builder().selfExpiringLeases(true).sessionBoundGrants(true)` (since 5.1) | A single Redis node: a grant lasts only what its session has left |
 
 ```kotlin
 @Test
@@ -50,8 +58,9 @@ fun `only one client leads`() {
 }
 ```
 
-`owner(name)` and `token(name)` let a test inspect the backend directly. Wait on queues, latches or futures, never
-`sleep`.
+`owner(name)` and `token(name)` let a test inspect the backend directly; `peekOwner` and `peekExpiry` read without
+side effects, and `expireSession` and `loseLease` play a server ending a session early or a store losing a lease. Wait
+on queues, latches or futures, never `sleep`.
 
 In a Spring Boot test, define the backend as a bean: the starter builds the `Simba` client over any `LeaseBackend`
 bean, with no backend module on the test classpath.
@@ -66,8 +75,8 @@ class InMemorySimba {
 
 ## Virtual Time
 
-With the in-memory backend on real time, a test of a failover still waits for a lease to expire. To run such tests
-instantly and deterministically, drive the client and the backend from one `VirtualScheduler`:
+On real time a failover test still waits for a lease to expire. To run such tests instantly and deterministically,
+drive the client and the backend from one `VirtualScheduler`:
 
 ```kotlin
 @OptIn(InternalSimbaApi::class)
@@ -91,7 +100,8 @@ class FailoverTest {
 
 `scheduler.advance(duration, settle)` moves virtual time forward and fires every due timer in order, calling `settle`
 before each so that what a timer triggers completes before time moves on. Leader work still runs on its own (virtual)
-threads; wait for what it does through queues.
+threads that `awaitIdle()` does not cover: wait for what it does through queues, and wait for work to start before
+stopping it.
 
 `Simba.Builder.scheduler`, `Simba.awaitIdle` and `Scheduler` are marked `@InternalSimbaApi`: they need an explicit
 opt-in and carry no compatibility guarantee between minor versions. `VirtualClock` alone is a plain `Ticker` for code
@@ -100,28 +110,39 @@ that only reads time.
 ## Deterministic Simulation
 
 `Simulation(seed, params).run()` runs several engines against the in-memory backend in virtual time while injecting
-message delays and loss, process pauses, node clock rates that vary over time, groups joined and left (partition
-elections follow each node's view), nodes closed mid-fault, grants reported shorter than granted, backend-side
-faults (a session expired, a lease deleted or lost by the backend on its own), and optionally no backend hints (as on
-JDBC). It checks the invariants: at most one valid term per name (partitions included), each valid term's deadline
-within the backend's expiry of its lease, no term valid again once invalid, strictly increasing tokens, paired
-callbacks, liveness of names and partitions after faults stop, no leaked lease, and the handover order. Terms a
-backend-side fault removed are exempt from the first checks until revoked, since such a fault breaks the backend's
+the faults that matter:
+
+- message delays and loss, process pauses, node clock rates that vary over time;
+- groups joined and left (partition elections follow each node's view), nodes closed mid-fault;
+- grants reported shorter than granted, and backend-side faults: a session expired, a lease deleted or lost by the
+  backend on its own; optionally no backend hints (as on JDBC).
+
+It then checks the invariants:
+
+| | Invariant |
+|---|---|
+| I1 | At most one valid term per name (partitions included); each valid term's deadline within the backend's expiry of its lease; no term valid again once invalid |
+| I2 | Strictly increasing tokens |
+| I3 | Paired callbacks |
+| I4 | Liveness of names and partitions after faults stop; no leaked lease |
+| I5 | The handover order |
+
+Terms a backend-side fault removed are exempt from I1 and I2 until revoked, since such a fault breaks the backend's
 contract; a lost lease restarting its tokens is counted (`premise:tokenReset`) rather than failed, because only a
-backend that never loses data keeps tokens increasing. `SimulationParams.builder()` sets the knobs (the table lists those added in 5.1),
-and `SimulationResult.events`
-counts the events and the exercised paths (`path:*`). Simba runs it over 10⁴ seeds in its own build; it is available to anyone changing the engine, and a failing seed
-replays exactly:
+backend that never loses data keeps tokens increasing. `SimulationResult.events` counts the events and the exercised
+paths (`path:*`). Simba runs the simulation over 10⁴ seeds in its own build, and a failing seed replays exactly:
 
 ```bash
 ./gradlew simba-testing:test -Psimba.simulation.seed=42
 ```
 
-| `SimulationParams` (since 5.1) | Default | Meaning |
+`SimulationParams.builder()` sets the knobs; these were added in 5.1:
+
+| `SimulationParams` | Default | Meaning |
 |---|---|---|
 | `sessionBoundGrants` | `false` | With `selfExpiringLeases`, a grant lasts only as long as its session has left, as on Redis |
 | `truncatedGrantShare` | `0.3` | Share of runs whose backend reports less time than it grants (as a Zookeeper server capping the session timeout) |
-| `meanInjectionInterval` | `20s` | Mean interval of backend-side faults (a session expired, a lease deleted or lost by the backend); `Duration.ZERO` disables them |
+| `meanInjectionInterval` | `20s` | Mean interval of backend-side faults; `Duration.ZERO` disables them |
 | `groupPartitions` | `3` | Partitions of one group the nodes join and leave at random; `0` disables groups |
 | `earlyCloseShare` | `0.02` | Share of random operations that close a node for good during the fault phase |
 | `backendHints` | `true` | The backend sends release and membership hints; `false` models JDBC, which sends none |
@@ -129,8 +150,7 @@ replays exactly:
 ## Verifying a Fencing Resource
 
 `FencingSpec` checks a resource that guards its writes with fencing tokens (see
-[Checking Tokens in the Resource](/guide/correctness#checking-tokens-in-the-resource)). Extend it and implement two
-methods:
+[The Fencing Protocol](/guide/correctness#the-fencing-protocol)). Extend it and implement two methods:
 
 ```kotlin
 class LedgerFencingTest : FencingSpec() {

@@ -1,91 +1,135 @@
-<doc title="Introduction" path="guide/index.md">
-# Introduction
+<doc title="Why Simba" path="guide/index.md">
+# Why Simba
 
-Simba is a JVM library for **leader election and distributed locks**. Each process opens one *session* on a backend
-you already operate (MySQL or PostgreSQL, Redis, or Zookeeper) and contends for named *leases* on it. The node that
-wins a lease gets a *term*: an object that carries a fencing token and knows how long it is still valid. There is no
-Simba server: the library runs inside your application.
+Some work must be done by **one node at a time**: a nightly report, the consumer of a partition, the process that
+drives a workflow, the step that charges an invoice. Inside one JVM a `synchronized` block does this. Across
+processes it is a different problem, and the shape of any honest solution follows from three facts about distributed
+systems. This page derives that shape; Simba is that shape, packaged as a library.
 
-Typical uses: run a scheduled job on one node only, spread partitions of work over the live nodes, have one process
-drive a workflow, or hold a lock around a step that must not run twice at once.
+## Three Facts
+
+**1. A dead node and a slow node look the same.** When a node stops answering, the others cannot tell whether it
+crashed, is stuck in a long GC, or is cut off by the network. No message can prove it is gone.
+
+**2. A process can pause at any instruction.** Garbage collection, a VM freeze, a page fault on a swapped-out page or a
+stalled disk can stop a process for seconds, between any two lines of your code, without the process noticing.
+
+**3. Clocks do not agree, but they tick at similar rates.** Wall clocks on different hosts differ by unknown amounts and
+can jump (NTP steps, VM migration). What is reliable is that each host's monotonic clock measures elapsed time at a
+rate close to every other host's.
+
+## What They Force
+
+Each fact rules out a naive design and forces one mechanism:
+
+```mermaid
+graph LR
+    F1["A dead node and a slow node<br>look the same"] --> M1["Ownership must expire on its own:<br>a lease, renewed while alive"]
+    F2["A process can pause<br>at any instruction"] --> M2["A holder can act after its lease ended:<br>the resource must reject it,<br>using a fencing token"]
+    F3["Clocks disagree,<br>rates are close"] --> M3["Never compare timestamps across hosts:<br>measure durations, bound the rate drift"]
+    M1 --> S["Simba: one session per process,<br>leases on it, a Term per win"]
+    M2 --> S
+    M3 --> S
+```
+
+- **A lock that waits for its holder to release it is unsafe**: if the holder is dead, it waits forever (fact 1).
+  Ownership must therefore be a **lease**: granted for a bounded time and kept only by renewing it. When a node stops
+  renewing, for whatever reason, its lease runs out and another node can take over.
+- **A lease alone cannot stop a paused holder** (fact 2). The holder checks "my lease is valid", pauses, the lease runs
+  out, another node takes over, and the first node wakes up and writes. No check on the holder's side can close that
+  gap, because the pause can fall right after the check. Only the **resource being written** can refuse the stale
+  writer, and it needs something to compare: a **fencing token** that grows with every new owner.
+- **"Valid until 12:00:15" means nothing on another host** (fact 3). The backend therefore reports how much time is
+  *left*, as a duration measured by its own clock, and each node turns that into a deadline on its own monotonic clock,
+  shortened by an allowance for the rate difference. That way a node always considers its lease over *before* the
+  backend could give it to someone else.
+
+These three mechanisms are not one design among many: every correct lease-based scheme has them, and none can do
+better without the protected resource taking part. Simba implements them once, on storage you already run, with no
+Simba server. How the pieces fit is explained in [How Simba Works](/guide/concepts).
 
 ## What Simba Guarantees
 
-1. **At most one valid term per lease name, as far as the local clock can tell.** A term is valid until the session's
-   local deadline, which always comes before the backend could hand the lease to another session (as long as clock
-   rates differ by less than the configured `drift`). Validity is computed from the monotonic clock on every read, so
-   a process waking from a long pause sees its term as invalid on the first read.
+1. **At most one valid term per lease name, as far as the local clock can tell.** Winning a lease gives the node a
+   *term*. A term is valid until the session's local deadline, which passes before the backend can hand the lease to
+   another session, as long as the clock rates of node and backend differ by less than the configured `drift`.
+   Validity is recomputed from the monotonic clock on every read, so a process waking from a long pause sees its term
+   as invalid on the first read.
 2. **Fencing tokens.** Every term carries a token greater than zero that strictly increases from term to term of the
    same name, on every backend.
-3. **Paired callbacks.** Every `onElected(term)` is followed by exactly one `onRevoked(term, reason)`, callbacks of one
-   election run one at a time in order, and none arrives after `stop()` completed.
+3. **Paired callbacks.** Every `onElected(term)` is followed by exactly one `onRevoked(term, reason)`; callbacks of one
+   election run one at a time, in order, and none arrives after `stop()` completed.
 4. **Ordered handover.** `stop()` and `stepDown()` interrupt the work bound to the term, wait for it to exit (at most
-   for the term's remaining time), and only then release the lease.
-5. **Liveness.** A node that closes its client frees its leases at once; when a node crashes or loses the backend,
-   its session expires after `leaseDuration` and the other nodes take its leases over.
+   until the term's local deadline), and only then release the lease.
+5. **Liveness.** A node that closes its client frees its leases at once. A node that crashes or loses the backend
+   stops renewing its session, the session expires after `leaseDuration`, and the other nodes take its leases over.
 
-## What Simba Does Not Guarantee
+## What Simba Cannot Guarantee
 
-A term is a *weakly consistent view* of the backend. A process paused by GC, a stalled disk or a network partition can
-resume after its session expired and still finish a write it already started, while another node holds a newer term.
-No lease-based lock can prevent that on its own; Simba never promises "no split-brain".
+A term is a **weakly consistent view** of the backend. A process paused by GC, a stalled disk or a network partition can
+resume after its session expired and still finish a write it had already started, while another node holds a newer
+term. No lease-based lock can prevent that on its own, so Simba never promises "no split-brain".
 
-If overlapping work is harmful, the protected resource must reject stale owners: send
-[`term.token`](/guide/correctness#fencing-tokens) with every write and let the resource refuse tokens lower than the
-highest it has accepted. If duplicated work is merely wasteful (a report generated twice), the term alone is enough.
+What to do about it depends on what an overlap costs:
 
-Simba also does not keep working while the backend is unreachable: once the session's local deadline passes, every
-term of that node is revoked.
+| If two owners overlapping briefly is... | Then |
+|---|---|
+| **Harmful** (money moves twice, data is corrupted) | Send `term.token` with every write and let the resource reject tokens lower than the highest it accepted: [Fencing and Failures](/guide/correctness) |
+| **Wasteful** (a report is generated twice) | The term alone is enough; make the work idempotent where you can |
+
+Simba also does not keep anything running while the backend is unreachable: once the session's local deadline passes,
+every term of that node is revoked. A coordination service that cannot be reached cannot coordinate.
 
 ## Choose an API
 
-All APIs hang off one `Simba` client (one per process, one backend session).
+All APIs hang off one `Simba` client per process, which owns one backend session.
 
 | You want to... | Use | Page |
 |---|---|---|
-| React to gaining and losing leadership | `simba.election(name).start(listener)` | [Quick Start](/guide/quick-start#election) |
-| Run a block once per term, interrupted when the term ends | `election.runWhileLeader { term -> }` | [Leader Work](/guide/leader-work#run-while-leader) |
-| Run a method periodically on the leader only | `election.schedule(...)` or `@SimbaScheduled` | [Leader Work](/guide/leader-work#schedules) |
-| Spread N partitions over the live nodes, each partition on one node | `simba.group(name, n)` or `@SimbaPartitioned` | [Leader Work](/guide/leader-work#partition-groups) |
-| Hold a lock around a step, then release it | `simba.lock(name).acquire(timeout)` | [Locks](/guide/locks) |
-| See the session and every election of this node | `simba.snapshot()`, Actuator `simba` | [Observability](/guide/observability) |
+| Run a block while this node leads, interrupted when it stops leading | `election.runWhileLeader { term -> }` | [Leader Work](/guide/leader-work#run-while-leader) |
+| Run a job periodically, on one node only | `election.schedule(...)` or `@SimbaScheduled` | [Leader Work](/guide/leader-work#schedules) |
+| Spread N partitions of work over the live nodes | `simba.group(name, n)` or `@SimbaPartitioned` | [Leader Work](/guide/leader-work#partition-groups) |
+| React to gaining and losing leadership yourself | `election.start(listener)` | [Leader Work](/guide/leader-work#elections) |
+| Hold a lock around one step, then release it | `simba.lock(name).acquire(timeout)` | [Locks](/guide/locks) |
+| See this node's session and elections | `simba.snapshot()`, Actuator `simba` | [Observability](/guide/observability) |
+
+Prefer the highest level that fits: work bound to a term (`runWhileLeader`, `schedule`, groups) gets the handover
+order for free, while a bare listener leaves it to you.
 
 ## Choose a Backend
 
+Pick the one you already operate. All three pass the same [TCK](/guide/testing#backend-tck); they differ in where time
+is measured and how durable the token is.
+
 | | JDBC (MySQL 8, PostgreSQL 14+) | Redis 7 | Zookeeper |
 |---|---|---|---|
-| Session | Row in `simba_session` | Hash `simba:session:{sid}` with `PX` | A Zookeeper session |
-| Lease | Row in `simba_lease`, never deleted | Hash `simba:lease:{name}`, never expires | Ephemeral node `/simba/leases/{name}` |
-| Fencing token | Counter in the row, `+1` per term | Counter in the hash, `+1` per term | The node's `czxid` |
-| Clock | Database time | Redis `TIME` | Zookeeper session timeout |
-| Failover after a clean stop | Next candidate attempt | Immediate (release broadcast) | Immediate (node watch) |
-| Token durability | Transactional | Can go back after a failover | Zookeeper quorum |
+| Lease time measured by | Database clock | Redis `TIME` | Zookeeper session timeout |
+| Fencing token | Counter in a row, `+1` per term | Counter in a hash, `+1` per term | The node's `czxid` |
+| Takeover after a clean stop | Next candidate attempt | Immediate (release broadcast) | Immediate (node watch) |
+| Takeover after a crash | About `leaseDuration` | About `leaseDuration` | About the negotiated session timeout |
+| Token survives a failover | With synchronous replication | Not guaranteed (asynchronous replication) | Yes (quorum commits) |
 
-Failover after a crash takes about `leaseDuration` (Zookeeper: the negotiated session timeout) plus the next
-candidate attempt. Pick the one you already run; read
-[Backends](/guide/backends) for the setup and operating notes, in particular the
-[Redis failover boundary](/guide/backends#token-regression-after-a-failover).
+If fencing must hold across a backend failover, prefer Zookeeper or JDBC on synchronous replication; see
+[Backends](/guide/backends) for the details and operating notes.
 
 ## Where to Next
 
-- [Quick Start](/guide/quick-start): add the dependency and run code.
-- [Concepts and Correctness](/guide/correctness): sessions, leases, terms, tokens and the handover order. Read this
-  before protecting anything that must not be written twice.
-- [Spring Boot](/guide/configuration), [Leader Work](/guide/leader-work), [Locks](/guide/locks),
-  [Observability](/guide/observability), [Testing](/guide/testing).
-- Coming from Simba 4.x: [Migrating to 5.0](/guide/migration).
-- [Architecture](/architecture/) and [Contributing](/contributing/) if you work on Simba itself.
+1. [Quick Start](/guide/quick-start): add the dependency and run code.
+2. [How Simba Works](/guide/concepts): sessions, deadlines, terms and the handover order.
+3. [Fencing and Failures](/guide/correctness): read before protecting anything that must not be written twice.
 </doc>
 
 <doc title="Quick Start" path="guide/quick-start.md">
 # Quick Start
 
-Simba 5 needs Java 21 or later (work and backend calls run on virtual threads). The starter needs Spring Boot 4
-(4.1 or later); the libraries are compiled for Kotlin 2.2 or later.
+From zero to a job that runs on exactly one node, then the other APIs in increasing order of control.
 
-## Dependencies
+**Requirements:** Java 21 or later (work and backend calls run on virtual threads). The starter needs Spring Boot 4.1
+or later; the libraries are compiled for Kotlin 2.2 or later.
 
-Add the Spring Boot starter and **one** backend module.
+## 1. Add the Dependencies
+
+The Spring Boot starter plus **one** backend module:
 
 ::: code-group
 
@@ -130,22 +174,20 @@ implementation("me.ahoo.simba:simba-coroutines:${simbaVersion}")
 
 :::
 
-`simba-bom` aligns the versions of every Simba module. `simba-coroutines` (since 5.1) adds suspending lock calls,
-`withLock` and a `Flow` of events on top of any backend; see [Locks](/guide/locks#coroutines). Without Spring, depend
-on `simba-core` plus a backend module:
+`simba-bom` aligns the versions of every Simba module. Without Spring, depend on `simba-core` plus a backend module:
 `simba-jdbc`, `simba-zookeeper`, or for Redis `simba-spring-redis` (which brings `simba-redis`). `simba-redis` alone
-only defines the `RedisScripting` port: use it without `simba-spring-redis` only with your own adapter for another
+only defines the `RedisScripting` port; use it without `simba-spring-redis` only with your own adapter for another
 Redis client.
 
-## Backend Setup
+## 2. Point It at a Backend
 
-| Backend | What you provide | Notes |
-|---|---|---|
-| JDBC | One `DataSource` bean and the three tables | Run [`init-simba-mysql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-mysql.sql) or [`init-simba-postgresql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-postgresql.sql) once; the dialect is detected from the `DataSource` |
-| Redis | One `RedisConnectionFactory` bean (Spring Boot creates it from `spring.data.redis.*`) | Redis 7; standalone, Sentinel or Cluster |
-| Zookeeper | `simba.zookeeper.connect-string` | Simba opens its own Zookeeper clients, one per session |
+| Backend | What you provide |
+|---|---|
+| JDBC | One `DataSource` bean, plus the three tables created once with [`init-simba-mysql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-mysql.sql) or [`init-simba-postgresql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-postgresql.sql); the dialect is detected from the `DataSource` |
+| Redis | One `RedisConnectionFactory` bean (Spring Boot creates it from `spring.data.redis.*`); standalone, Sentinel or Cluster |
+| Zookeeper | `simba.zookeeper.connect-string`; Simba opens its own Zookeeper clients, one per session |
 
-The scripts are on the classpath of `simba-jdbc`, so Spring Boot can run them for you:
+The JDBC scripts are on the classpath of `simba-jdbc`, so Spring Boot can run them for you:
 
 ```yaml
 spring:
@@ -155,14 +197,92 @@ spring:
       schema-locations: classpath:me/ahoo/simba/jdbc/init-simba-mysql.sql
 ```
 
-With more than one backend module on the classpath, set `simba.backend=jdbc|redis|zookeeper`; startup fails
-otherwise. The [Backends](/guide/backends) page has the schema, the keys and the operating notes of each.
+With more than one backend module on the classpath, set `simba.backend=jdbc|redis|zookeeper`, or startup fails. The
+starter now creates one `Simba` bean; inject it wherever you use an API below. Storage layout and operating notes of
+each backend are on [Backends](/guide/backends).
 
-The starter creates one `Simba` bean. Inject it wherever you need an API below.
+## 3. Run a Job on One Node
 
-## Election
+The most common need: a periodic job that must not run on two nodes at once.
 
-The base API: callbacks when this node gains and loses a term.
+::: code-group
+
+```java [Spring]
+@Service
+public class ReportJobs {
+    @SimbaScheduled(name = "report", fixedDelay = "1m")
+    public void generate(Term term) {
+        reportService.generate(term.getToken());
+    }
+}
+```
+
+```kotlin [Kotlin]
+simba.election("report").schedule(Schedule.fixedDelay(Duration.ofMinutes(1))) { term ->
+    reportService.generate(fencingToken = term.token)
+}
+```
+
+:::
+
+Start two instances: one leads `report` and runs the job, the other waits. Stop the leader and the other takes over.
+The `Term` the job receives carries the fencing token; pass it to whatever the job writes (see
+[Fencing and Failures](/guide/correctness)).
+
+## 4. The Other APIs
+
+### Work While Leading
+
+`runWhileLeader` runs a block once per term, on its own virtual thread, and interrupts it when the term ends:
+
+```kotlin
+val task = simba.election("ingest").runWhileLeader { term ->
+    while (term.isValid) {
+        sink.write(source.poll(), fencingToken = term.token)
+    }
+}
+// later: stops the election, waits for the block to exit, then releases the lease
+task.close()
+```
+
+### Partitions over the Live Nodes
+
+Each of 16 partitions runs on exactly one node at a time; nodes joining or leaving move only their share:
+
+::: code-group
+
+```java [Spring]
+@SimbaPartitioned(group = "billing", partitions = 16, fixedDelay = "1m")
+public void bill(Term term, int partition) {
+    billing.run(partition, term.getToken());
+}
+```
+
+```kotlin [Kotlin]
+simba.group("billing", partitions = 16).schedule(Schedule.fixedDelay(Duration.ofMinutes(1))) { term, partition ->
+    billing.run(shard = partition, fencingToken = term.token)
+}
+```
+
+:::
+
+### A Lock around One Step
+
+`acquire` returns a `LockTerm`; closing it releases the lease:
+
+```kotlin
+simba.lock("invoice-42").acquire(Duration.ofSeconds(5)).use { term ->
+    term.ensureValid(Duration.ofSeconds(2))      // enough time left for this step?
+    invoiceStore.write(invoice, fencingToken = term.token)
+}
+```
+
+`acquire` throws `LockTimeoutException` when no term was won in time; `tryAcquire()` makes one attempt and returns
+`null` instead.
+
+### A Bare Election
+
+When you manage the work yourself, listen for terms:
 
 ```kotlin
 val election = simba.election("order-dispatcher")
@@ -175,86 +295,14 @@ election.start(object : LeadershipListener {
 election.stop().toCompletableFuture().join()
 ```
 
-Every `onElected(term)` is followed by exactly one `onRevoked(term, reason)`. Keep callbacks short; they run one at a
+Every `onElected(term)` is followed by exactly one `onRevoked(term, reason)`. Keep callbacks short: they run one at a
 time per election.
 
-## Leader Work
-
-Usually you want code to run *while* this node leads. `runWhileLeader` runs a block once per term, on its own virtual
-thread, and interrupts it when the term ends:
-
-```kotlin
-val task = simba.election("report").runWhileLeader { term ->
-    while (term.isValid) {
-        reportStore.writeChunk(nextChunk(), fencingToken = term.token)
-    }
-}
-// later
-task.close()
-```
-
-Periodic work on the leader only:
-
-::: code-group
-
-```kotlin [Kotlin]
-simba.election("report").schedule(Schedule.fixedDelay(Duration.ofMinutes(1))) { term ->
-    reportService.generate(fencingToken = term.token)
-}
-```
-
-```java [Spring]
-@Service
-public class ReportJobs {
-    @SimbaScheduled(name = "report", fixedDelay = "1m")
-    public void generate(Term term) {
-        reportService.generate(term.getToken());
-    }
-}
-```
-
-:::
-
-See [Leader Work](/guide/leader-work) for schedules, handover and partition groups.
-
-## Lock
-
-`acquire` returns a `LockTerm`: the credential of the lock. Closing it releases the lease.
-
-```kotlin
-simba.lock("invoice-42").acquire(Duration.ofSeconds(5)).use { term ->
-    term.ensureValid(Duration.ofSeconds(2))      // enough time left for this step?
-    invoiceStore.write(invoice, fencingToken = term.token)
-}
-```
-
-`acquire` throws `LockTimeoutException` when no term was won in time; `tryAcquire()` makes one attempt and returns
-`null` instead. See [Locks](/guide/locks).
-
-## Partition Group
-
-Spread partitions over the live nodes; each partition runs on exactly one node at a time.
-
-::: code-group
-
-```kotlin [Kotlin]
-simba.group("billing", partitions = 16).schedule(Schedule.fixedDelay(Duration.ofMinutes(1))) { term, partition ->
-    billing.run(shard = partition, fencingToken = term.token)
-}
-```
-
-```java [Spring]
-@SimbaPartitioned(group = "billing", partitions = 16, fixedDelay = "1m")
-public void bill(Term term, int partition) {
-    billing.run(partition, term.getToken());
-}
-```
-
-:::
+The details of each are on [Leader Work](/guide/leader-work) and [Locks](/guide/locks).
 
 ## Without Spring
 
-Build the client yourself over a backend; `Simba` is `AutoCloseable` and closing it frees every lease at once.
+Build the client over a backend yourself. `Simba` is `AutoCloseable`; closing it frees every lease at once.
 
 ```kotlin
 val backend = JdbcLeaseBackend.postgres(dataSource)          // or JdbcLeaseBackend.mysql(dataSource)
@@ -273,8 +321,8 @@ Simba.builder()
 backend.close()
 ```
 
-Create one `Simba` per process: every election, lock and group shares its session, so one keep-alive renews all of
-them. The [Spring Boot](/guide/configuration#without-spring) page lists the builder options.
+Create **one** `Simba` per process: every election, lock and group shares its session, so one keep-alive renews all of
+them. The builder options are listed under [Without Spring](/guide/configuration#without-spring).
 
 ## Run the Example
 
@@ -282,77 +330,95 @@ The [example application](https://github.com/Ahoo-Wang/Simba/tree/main/simba-exa
 `@SimbaPartitioned` and an election against the backend you choose:
 
 ```bash
-./gradlew simba-example:run -PexampleBackend=redis   # jdbc | redis | zookeeper
+./gradlew simba-example:run -PexampleBackend=redis
 ```
 
-Start it twice and stop one instance to watch the other take over.
+`-PexampleBackend` takes `jdbc`, `redis` or `zookeeper`. Start it twice and stop one instance to watch the other take
+over.
 </doc>
 
-<doc title="Concepts and Correctness" path="guide/correctness.md">
-# Concepts and Correctness
+<doc title="How Simba Works" path="guide/concepts.md">
+# How Simba Works
 
-A distributed lock cannot know that its holder is still alive; it can only *lease* ownership for a bounded time.
-Everything Simba guarantees follows from that. This page explains the model, the timing, and what your code has to do
-when overlapping work must never happen. The design is recorded in
-[ADR 0010](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0010-simba-5-target-architecture.md).
-
-## The Model in One Picture
+[Why Simba](/guide/) showed that safe mutual exclusion between processes needs leases, durations instead of
+timestamps, and fencing tokens. This page builds the Simba model from those parts, one decision at a time. The design
+is recorded in [ADR 0010](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0010-simba-5-target-architecture.md).
 
 ```mermaid
 graph LR
-    P["Simba client<br>(one per process)"] -->|"opens, keeps alive"| S["Session<br>SessionId, expires on the backend"]
+    P["Simba client<br>one per process"] -->|"opens, keeps alive"| S["Session<br>expires on the backend<br>unless renewed"]
     S -->|"owns"| L1["Lease 'report'<br>token 7"]
     S -->|"owns"| L2["Lease 'billing.3'<br>token 12"]
-    L1 -.->|"seen locally as"| T1["Term<br>name, token, isValid, remaining()"]
+    L1 -.->|"seen locally as"| T1["Term<br>token, isValid, remaining()"]
     L2 -.->|"seen locally as"| T2["Term"]
-    style P fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style S fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style L1 fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style L2 fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style T1 fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style T2 fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 
-## Sessions
+## Sessions: Liveness Belongs to the Process
 
-Liveness belongs to the node, not to each lock. A `Simba` client opens **one session** on the backend and renews it
-with one keep-alive every `renewInterval`; every lease the node holds and every group it joined lives and dies with
-that session. Renewal cost is one call per node, whatever the number of leases.
+A lease must expire when its holder stops renewing it. The thing that dies, though, is the *process*, not an
+individual lock. So Simba renews liveness once per process: a `Simba` client opens **one session** on the backend and
+keeps it alive with one keep-alive every `renewInterval`. Every lease the node holds and every group it joins lives and
+dies with that session. Renewal costs one backend call per node, however many leases it holds.
 
-- A `SessionId` identifies one session *incarnation* and is never reused: random 128 bits on JDBC and Redis, the
-  Zookeeper session id on Zookeeper.
-- An expired session is **never revived**. The backend answers `Expired` to its keep-alive and refuses its acquires;
-  the client opens a new session (a new id) and contends again. Otherwise a lease another node had taken over in the
-  meantime could become "mine" again.
-- `close()` closes the session, so the backend frees every lease of the node at once.
+Two rules keep sessions honest:
 
-The session status, visible in [`snapshot()`](/guide/observability#snapshot), is `OPENING` (no session yet, or a new
-one after the last expired), `LIVE` (last keep-alive succeeded), `SUSPENDED` (last keep-alive failed, deadline not
+- **A session is never revived.** Once the backend has let a session expire, its leases may already belong to someone
+  else. If a late keep-alive could bring the session back, a lease taken over in the meantime would become "mine"
+  again. So the backend answers `Expired`, refuses the session's acquires, and the client opens a *new* session and
+  contends from scratch.
+- **A session id is never reused.** A `SessionId` names one session *incarnation*: random 128 bits on JDBC and Redis,
+  the Zookeeper session id on Zookeeper. A restarted process is a new owner.
+
+`close()` closes the session, which frees every lease of the node at once. Visible in
+[`snapshot()`](/guide/observability#snapshot), a session is `OPENING` (none yet, or a new one after the last
+expired), `LIVE` (the last keep-alive succeeded), `SUSPENDED` (the last keep-alive failed but the deadline has not
 passed) or `CLOSED`.
 
-## The Local Deadline
+## The Local Deadline: Durations, Not Timestamps
 
-The client never compares wall clocks with the backend. Each keep-alive reply carries the session's remaining time as
-a *duration* measured by the backend, and the client turns it into a deadline on its own monotonic clock:
+The node must stop considering itself owner *before* the backend can hand its leases to anyone else, without ever
+comparing its clock with the backend's. Every keep-alive reply therefore carries the session's remaining time as a
+**duration** measured by the backend's clock, and the client turns it into a deadline on its own monotonic clock:
 
 ```
 deadline = sentAt + remaining × (1 − drift) − margin
 ```
 
-`sentAt` is when the keep-alive was **sent**, not when the reply arrived, so a slow reply only shortens the deadline.
-Every backend call times out after the renew period in effect (shorter when the backend grants less than the lease),
-so a stuck call never holds the only keep-alive slot past the retries left before the deadline. As long as the two
-clocks run at rates within `1 ± drift` of each other, the local deadline passes before the backend
-can expire the session and give its leases to someone else. Once the local deadline has passed, a renewal that arrives
-late never extends it: the session ends (`DEADLINE_PASSED`) and its terms stay ended.
+Each term in that formula answers one way the node could overestimate its time:
+
+| Term | Why |
+|---|---|
+| `sentAt` | The backend started counting `remaining` somewhere between sending and receiving. Counting from when the keep-alive was **sent** assumes the worst case, so a slow reply only shortens the deadline. |
+| `× (1 − drift)` | The node's clock may run slower than the backend's. `drift` bounds that rate difference. |
+| `− margin` | A fixed safety allowance on top. |
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant N as Node (monotonic clock)
+    participant B as Backend (its own clock)
+    N->>B: keep-alive, sent at t0
+    B-->>N: Live(remaining = 15s)
+    Note over N: deadline = t0 + 15s × (1 − drift) − margin
+    Note over B: expiry = time of the renewal + 15s
+    Note over N,B: the node's deadline passes first, so the backend<br>never hands out a lease the node still believes it holds
+```
+
+As long as the two clocks tick at rates within `1 ± drift` of each other, the local deadline passes before the backend
+expires the session. Once the local deadline has passed, a late reply never extends it: the session ends
+(`DEADLINE_PASSED`) and its terms stay ended. Every backend call also times out after the renew period in effect, so a
+stuck call cannot hold the only keep-alive slot past the retries left before the deadline.
+
+What drift does **not** cover is a *step* of a clock: an NTP step or a VM migration on a backend host shortens or
+lengthens every lease at once. See [Failure Modes](/guide/correctness#failure-modes).
 
 ## Leases, Terms and Tokens
 
-A **lease** is a backend record `name → (session, token)`. Lease names are 1–128 characters of `[A-Za-z0-9._:-]`,
-other than `.` and `..`, on every backend, so a name means the same as a Redis key, a Zookeeper path and a JDBC column.
+A **lease** is the backend record `name → (session, token)`. Names are 1–128 characters of `[A-Za-z0-9._:-]`, other
+than `.` and `..`, on every backend, so the same name works as a Redis key, a Zookeeper path and a JDBC column.
 
-A **term** is one period during which this node owns a lease. Winning the same name twice gives two different
-`Term` objects. A term carries:
+A **term** is one period during which this node owns a lease, as a `Term` object. Winning the same name twice gives two
+different `Term` objects, so code that received one term can never pick up the token of a later one.
 
 | Member | Meaning |
 |---|---|
@@ -360,14 +426,14 @@ A **term** is one period during which this node owns a lease. Winning the same n
 | `token` | Fencing token: greater than zero, constant within the term, strictly increasing across terms of the name |
 | `isValid` | Not revoked and the session's local deadline has not passed |
 | `remaining()` | Time left before the local deadline; `Duration.ZERO` once the term ended |
-| `ensureValid(minRemaining)` | Throws `TermExpiredException` unless the term is valid for more than `minRemaining` |
+| `ensureValid(minRemaining)` | Throws `TermExpiredException` unless the term stays valid for more than `minRemaining` |
 | `revoked` | `CompletionStage<RevokeReason>` that completes exactly once, when the term ends |
 
-`isValid` and `remaining()` are pure functions of the monotonic clock and the session's deadline: no watchdog thread
-has to run first, so a process that wakes from a long pause sees `false` on its first read, and an ended term never
-becomes valid again even if the node is re-elected.
+`isValid` and `remaining()` are pure functions of the monotonic clock and the session's deadline. No watchdog thread
+has to run first, so a process waking from a long pause reads `false` on its first read, and an ended term never
+becomes valid again, even if the node is re-elected.
 
-A term ends for one of these reasons:
+A term ends for exactly one of these reasons:
 
 | `RevokeReason` | When |
 |---|---|
@@ -378,7 +444,91 @@ A term ends for one of these reasons:
 | `TAKEN_OVER` | A keep-alive reply no longer lists the lease as owned by this session |
 
 A term is always revoked **before** its lease is released, and every release carries the term's token, so a release
-that arrives late cannot free a later term.
+that arrives late is a no-op for any later term.
+
+## Becoming Leader
+
+A node that wants a lease and does not hold it is a **candidate**. It attempts to acquire every `renewInterval / 2`
+plus a random jitter, with at most one attempt per election in flight. Redis and Zookeeper also broadcast releases, so
+a clean stop of the leader is taken over at once there; on JDBC the next attempt picks it up.
+
+A won lease becomes a term only if all of these hold, because each guards against a stale answer:
+
+- the reply belongs to the election's **current** attempt (a late reply to an abandoned attempt releases what it won);
+- it arrived **before** the session's local deadline;
+- its token is **above** every token this session released for the name.
+
+## The Lifecycle of an Election
+
+An election moves through four states, the same `status` values that [`snapshot()`](/guide/observability#snapshot)
+reports:
+
+```mermaid
+stateDiagram-v2
+    [*] --> CANDIDATE: start
+    CANDIDATE --> LEADER: lease won, term adopted
+    LEADER --> CANDIDATE: term lost<br>deadline, take-over, session expired
+    LEADER --> HANDOVER: stop / stepDown, work running
+    HANDOVER --> COOLDOWN: work exited, lease released<br>(stepDown)
+    HANDOVER --> [*]: work exited, lease released<br>(stop)
+    LEADER --> COOLDOWN: stepDown, no work
+    CANDIDATE --> COOLDOWN: stepDown
+    COOLDOWN --> CANDIDATE: cooldown over
+    LEADER --> [*]: stop, no work
+    CANDIDATE --> [*]: stop
+    COOLDOWN --> [*]: stop
+```
+
+A term lost involuntarily (deadline, take-over, session expiry) sends the election straight back to `CANDIDATE`: it
+keeps contending for the next term. A lock is the exception: it takes one term and is
+[released for good](/guide/locks#losing-a-lock-early) when that term ends.
+
+## Handover Order
+
+When leadership moves voluntarily, the old leader's work must stop before the new leader's work starts. So `stop()`
+and `stepDown(cooldown)` give the lease up in a fixed order when the election runs work (`runWhileLeader`,
+`schedule`, a partition group, `@SimbaScheduled`, `@SimbaPartitioned`):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Caller
+    participant E as Engine
+    participant W as Leader work
+    participant B as Backend
+    U->>E: stop() / stepDown(cooldown)
+    E->>W: revoke the term (isValid = false), interrupt
+    W-->>E: work exits (or the term's local deadline passes)
+    E->>B: release(name, token)
+    E->>U: onRevoked(term, STOPPED / STEPPED_DOWN), future completes
+```
+
+The lease stays held until the work exited or the session's local deadline at the stop passed, whichever comes first.
+Work that ignores interruption therefore delays the handover by up to the term's remaining time. Terms without work
+release at once.
+
+A term lost any other way is **not** waited for: the backend may already have given the lease to another node, so
+holding on would only pretend. The work is interrupted and the term revoked immediately.
+
+`stepDown(cooldown)` keeps the election started but stops contending for `cooldown`, counted from the step-down: use
+it to move leadership off a node before a deploy. `stop()` ends the election.
+
+## Callbacks and Lifecycle
+
+- Every `onElected(term)` is followed by exactly one `onRevoked(term, reason)` for the same term.
+- Callbacks of one election run one at a time, in order, on a serial dispatcher over the callback executor (virtual
+  threads by default). No internal lock is held while they run, and the engine never waits for a callback except
+  through the futures of `stop()` and `stepDown()`.
+- `stop()` and `stepDown()` return a `CompletionStage<Void>` that completes after the last `onRevoked` ran; after
+  `stop()` completed, the listener receives nothing more.
+- `start(listener)` throws `IllegalStateException` while the same name is already started on this client.
+- Blocking `close()` methods (`Simba`, `LeaderTask`, `LockTerm`, `GroupTask`) do not wait when called from a callback
+  or from leader work, where waiting would wait for itself.
+- With a direct callback executor, callbacks run on the engine loop: chain on the stages the client returns there.
+  Converting a pending one with `toCompletableFuture()` throws `IllegalStateException`, since waiting for it would
+  block the loop that completes it.
+- If the callback executor rejects an `onElected`, nobody learns of the term and its work never starts: the election
+  steps down for one lease duration, and that term's `onRevoked` is not delivered either, so callbacks stay paired.
 
 ## Timing
 
@@ -391,19 +541,12 @@ that arrives late cannot free a later term.
 | `retryJitter` | `renewInterval / 2` | Candidates retry after `renewInterval / 2` plus a random delay in `[0, retryJitter)` |
 | `minBackoff` | 100 ms | Lower bound of the backoff after a failed keep-alive |
 
-Build it with `SimbaConfig.builder()` (`toBuilder()` derives a variant); `build()` fails unless
-`renewInterval × 2 ≤ leaseDuration` (at least two keep-alive attempts fit before the deadline) and
-`leaseDuration × (1 − drift) − margin > renewInterval` (otherwise every term would flap). In Spring Boot these are the
-[`simba.session.*`](/guide/configuration#properties) properties.
+Build it with `SimbaConfig.builder()` (`toBuilder()` derives a variant). `build()` fails unless
+`renewInterval × 2 ≤ leaseDuration`, so at least two keep-alive attempts fit before the deadline, and
+`leaseDuration × (1 − drift) − margin > renewInterval`, since otherwise every term would flap. In Spring Boot these are
+the [`simba.session.*`](/guide/configuration#properties) properties.
 
-A backend may grant less than `leaseDuration` — a Zookeeper server caps the session timeout at its
-`maxSessionTimeout`. When two keep-alives at `renewInterval` no longer fit in the local validity it grants, the client
-renews every third of that validity instead and publishes `SessionLeaseShortened` (and a warning) once per session,
-rather than letting every term end with `DEADLINE_PASSED`. Zookeeper always grants less: a keep-alive proves the
-session alive at the leader only up to `5/12` of the session timeout (see
-[Backends](/guide/backends#zookeeper)), so with the default lease it renews about every two seconds.
-
-How to choose:
+Each knob trades one thing for another:
 
 - **`leaseDuration`** bounds failover after a crash or a partition: the other nodes can take a lease over only after
   the session expired on the backend. Shorter means faster failover but less tolerance for slow backend calls and GC
@@ -411,46 +554,63 @@ How to choose:
 - **`renewInterval`** is how often the node calls the backend. A keep-alive call times out after one renew interval;
   after a failure the client retries with halving backoff (half the time left, capped at `renewInterval`, at least
   `minBackoff`) until the deadline.
-- **`drift`** and **`margin`** only shorten the local view of the lease; raise them if your hosts' clocks are poorly
+- **`drift`** and **`margin`** only shorten the local view of the lease. Raise them if your hosts' clocks are poorly
   disciplined or run in VMs that can be paused.
 
-## Candidates
+A backend may grant less than `leaseDuration`; a Zookeeper server, for example, caps the session timeout at its
+`maxSessionTimeout`. When two keep-alives at `renewInterval` no longer fit in the local validity it grants, the client
+renews every third of that validity instead and publishes `SessionLeaseShortened` (and a warning) once per session,
+rather than letting every term end with `DEADLINE_PASSED`. Zookeeper always grants less: a keep-alive proves the
+session alive at the leader only for `5/12` of the session timeout (see [Backends](/guide/backends#zookeeper)), so with
+the default lease it renews about every two seconds.
 
-A node that wants a lease and does not hold it is a *candidate*. Candidates attempt to acquire every
-`renewInterval / 2` plus jitter. Redis and Zookeeper also broadcast releases, so a clean stop of the leader is taken
-over at once there; on JDBC the next attempt picks it up. At most one acquire per election is in flight.
+## Next
 
-A term is adopted only from the reply to the election's current attempt, received before the session's local
-deadline, and only with a token above every token this session released for the name. A late reply to an abandoned
-attempt releases what it won.
+The model above bounds what a node *believes*. What it may still *do* after a pause, and how your resource stops it,
+is on [Fencing and Failures](/guide/correctness).
+</doc>
 
-## Fencing Tokens
+<doc title="Fencing and Failures" path="guide/correctness.md">
+# Fencing and Failures
 
-A term's validity is a hint for when to *start* a step, never proof that nobody else owns the lease. Only the
-protected resource can reject a stale owner, and it needs the token to do so:
+[How Simba Works](/guide/concepts) bounds what a node *believes*: its term ends before the backend can hand the lease
+to anyone else. This page is about what a node may still *do* after it stopped being owner, and what your code must do
+when that must never matter.
 
-1. Pass `term.token` with every write to the protected resource.
-2. The resource accepts the write only if the token is **at least** the highest token it has accepted, and records
-   it. Equal tokens must be accepted: retries within one term carry the same token.
+## Why a Valid Term Is Not Enough
+
+Checking `term.isValid` before a write narrows the window for a stale write; it cannot close it. The process can pause
+right after the check:
 
 ```mermaid
 sequenceDiagram
-autonumber
+    autonumber
     participant A as Node A (token 7)
-    participant B as Node B (token 8)
+    participant B as Node B
     participant R as Resource
-    A->>A: paused by GC, session expires
-    B->>R: write(token 8) accepted, highest = 8
-    A->>R: write(token 7) after waking up
-    R-->>A: rejected (7 < 8)
+    A->>A: isValid = true, start the write
+    Note over A: paused by GC, session expires
+    B->>B: wins the lease, token 8
+    B->>R: write(token 8)
+    R-->>B: accepted, highest = 8
+    A->>R: write(token 7), sent after waking up
+    R-->>A: rejected, 7 is lower than 8
 ```
 
-### Checking Tokens in the Resource
+Only the resource sees both writes, so only the resource can decide. It needs a number that grows with every new
+owner and survives pauses: the term's **fencing token**.
 
-The check and the write must be **one atomic step**. Reading the highest token first and writing afterwards lets a
-stale owner pass the check and land its write after a newer owner.
+## The Fencing Protocol
 
-**SQL** — one conditional `UPDATE`; zero matched rows means a stale owner:
+1. Pass `term.token` with every write to the protected resource.
+2. The resource accepts a write only if its token is **at least** the highest token it has accepted, and records it.
+   Equal tokens must be accepted: retries within one term carry the same token.
+3. The check and the write are **one atomic step**. Reading the highest token first and writing afterwards lets a
+   stale owner pass the check and land its write after a newer owner.
+
+### Recipes
+
+**SQL**: one conditional `UPDATE`; zero matched rows means a stale owner.
 
 ```sql
 -- once per resource: insert ignore into ledger_state (id) values (?);
@@ -461,7 +621,7 @@ where id = ? and fencing_token <= ?;
 
 MySQL Connector/J reports matched rows by default, so a retry with the same token and values still counts as `1`.
 
-**Redis** — one Lua script; keep the token and the value in the same hash slot (`{resource}`) for Redis Cluster:
+**Redis**: one Lua script; keep the token and the value in the same hash slot (`{resource}`) for Redis Cluster.
 
 ```lua
 -- KEYS[1] = {resource}:token, KEYS[2] = {resource}:value, ARGV[1] = token, ARGV[2] = value
@@ -474,7 +634,7 @@ redis.call('set', KEYS[2], ARGV[2])
 return 1
 ```
 
-**In one JVM** — check and write under the same lock:
+**In one JVM**: check and write under the same lock.
 
 ```kotlin
 synchronized(state) {
@@ -485,20 +645,24 @@ synchronized(state) {
 }
 ```
 
-### Verifying a Resource
+### Verify Your Resource
 
-`simba-tck` ships `FencingSpec`, a JUnit test kit for your own resource; see
+`simba-tck` ships `FencingSpec`, a JUnit kit that races writers against your resource; see
 [Testing](/guide/testing#verifying-a-fencing-resource). The recipes above pass it
 ([`JdbcFencingRecipeTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/test/kotlin/me/ahoo/simba/jdbc/JdbcFencingRecipeTest.kt),
 [`RedisFencingRecipeTest`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-redis/src/test/kotlin/me/ahoo/simba/redis/RedisFencingRecipeTest.kt)).
 
-| Backend | Token source | Caveat |
-|---|---|---|
-| JDBC | `simba_lease.token`, `+1` per term | Rows are never deleted, so the token never resets |
-| Redis | `token` field of `simba:lease:{name}`, `+1` per term | Asynchronous replication: [can go back after a failover](/guide/backends#token-regression-after-a-failover) |
-| Zookeeper | `czxid` of the lease node | Strictly increasing but not consecutive |
+## Where Tokens Come From
 
-## Checking the Term Before Each Step
+A token is only as monotonic as the storage that counts it:
+
+| Backend | Token source | Can it go back? |
+|---|---|---|
+| JDBC | `simba_lease.token`, `+1` per term; rows are never deleted | Only if the database loses committed data, e.g. a failover to an asynchronous replica |
+| Redis | `token` field of `simba:lease:{name}`, `+1` per term | Yes, after a failover that loses recent writes or an eviction: see [token regression](/guide/backends#token-regression-after-a-failover) |
+| Zookeeper | `czxid` of the lease node: strictly increasing, not consecutive | Only if the ensemble's data is lost or restored from an older snapshot |
+
+## Check Before Each Step
 
 `term.ensureValid(minRemaining)` throws `TermExpiredException` unless the term stays valid for more than
 `minRemaining`. Call it before a step that should not start when the term is about to end:
@@ -512,54 +676,19 @@ simba.election("ledger").runWhileLeader { term ->
 }
 ```
 
-This narrows the window in which an expired owner starts new work; it does not close it. A pause *after* the check is
-still possible, which is why the resource must check the token.
+This keeps an owner from *starting* work it cannot finish in time. It does not stop a pause *after* the check, which is
+why the resource still checks the token.
 
-## Handover Order
+## Choosing Your Protection
 
-`stop()` and `stepDown(cooldown)` give the lease up in a fixed order when the election runs work
-(`runWhileLeader`, `schedule`, a partition group, `@SimbaScheduled`, `@SimbaPartitioned`):
+| The protected step is... | Do |
+|---|---|
+| A write to storage that can compare a number atomically | Fence it with `term.token` |
+| A call to a system that cannot check tokens (an email, a payment API) | Make it idempotent with a key derived from the work, not from the term; fencing cannot help there |
+| Merely wasteful when repeated | Rely on the term; check `ensureValid` before long steps |
 
-```mermaid
-sequenceDiagram
-autonumber
-    participant U as Caller
-    participant E as Engine
-    participant W as Leader work
-    participant B as Backend
-    U->>E: stop() / stepDown(cooldown)
-    E->>W: revoke term (isValid = false), interrupt
-    W-->>E: work exits (or the term's local deadline passes)
-    E->>B: release(name, token)
-    E->>U: onRevoked(term, STOPPED / STEPPED_DOWN), future completes
-```
-
-The lease stays held until the work exited or the session's local deadline at the stop passed, whichever comes first,
-so no other node starts the same work while the old run is still finishing. Work that ignores interruption therefore
-delays the handover up to the term's remaining time. Terms without work release at once.
-
-A term lost any other way (deadline, take-over, session expiry) is not waited for: the backend may already have given
-the lease to another node, so the work is interrupted and the term revoked immediately.
-
-`stepDown(cooldown)` keeps the election started but does not contend for `cooldown`, counted from the step-down: use
-it to move leadership off a node before a deploy or to drain it. `stop()` ends the election.
-
-## Callbacks and Lifecycle
-
-- Every `onElected(term)` is followed by exactly one `onRevoked(term, reason)` for the same term.
-- Callbacks of one election run one at a time, in order, on a serial dispatcher over the callback executor (virtual
-  threads by default). No internal lock is held while they run, and the engine never waits for a callback except
-  through the futures of `stop()` and `stepDown()`.
-- `stop()` and `stepDown()` return a `CompletionStage<Void>` that completes after the last `onRevoked` ran; after
-  `stop()` completes, the listener receives nothing more.
-- `start(listener)` throws `IllegalStateException` while the same name is already started on this client.
-- Blocking `close()` methods (`Simba`, `LeaderTask`, `LockTerm`, `GroupTask`) do not wait when called from a
-  callback or from leader work, where waiting would wait for itself.
-- With a direct callback executor, callbacks run on the engine loop: chain on the stages the client returns there.
-  Converting a pending one with `toCompletableFuture()` throws `IllegalStateException`, since waiting for it would
-  block the loop that completes it.
-- If the callback executor rejects an `onElected`, nobody learns of the term and its work never starts: the election
-  steps down for one lease duration, and that term's `onRevoked` is not delivered either, so callbacks stay paired.
+After any failover the next leader may redo the last step of the previous one, so idempotent work is cheaper to run
+under every one of these choices.
 
 ## Failure Modes
 
@@ -569,27 +698,42 @@ it to move leadership off a node before a deploy or to drain it. `stop()` ends t
 | Leader stops cleanly | Work exits, the lease is released; Redis and Zookeeper candidates acquire at once, JDBC candidates at their next attempt. |
 | Backend unreachable | Session `SUSPENDED`, keep-alive retried with backoff; at the local deadline every term of the node is revoked (`DEADLINE_PASSED`) and a new session is opened once the backend answers. Nothing keeps running as leader meanwhile. |
 | Backend reports the session expired | Every term revoked (`SESSION_EXPIRED`), new session, contend again. |
-| Leader paused longer than the lease (GC, VM freeze) | On waking, `term.isValid` is already `false`; the engine revokes the term. Writes already in flight can still land: the [fencing token](#fencing-tokens) is the only defense. |
+| Leader paused longer than the lease (GC, VM freeze) | On waking, `term.isValid` is already `false`; the engine revokes the term. Writes already in flight can still land: the [fencing token](#the-fencing-protocol) is the only defense. |
 | Keep-alive shows the lease owned by someone else | Term revoked (`TAKEN_OVER`). |
 | Zookeeper follower loses the leader | The follower still answers reads for up to `syncLimit` ticks while the leader stops seeing the session and expires it. Keep-alives `sync` through the leader, so they fail on such a follower and the local deadline runs out; it never outlasts the leader's view of the session. |
 | Clock rate differs by more than `drift` | The safety argument no longer holds; raise `drift`. |
 | Redis failover loses recent writes | A token can go back; see [Backends](/guide/backends#token-regression-after-a-failover). |
 | Redis evicts keys under memory pressure (`allkeys-*` policy) | An evicted lease hash restarts its token at 1, so tokens go back; use `noeviction` or a dedicated instance, see [Backends](/guide/backends#memory-eviction). |
-| Failover to an asynchronous database replica (MySQL replica, PostgreSQL standby promotion) | Like a Redis failover: recent token increments and keep-alives can be lost, so a token can go back. Use synchronous replication when fencing must hold; see [Backends](/guide/backends#operating-notes). |
+| Failover to an asynchronous database replica (MySQL replica, PostgreSQL standby promotion) | Like a Redis failover: recent token increments and keep-alives can be lost, so a token can go back. Use synchronous replication when fencing must hold; see [Backends](/guide/backends#jdbc-operating-notes). |
 | Backend host's clock steps (NTP step, VM migration) | JDBC and Redis measure leases with that clock, so every lease shortens (forward step) or lengthens (backward step) at once. A forward step can expire a holder's lease on the backend while its local deadline has not passed: another node can win a term while the old holder still reads `isValid`. This is not rate drift and `drift` does not cover it; only the fencing token protects. Run the backend hosts with slewing time sync. |
 </doc>
 
 <doc title="Backends" path="guide/backends.md">
 # Backends
 
-Every backend implements the same `LeaseBackend` SPI and passes the same
-[TCK](/guide/testing#backend-tck), so elections, locks and groups behave the same on all of them. They differ in
-storage, in where time is measured, and in how durable the fencing token is.
+A backend is the one place where nodes agree. Simba asks very little of it, and each requirement comes straight from
+[the model](/guide/concepts):
 
-Every backend follows the same rules: a session expires once it was not kept alive for its lease; an expired session
-is never revived; a lease belongs to a session only while that session is live; a lease's token is greater than zero,
-strictly increases with every new term and never resets; and every remaining time is measured by the backend's clock
-and returned as a duration.
+| Requirement | Why |
+|---|---|
+| A session expires once it was not kept alive for its lease | A crashed node's leases must free themselves |
+| An expired session is never revived | Its leases may already belong to someone else |
+| A lease belongs to a session only while that session is live | Ownership ends with liveness |
+| A lease's token is greater than zero, strictly increases with every new term and never resets | Resources compare tokens to reject stale owners |
+| Remaining time is measured by the backend's own clock and returned as a duration | Nodes never compare timestamps with the backend |
+
+Every backend implements the same `LeaseBackend` SPI and passes the same [TCK](/guide/testing#backend-tck), so
+elections, locks and groups behave alike on all of them. What differs is *how* each storage meets these requirements,
+and therefore what can break them:
+
+| | JDBC | Redis | Zookeeper |
+|---|---|---|---|
+| Session | Row in `simba_session` | Hash `simba:session:{sid}` with `PX` | A Zookeeper session |
+| Lease | Row in `simba_lease`, never deleted | Hash `simba:lease:{name}`, never expires | Ephemeral node `{root}/leases/{name}` |
+| Clock | Database `now` | Redis `TIME` | Zookeeper session timeout (servers' elapsed time) |
+| Token | Counter in the row, `+1` per term | Counter in the hash, `+1` per term | The node's `czxid` |
+| Release broadcast | None | Pub/sub on the lease key | Node watch |
+| Token durability | The database's commits | Asynchronous replication, memory | Quorum commits |
 
 ## JDBC (MySQL 8, PostgreSQL 14+)
 
@@ -641,10 +785,10 @@ create table if not exists simba_member
 
 Lease and group names are case-sensitive (binary collations on MySQL, `"C"` on PostgreSQL).
 
-### How It Works
+### How It Works {#jdbc-how-it-works}
 
 - A lease belongs to the session in `session_id` only while that session's `expires_at` is in the future. Acquire is
-  one upsert that takes the row when it is free or its session expired and advances `token` by one. On MySQL the
+  one upsert that takes the row when it is free or its session expired, and advances `token` by one. On MySQL the
   `token` assignment comes first in `SET`, because MySQL evaluates `SET` left to right with already-updated values.
 - The take-over reads the holder's session row with a shared lock (`for share`), so it serializes with that session's
   keep-alive at any isolation level: a renewal that commits concurrently either wins, or sees the lease gone in the
@@ -656,10 +800,10 @@ Lease and group names are case-sensitive (binary collations on MySQL, `"C"` on P
   `purgeExpired()`, which runs at most once per `purgeInterval` (default one minute) after an `openSession` or
   `keepAlive`, up to 1000 sessions per run, along `idx_session_expires`.
 
-### Operating Notes
+### Operating Notes {#jdbc-operating-notes}
 
-- A release does not notify anyone: after a clean stop, candidates take over at their next attempt
-  (`renewInterval / 2` plus jitter).
+- A release notifies no one: after a clean stop, candidates take over at their next attempt (`renewInterval / 2` plus
+  jitter).
 - Each statement has a timeout; the starter sets it to the session renew interval (`simba.jdbc.query-timeout`), after
   which the engine gives up on the call anyway. Without Spring, `JdbcLeaseBackend` defaults to 5 s
   (`DEFAULT_QUERY_TIMEOUT`, the default renew interval); pass your renew interval as `queryTimeout` when you change it.
@@ -679,7 +823,7 @@ Lease and group names are case-sensitive (binary collations on MySQL, `"C"` on P
 Module `simba-redis` (driver-neutral, Lua scripts behind the `RedisScripting` port) and `simba-spring-redis`
 (`SpringRedisScripting`, the Spring Data Redis adapter). `SpringRedisScripting` needs Lettuce, the Spring Boot default
 client: with Jedis, subscriptions block the calling thread and `WAIT` is unavailable, so the starter fails startup on a
-non-Lettuce `RedisConnectionFactory`:
+non-Lettuce `RedisConnectionFactory`.
 
 ```kotlin
 val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
@@ -691,17 +835,21 @@ val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
 |---|---|---|
 | `simba:lease:{name}` | Hash, never expires | `session`, `token`, `expires` (Redis `TIME`); release clears `session` only, so the token never resets |
 | `simba:session:{sid}` | Hash with `PX` = lease | The session; keep-alive, acquire and join fail once it is gone |
-| `simba:session:{sid}:leases` | Set, same slot | Leases of the session |
+| `simba:session:{sid}:leases` | Sorted set, same slot | Lease keys of the session, scored by the acquire attempt's Redis time |
 | `simba:session:{sid}:groups` | Set, same slot | Groups the session joined |
 | `simba:group:{group}` | Sorted set | Members (session ids) scored by expiry in Redis time |
 
 Release publishes `released` on the lease key's channel (`simba:lease:{name}`); it is the only broadcast and lets
 candidates take over at once. Every time decision uses Redis `TIME` inside the scripts.
 
-Leases expire on their own: a new term lasts as long as its session, and a keep-alive extends every lease the session
-holds, found through its lease index, so a lease acquired while a keep-alive was in flight is extended too. Closing a
-session deletes it first, then frees its leases and memberships, then drops its indexes, so a close repeated after a
-failure finishes the job.
+### How It Works {#redis-how-it-works}
+
+- Leases expire on their own: a new term lasts as long as its session, and a keep-alive extends every lease the session
+  holds, found through its lease index, so a lease acquired while a keep-alive was in flight is extended too.
+- Keep-alive, acquire and join fail once the session hash's `PTTL` reaches 0. Redis still keeps the key during that
+  millisecond, so a bare `PEXPIRE` would revive a session that already expired.
+- Closing a session deletes it first, then frees its leases and memberships, then drops its indexes, so a close
+  repeated after a failure finishes the job.
 
 ### Cluster
 
@@ -730,7 +878,7 @@ Redis replication is asynchronous. When a master fails before a replica received
 promoted replica can hand out a token that was already used, or a lower one. A resource that checks tokens can then
 accept a write from a node whose term is newer in time but lower in token, or reject a legitimate owner. No client
 can prevent this: the deterministic simulation injects such data loss and confirms that tokens then regress
-(`premise:tokenReset`), which is why the mitigations below are on the backend side.
+(`premise:tokenReset`), which is why the mitigations are on the backend side:
 
 - Set `simba.redis.wait-replicas` (constructor parameter `waitReplicas`): a new term counts only once that many
   replicas acknowledged it with `WAIT`, otherwise the acquisition fails. This narrows the window; it does not close it,
@@ -768,12 +916,12 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 
 `root` defaults to `/simba`.
 
-### How It Works
+### How It Works {#zookeeper-how-it-works}
 
-- A Simba session is one Zookeeper session: the backend opens a dedicated Zookeeper client per session (it does not
+- **A Simba session is one Zookeeper session.** The backend opens a dedicated Zookeeper client per session (it does not
   use a shared Curator client) and never reconnects it to another session. The `SessionId` is the Zookeeper session id
   as 16 hex digits.
-- The token is the lease node's `czxid`: strictly increasing across terms because zxids are global, but not
+- **The token is the lease node's `czxid`**: strictly increasing across terms because zxids are global, but not
   consecutive.
 - Release deletes the node; candidates watch it and take over at once. Group membership changes are watched too,
   including the creation of a group that did not exist yet.
@@ -782,22 +930,30 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
   released by the engine. Releases of one session run one at a time.
 - The Zookeeper client heartbeats on its own, so a local watchdog closes a session that no keep-alive renewed within
   the lease: a node that stopped renewing never keeps its leases through heartbeats alone.
-- Only the leader expires sessions, and a follower answers reads from its own state until it notices it lost the
-  leader (`syncLimit` ticks), while it reports the session's activity to the leader only on its next ping. So a
-  keep-alive first `sync`s through the leader, and its remaining time is `min(leaseDuration, 5/12 × negotiated session
-  timeout)`: the client sends at least every third of the timeout and the leader pings every half tick (at most a
-  quarter of the timeout), so the leader saw the session at most `7/12` of the timeout before the reply. With the
-  default lease the client therefore renews about every two seconds and publishes `SessionLeaseShortened` once per
-  session.
-- So a node keeps its terms through a pause (GC, network stall) of only about `5/12` of the session timeout: about
-  6 s with the default 15 s lease, against about 15 s before 5.1, and renews about three times as often, each time
-  with a round trip to the leader. `leaseDuration` keeps its meaning (after a crash the others take over within about
-  a lease), so the session timeout is not enlarged: when tolerating pauses matters more than failover time, raise
-  `simba.session.lease-duration` (for example 36 s for 5.0's tolerance, with failover after a crash in about 36 s).
 - While the client is disconnected, or on a follower cut off from the leader, keep-alive and acquire fail, so the local
   deadline runs out; when Zookeeper reports the session expired, the session is `Expired`.
 
-### Operating Notes
+### Why a Keep-Alive Leaves 5/12 of the Timeout
+
+Only the Zookeeper leader expires sessions, while a follower answers reads from its own state until it notices it lost
+the leader (`syncLimit` ticks), and reports the session's activity to the leader only on its next ping. A successful
+read on a follower therefore proves little about what the leader will do. So a keep-alive first `sync`s through the
+leader, and reports a remaining time of `min(leaseDuration, 5/12 × negotiated session timeout)`: the client sends at
+least every third of the timeout and the leader pings every half tick (at most a quarter of the timeout), so the leader
+saw the session at most `7/12` of the timeout before the reply.
+
+The consequences:
+
+- With the default lease the client renews about every two seconds and publishes `SessionLeaseShortened` once per
+  session.
+- A node keeps its terms through a pause (GC, network stall) of only about `5/12` of the session timeout: about 6 s
+  with the default 15 s lease, against about 15 s before 5.1, and renews about three times as often, each time with a
+  round trip to the leader.
+- `leaseDuration` keeps its meaning (after a crash the others take over within about a lease), so the session timeout
+  is not enlarged. When tolerating pauses matters more than failover time, raise `simba.session.lease-duration` (for
+  example 36 s for 5.0's tolerance, with failover after a crash in about 36 s).
+
+### Operating Notes {#zookeeper-operating-notes}
 
 - The session timeout requested is `leaseDuration`; the ensemble clamps it to `[minSessionTimeout,
   maxSessionTimeout]` (by default 2 to 20 ticks). Failover after a crash takes the negotiated timeout.
@@ -809,11 +965,11 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 - Writes commit through a quorum, so a leader change keeps every token; tokens can only go back if the ensemble's data
   is lost or restored from an older snapshot. Session timeouts are tracked with the servers' elapsed time, so a wall
   clock step on an ensemble host does not shorten them.
-- Group names follow the `LeaseName` rules (1–128 characters of `[A-Za-z0-9._:-]`, not `.` or `..`), as on every
-  backend. `members` reads through the client of the session that last joined or left the group on this node, so
-  that change is always in the view (Zookeeper orders the requests of a session), after a `sync` that brings a
-  follower up to date with the leader. A `sync` is answered locally on the leader, so a change made by another node can
-  show there a moment later; membership hints and the periodic refresh pick it up.
+- Group names follow the `LeaseName` rules, as on every backend. `members` reads through the client of the session that
+  last joined or left the group on this node, so that change is always in the view (Zookeeper orders the requests of a
+  session), after a `sync` that brings a follower up to date with the leader. A `sync` is answered locally on the
+  leader, so a change made by another node can show there a moment later; membership hints and the periodic refresh
+  pick it up.
 
 ### Security
 
@@ -835,25 +991,29 @@ val backend = ZookeeperLeaseBackend(
   leases and members: create them with the backend's identity, or set their ACL yourself.
 - Spring Boot: `simba.zookeeper.auth.scheme` / `simba.zookeeper.auth.credentials` and `simba.zookeeper.acl`
   (`auto` gives creator-only nodes once credentials are set); an `ACLProvider` bean replaces the ACL and a
-  `ZKClientConfig` bean configures every client (see [Configuration](./configuration.md)).
+  `ZKClientConfig` bean configures every client (see [Spring Boot](/guide/configuration#properties)).
 
 ## Selecting a Backend in Spring Boot
 
-Each backend auto-configuration activates when its module is on the classpath, `simba.enabled` and
-`simba.<backend>.enabled` are not `false`, and `simba.backend` is unset or names it. It defines the `LeaseBackend`
-bean unless the application defines one.
-
-With several backend modules on the classpath, set `simba.backend=jdbc|redis|zookeeper`; startup fails otherwise, and
-also when `simba.backend` names a backend that is not active. To use a backend the starter does not configure (or a
-`LeaseBackend` of your own), define the `LeaseBackend` bean yourself. See [Spring Boot](/guide/configuration).
+The starter activates the backend whose module is on the classpath; with several, set `simba.backend`. The rules are on
+[Spring Boot](/guide/configuration#selecting-the-backend).
 </doc>
 
 <doc title="Spring Boot" path="guide/configuration.md">
 # Spring Boot
 
-`simba-spring-boot-starter` builds one `Simba` client over the backend on the classpath, runs `@SimbaScheduled` and
-`@SimbaPartitioned` methods, and adds Micrometer metrics, the `simba` Actuator endpoint and the `simba` health
-indicator.
+`simba-spring-boot-starter` turns the classpath into one `Simba` client: it picks the backend, builds the client over
+it, runs `@SimbaScheduled` and `@SimbaPartitioned` methods, and adds Micrometer metrics, the `simba` Actuator endpoint
+and the `simba` health indicator. Closing happens in an order that lets leader work hand over before the backend's
+connections go away.
+
+```mermaid
+graph LR
+    CP["Backend module<br>on the classpath"] --> LB["LeaseBackend bean<br>unless you define one"]
+    LB --> S["Simba bean<br>simba.session.*,<br>every SimbaEventListener bean"]
+    S --> A["@SimbaScheduled /<br>@SimbaPartitioned methods"]
+    S --> O["Metrics, Actuator endpoint,<br>health indicator"]
+```
 
 ## Properties
 
@@ -883,8 +1043,8 @@ indicator.
 | `simba.metrics.enabled` | `true` | Records Micrometer metrics when a `MeterRegistry` bean exists |
 | `management.health.simba.enabled` | `true` | The `simba` health indicator |
 
-The session properties are explained in [Concepts and Correctness](/guide/correctness#timing); invalid combinations
-fail startup. A typical configuration:
+What the session properties trade off is explained in [Timing](/guide/concepts#timing); invalid combinations fail
+startup. A typical configuration:
 
 ```yaml
 simba:
@@ -898,11 +1058,21 @@ management:
         include: health,simba
 ```
 
+## Selecting the Backend
+
+Each backend auto-configuration activates when its module is on the classpath, `simba.enabled` and
+`simba.<backend>.enabled` are not `false`, and `simba.backend` is unset or names it. It defines the `LeaseBackend`
+bean unless the application defines one.
+
+With several backend modules on the classpath, set `simba.backend`; startup fails otherwise, and also when
+`simba.backend` names a backend that is not active. To use a backend the starter does not configure (an
+`InMemoryLeaseBackend` in tests, or a `LeaseBackend` of your own), define the `LeaseBackend` bean yourself.
+
 ## Beans the Starter Creates
 
 | Bean | Condition |
 |---|---|
-| `LeaseBackend` (`JdbcLeaseBackend`, `RedisLeaseBackend` or `ZookeeperLeaseBackend`) | The backend is active and the application defines no `LeaseBackend`; JDBC needs a single `DataSource`, Redis a single `RedisConnectionFactory`; Zookeeper uses an `ACLProvider` and a `ZKClientConfig` bean when present |
+| `LeaseBackend` (`JdbcLeaseBackend`, `RedisLeaseBackend` or `ZookeeperLeaseBackend`) | The backend is active and the application defines no `LeaseBackend`; JDBC needs a single `DataSource`, Redis a single Lettuce `RedisConnectionFactory`; Zookeeper uses an `ACLProvider` and a `ZKClientConfig` bean when present |
 | `Simba` | A `LeaseBackend` bean exists; built with `simba.session.*` and every `SimbaEventListener` bean |
 | `SimbaLifecycle` | Closes the client on shutdown |
 | `SimbaScheduledBeanPostProcessor` | `simba.scheduling.enabled` |
@@ -918,14 +1088,16 @@ client beyond the properties (executors, a fixed seed), define the `Simba` bean 
 
 `@SimbaScheduled` runs a bean method on the leader of an election; `@SimbaPartitioned` runs it for every partition of
 a group this node leads. Both start after the context refreshed and stop on shutdown. Their attributes and method
-signatures are on the [Leader Work](/guide/leader-work#spring-annotations) page. The lease names they elect (the
-`name` of `@SimbaScheduled`, `{group}.{partition}` of `@SimbaPartitioned`) and the groups must be unique across both
+signatures are on [Leader Work](/guide/leader-work#spring-annotations). The lease names they elect (the `name` of
+`@SimbaScheduled`, `{group}.{partition}` of `@SimbaPartitioned`) and the groups must be unique across both
 annotations: startup fails on a conflict.
 
 ## Shutdown Order
 
+Leader work must finish and hand over while the backend is still reachable, so shutdown runs in two phases:
+
 1. `SimbaScheduledBeanPostProcessor` (phase `DEFAULT_PHASE`) stops every annotated method: work is interrupted, and
-   each lease is released once its work exited (see [Handover Order](/guide/correctness#handover-order)).
+   each lease is released once its work exited (see [Handover Order](/guide/concepts#handover-order)).
 2. `SimbaLifecycle` (phase `DEFAULT_PHASE - 4096`) then closes the `Simba` client, which revokes every remaining term,
    closes the session and frees its leases, before lower-phase infrastructure such as connection factories stops.
 
@@ -947,7 +1119,7 @@ val simba = Simba.builder()
 | Builder method | Default | Description |
 |---|---|---|
 | `backend(LeaseBackend)` | required | The backend; the client does not close it |
-| `config(SimbaConfig)` | `SimbaConfig.builder().build()` | Session timing, see [Timing](/guide/correctness#timing) |
+| `config(SimbaConfig)` | `SimbaConfig.builder().build()` | Session timing, see [Timing](/guide/concepts#timing) |
 | `listener(SimbaEventListener)` | none | Receives every [`SimbaEvent`](/guide/observability#events); may be called several times |
 | `ioExecutor(Executor)` | a virtual thread per call | Runs backend calls |
 | `callbackExecutor(Executor)` | virtual threads | Runs leadership callbacks, serially per election |
@@ -961,12 +1133,45 @@ groups of leases from each other's renewal failures, at the cost of one keep-ali
 afterwards.
 </doc>
 
-<doc title="Leader Work and Partitions" path="guide/leader-work.md">
-# Leader Work and Partitions
+<doc title="Elections and Leader Work" path="guide/leader-work.md">
+# Elections and Leader Work
 
-Work started through Simba is **bound to one term**: it receives that `Term`, runs only while the term lasts, and is
-interrupted when the term ends. It never reads "the current leadership state", so a run that started in one term can
-never pick up the token of a later one.
+An **election** is the long-running form of a lease: the node contends for a name, holds a term while it can, and
+contends again whenever it loses one. What you usually want, though, is not "know that I lead" but "run this code only
+while I lead". Simba therefore offers four levels, each built on the one before:
+
+| Level | API | You get |
+|---|---|---|
+| Listen | `election.start(listener)` | `onElected` / `onRevoked`; the work is yours to start, stop and hand over |
+| Run | `election.runWhileLeader { term -> }` | A block per term, interrupted when the term ends, handed over in order |
+| Schedule | `election.schedule(schedule) { term -> }` | A loop per term on a fixed delay or rate |
+| Partition | `simba.group(name, n).schedule { term, partition -> }` | N elections spread over the live nodes |
+
+Prefer the highest level that fits. Work started through Simba is **bound to one term**: it receives that `Term`, runs
+only while the term lasts, and is interrupted when it ends. It never reads "the current leadership state", so a run
+that started in one term can never use the token of a later one, and `stop()` waits for it before releasing the lease
+([Handover Order](/guide/concepts#handover-order)).
+
+## Elections
+
+```kotlin
+val election = simba.election("order-dispatcher")
+election.start(object : LeadershipListener {
+    override fun onElected(term: Term) = dispatcher.start(term.token)
+    override fun onRevoked(term: Term, reason: RevokeReason) = dispatcher.stop()
+})
+```
+
+| Member | Behavior |
+|---|---|
+| `start(listener)` | Starts contending; throws `IllegalStateException` while the name is already started on this client |
+| `stop()` | Stops contending; the `CompletionStage` completes after the last `onRevoked` ran (at once when not started) |
+| `stepDown(cooldown)` | Gives up the current term and does not contend for `cooldown`; the election stays started |
+
+Handles returned by `simba.election(name)` for the same name share one election. Callbacks run one at a time per
+election and must stay short; see [Callbacks and Lifecycle](/guide/concepts#callbacks-and-lifecycle). With a bare
+listener nothing waits for your work before the lease is released, so prefer `runWhileLeader` for anything that runs
+for a while.
 
 ## Run While Leader
 
@@ -986,9 +1191,11 @@ val task: LeaderTask = simba.election("ingest").runWhileLeader { term ->
   interruption or when `term.isValid` turns `false`.
 - A block that returns early keeps the term until it ends; the block does not run again until the next term.
 - Exceptions are logged and published as `SimbaEvent.WorkCompleted` with outcome `FAILED` (or `CANCELLED` once the term
-  has ended); they never affect the election.
+  has ended); they never affect the election. The exception is a `VirtualMachineError` (out of memory, stack
+  overflow): it ends the term's work, the election steps down for one lease duration, and the error is rethrown to the
+  work thread.
 - `task.stop()` stops the election and completes once the current work exited (or ran out of time) and the lease is
-  released; `task.close()` does the same and waits. See [Handover Order](/guide/correctness#handover-order).
+  released; `task.close()` does the same and waits.
 
 `runWhileLeader` and `schedule` throw `IllegalStateException` when the election is already started on this client.
 
@@ -1010,13 +1217,14 @@ simba.election("report").schedule(
 | `Schedule.fixedDelay(delay, initialDelay = 0)` | From the end of one run to the start of the next |
 | `Schedule.fixedRate(period, initialDelay = 0)` | Between scheduled starts; a run that overruns skips the missed starts instead of bursting |
 
-`initialDelay` counts from the start of each term. A failed run (an `Error` included) is logged and published, and the loop goes on; a `VirtualMachineError` ends the loop and steps the election down for one lease duration; the
-loop ends with its term. There is no thread pool per schedule.
+`initialDelay` counts from the start of each term, and the period must be positive. A failed run (an `Error` included)
+is logged and published, and the loop goes on; a `VirtualMachineError` ends the loop and steps the election down for
+one lease duration. The loop ends with its term. There is no thread pool per schedule.
 
 ## Partition Groups
 
-A partition group spreads `partitions` partitions over the live nodes of the group, each partition on exactly one
-node at a time:
+Some work splits into independent shards, and you want every live node to take a share, each shard on exactly one node
+at a time. A partition group spreads `partitions` partitions over the live nodes of the group:
 
 ```kotlin
 val task: GroupTask = simba.group("billing", partitions = 16)
@@ -1027,19 +1235,29 @@ val task: GroupTask = simba.group("billing", partitions = 16)
 task.partitions()   // partitions this node runs in its latest view
 ```
 
-How it works:
+It is built from parts you already know:
 
-1. The client's session joins the group on the backend; members are the group's live sessions, so membership needs no
+```mermaid
+graph LR
+    J["Each session joins<br>group 'billing'"] --> M["Members =<br>the group's live sessions"]
+    M --> A["Every node computes the same<br>rendezvous assignment<br>over the session ids"]
+    A --> C["A node contends only for<br>its partitions: lease 'billing.p'"]
+    A --> H["and hands over the ones<br>it no longer owns:<br>work first, then the lease"]
+```
+
+1. **Membership is the session.** The client's session joins the group on the backend, so membership needs no
    heartbeat of its own and disappears with the session.
-2. Every node computes the same assignment from the member list with rendezvous hashing (`PartitionAssignment`, over
-   session ids), so adding or removing a node moves only the partitions it gains or loses.
-3. Each partition `p` is an ordinary election of the lease `"{group}.{p}"`. A node contends only for the partitions
-   assigned to it, and hands over (work first, then the lease) the ones it no longer owns.
+2. **Assignment is computed, not negotiated.** Every node derives the same assignment from the member list with
+   rendezvous hashing (`PartitionAssignment`, over session ids), so a node joining or leaving moves only the partitions
+   it gains or loses.
+3. **Each partition is an ordinary election** of the lease `"{group}.{p}"`. A node contends only for the partitions
+   assigned to it and hands over the others with the usual [handover order](/guide/concepts#handover-order).
 4. The member view is refreshed on backend membership hints (Zookeeper) and every renew interval.
 
-The lease guarantees that a partition never has two valid terms at once, even while nodes disagree about the member
-list during a change; the assignment only decides who contends. Every member must use the same `partitions`. The
-group name follows the lease name rules, and `"{group}.{partitions - 1}"` must fit in 128 characters.
+While nodes disagree about the member list during a change, two of them may both want a partition, but the lease still
+lets at most one hold a valid term: the assignment only decides who *contends*. Every member must use the same
+`partitions`. The group name follows the lease name rules, and `"{group}.{partitions - 1}"` must fit in 128
+characters.
 
 `runWhileLeader { term, partition -> }` is available too. `GroupTask.stop()` leaves the group and stops every
 partition, completing once each one handed over, including partitions an earlier view moved away that are still
@@ -1089,14 +1307,15 @@ public class Billing {
 The method takes `(Term, int)`.
 
 String attributes of both annotations accept `${...}` placeholders, and durations use the Spring Boot formats (`10s`,
-`500ms`, `PT1M`). Methods start after the context refreshed and stop on shutdown before the client closes; see
-[Shutdown Order](/guide/configuration#shutdown-order). Disable them with `simba.scheduling.enabled=false`.
+`500ms`, `PT1M`). The lease names they elect and the groups share one namespace across both annotations: startup fails
+on a conflict. Methods start after the context refreshed and stop on shutdown before the client closes (see
+[Shutdown Order](/guide/configuration#shutdown-order)); disable them with `simba.scheduling.enabled=false`.
 
 ## Writing Good Leader Work
 
 - **Pass `term.token` to every write** the work makes to a shared resource. A paused node can still land a write after
-  its term ended; only a resource that checks the [fencing token](/guide/correctness#fencing-tokens) rejects it.
-- **Stop on interruption.** Blocking I/O that ignores interruption delays the handover up to the term's remaining
+  its term ended; only a resource that checks the [fencing token](/guide/correctness#the-fencing-protocol) rejects it.
+- **Stop on interruption.** Blocking I/O that ignores interruption delays the handover by up to the term's remaining
   time.
 - **Check before long steps:** `term.ensureValid(expectedStepDuration)` throws `TermExpiredException` instead of
   starting a step that would outlive the term.
@@ -1106,8 +1325,10 @@ String attributes of both annotations accept `${...}` placeholders, and duration
 <doc title="Locks" path="guide/locks.md">
 # Locks
 
-`simba.lock(name)` holds a lease around a step and releases it afterwards. The lock is an election of the same lease
-name that takes its first term and gives it back when you are done.
+A lock is the short-lived form of a lease: take it, do one step, give it back. In Simba it is an election of the
+lease name that takes its **first** term and releases it when you are done. Everything about leases still holds: the
+lock is bounded by the session's deadline, it can end before you release it, and the term it gives you carries a
+fencing token.
 
 ```kotlin
 simba.lock("invoice-42").acquire(Duration.ofSeconds(5)).use { term ->
@@ -1127,6 +1348,10 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 }
 ```
 
+Within one client a name has **at most one holder**: a second `acquire` of the same name waits until the first is
+released (or its own timeout passes). A lock and an election of the same name share one lease, so do not use one name
+for both.
+
 ## Acquiring
 
 | Method | Behavior |
@@ -1141,13 +1366,9 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 `acquireAsync` and `tryAcquireAsync` wait without a thread and complete on the client's callback executor (on its
 event loop only with a direct callback executor, as callbacks do). Their dependents run like callbacks: `close()` on
 the term there releases without waiting. A term that ends before the stage could complete with it is never returned:
-the lock contends again. **Cancelling** the returned future (`toCompletableFuture().cancel(...)`) abandons the attempt and
-releases a term it already won, so a cancelled acquisition never leaves the lock held. Reactor users can wrap the
+the lock contends again. **Cancelling** the returned future (`toCompletableFuture().cancel(...)`) abandons the attempt
+and releases a term it already won, so a cancelled acquisition never leaves the lock held. Reactor users can wrap the
 stage with `Mono.fromCompletionStage`.
-
-A callback executor that rejects tasks never delivers the `onElected` of a won term (see
-[Callbacks and Lifecycle](/guide/correctness#callbacks-and-lifecycle)): the lock's election steps down for one lease
-duration and the attempt never sees that term, so it keeps waiting until its timeout or a later term.
 
 ```kotlin
 simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
@@ -1163,12 +1384,16 @@ simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
         .whenComplete((result, error) -> term.releaseAsync()));
 ```
 
+A callback executor that rejects tasks never delivers the `onElected` of a won term (see
+[Callbacks and Lifecycle](/guide/concepts#callbacks-and-lifecycle)): the lock's election steps down for one lease
+duration and the attempt never sees that term, so it keeps waiting until its timeout or a later term.
 `DistributedLock` implementations other than the client's inherit default methods that run the blocking call on a
 virtual thread and interrupt it on cancellation.
 
 ### Coroutines
 
-`simba-coroutines` (since 5.1, depends on `kotlinx-coroutines-core`; `simba-core` does not) adapts the async calls:
+`simba-coroutines` (since 5.1) adapts the asynchronous calls. It depends on `kotlinx-coroutines-core`, which
+`simba-core` does not.
 
 ```kotlin
 simba.lock("invoice-42").withLock(Duration.ofSeconds(5)) { term ->
@@ -1184,13 +1409,9 @@ simba.lock("invoice-42").withLock(Duration.ofSeconds(5)) { term ->
 | `Term.awaitRevoked()` | Suspends until the term is revoked and returns the `RevokeReason`; cancelling the wait does not affect the term. |
 | `SimbaEventFlow` | A `SimbaEventListener` to register with `Simba.builder().listener(...)`; `events` is a hot `SharedFlow<SimbaEvent>` that drops the oldest events for a collector more than `bufferCapacity` behind. |
 
-Within one client a name has **at most one holder**: a second `acquire` of the same name waits until the first is
-released (or its own timeout passes). A lock and an election of the same name share one lease, so do not use one
-name for both.
-
 ## The `LockTerm` Is the Credential
 
-`acquire` returns a `LockTerm`: a [`Term`](/guide/correctness#leases-terms-and-tokens) that also releases the lease.
+`acquire` returns a `LockTerm`: a [`Term`](/guide/concepts#leases-terms-and-tokens) that can also release the lease.
 
 - It is **not bound to a thread**: hand it to another thread or coroutine and close it there.
 - `close()` revokes the term and releases the lease, and waits for that (except inside a leadership callback or leader
@@ -1203,17 +1424,18 @@ name for both.
 
 A held lock ends before you close it when its term is revoked: the session's local deadline passed, the backend
 reported the session expired, or another session took the lease over. The lock is then **released for good**, not
-re-acquired behind your back:
+re-acquired behind your back, because code that believes it still holds the lock must not silently get a new term with
+a new token:
 
 - `term.isValid` turns `false` and `term.revoked` completes with the reason;
 - your next `ensureValid()` throws `TermExpiredException`;
 - closing the `LockTerm` afterwards is a harmless no-op.
 
 Because a lock can end while your code still runs, pass `term.token` to the protected resource and let it reject
-lower tokens; see [Fencing Tokens](/guide/correctness#fencing-tokens). Use `ensureValid(expectedStepDuration)`
-before each step so that you do not start a step the term cannot cover.
+lower tokens ([Fencing and Failures](/guide/correctness)). Call `ensureValid(expectedStepDuration)` before each step so
+that you do not start a step the term cannot cover.
 
-## Choosing Between a Lock and an Election
+## Lock or Election?
 
 | | Lock | Election |
 |---|---|---|
@@ -1228,9 +1450,17 @@ contends once and keeps the term between runs.
 <doc title="Observability" path="guide/observability.md">
 # Observability
 
-Simba reports what it does in two ways: a point-in-time `snapshot()` of the session and every election, and a stream
-of `SimbaEvent`s. The Spring Boot starter builds the Actuator endpoint and the health indicator on the snapshot, and
-the Micrometer metrics on the events.
+Three questions matter when running Simba, and each maps to one signal:
+
+| Question | Why it matters | Signal |
+|---|---|---|
+| Is this node's session live? | Without a live session a node can neither keep nor win any term | `session.status`, `simba.session.state`, the health indicator |
+| Does every role have a leader? | A role without a leader means work is not done | `simba.leadership`, `snapshot().elections` |
+| Are terms lost involuntarily? | Every such loss is a moment where a paused node might still write | `simba.revocations{reason}` |
+
+Simba reports through a point-in-time `snapshot()` of the session and every election, and a stream of `SimbaEvent`s.
+The Spring Boot starter builds the Actuator endpoint and the health indicator on the snapshot, and the Micrometer
+metrics on the events. Everything is **this node's view**: no API asks other nodes who leads.
 
 ## Snapshot
 
@@ -1246,9 +1476,10 @@ the Micrometer metrics on the events.
 | `leaseDuration` | The configured session lease |
 | `healthy` | `notLiveFor ≤ leaseDuration` |
 
-An election's `status` is `CANDIDATE` (contending), `LEADER` (holding a valid term), `COOLDOWN` (stepped down, waiting
-for the cooldown to end) or `HANDOVER` (stopped or stepped down, waiting for its work to exit before releasing the
-lease). `token` and `remaining` are `0` without a term.
+An election's `status` is one of the [lifecycle states](/guide/concepts#the-lifecycle-of-an-election): `CANDIDATE`
+(contending), `LEADER` (holding a valid term), `COOLDOWN` (stepped down, waiting for the cooldown to end) or
+`HANDOVER` (stopped or stepped down, waiting for its work to exit before releasing the lease). `token` and `remaining`
+are `0` without a term.
 
 ## Events
 
@@ -1266,7 +1497,7 @@ are plain classes with value equality (no `copy` or destructuring), so later ver
 | `SessionExpired(session, reason)` | The session ended: `reason` is `DEADLINE_PASSED` (no keep-alive succeeded before the local deadline) or `SESSION_EXPIRED` (the backend reported it expired) |
 | `SessionLeaseShortened(session, remaining, renewEvery)` | The backend grants less than the configured lease (e.g. a capped Zookeeper session timeout), so the client renews every `renewEvery` (a third of the local validity) instead; once per session, also logged as a warning |
 | `SessionClosed(session)` | The client closed (`session` is `null` when none was open); published once |
-| `Elected(name, token, kind)` | This node got a term; `kind` (`ELECTION`, `LOCK`, `GROUP`) tells which API started the election, so metrics can label by kind instead of by unbounded lock names |
+| `Elected(name, token, kind)` | This node got a term; `kind` (`ELECTION`, `LOCK`, `GROUP`) tells which API started the election |
 | `Revoked(name, token, reason, kind)` | A term ended |
 | `AcquireFailed(name, cause, kind)` | An acquire call failed (not "held by someone else", which is normal) |
 | `WorkCompleted(name, token, outcome, duration, cause, kind)` | One run of leader work ended: `COMPLETED`, `FAILED` or `CANCELLED` |
@@ -1287,7 +1518,8 @@ class AuditListener(private val audit: Audit) : SimbaEventListener {
 ## Micrometer Metrics
 
 With Micrometer on the classpath and a `MeterRegistry` bean, the starter registers `MicrometerSimbaEventListener`
-(disable with `simba.metrics.enabled=false`):
+(disable with `simba.metrics.enabled=false`). Without Spring, add `MicrometerSimbaEventListener(registry)` to the
+builder yourself.
 
 | Meter | Type | Tags | Meaning |
 |---|---|---|---|
@@ -1299,11 +1531,10 @@ With Micrometer on the classpath and a `MeterRegistry` bean, the starter registe
 | `simba.work` | Timer | `name`, `outcome` | Leader work runs (`completed`, `failed`, `cancelled`) |
 
 Only elections and partitions (`{group}.{partition}`), whose names come from your code, are tagged by name. Locks,
-whose names often come from data (`invoice-42`), are counted together: `simba.locks.held` and the `kind="lock"`
-revocations, so a normal unlock never reads as "no leader". A name's `simba.leadership` series exists from its first
-term until a term ends `stopped` (the election stopped, the partition moved to another node, or the client closed), so
-stopped elections leave no series behind. Without Spring, add
-`MicrometerSimbaEventListener(registry)` to the builder yourself.
+whose names often come from data (`invoice-42`), would make the number of series unbounded, so they are counted
+together: `simba.locks.held` and the `kind="lock"` revocations. That also keeps a normal unlock from reading as "no
+leader". A name's `simba.leadership` series exists from its first term until a term ends `stopped` (the election
+stopped, the partition moved to another node, or the client closed), so stopped elections leave no series behind.
 
 ## Alert Rules
 
@@ -1337,10 +1568,10 @@ groups:
           summary: "Leader work of {{ $labels.name }} failed"
 ```
 
-Nodes are scraped at different moments, so a handover can briefly look like zero or two leaders; the `for: 1m`
-clause filters that out. `simba_leadership` is each node's local view: two nodes reporting `1` for longer than a lease
-point at a paused node or a backend that lost writes (for example a Redis failover), which is exactly what
-[fencing tokens](/guide/correctness#fencing-tokens) protect against.
+Nodes are scraped at different moments, so a handover can briefly look like zero or two leaders; the `for: 1m` clause
+filters that out. `simba_leadership` is each node's local view: two nodes reporting `1` for longer than a lease point
+at a paused node or a backend that lost writes (for example a Redis failover), which is exactly what
+[fencing tokens](/guide/correctness) protect against.
 
 ## Actuator Endpoint
 
@@ -1372,8 +1603,7 @@ management:
 }
 ```
 
-`GET /actuator/simba/{name}` returns one election, or `404` when it is not started on this node. The endpoint shows
-only this node's view; it does not query who leads elsewhere.
+`GET /actuator/simba/{name}` returns one election, or `404` when it is not started on this node.
 
 ## Health Indicator
 
@@ -1400,26 +1630,25 @@ The indicator is **not** part of the liveness or readiness groups. A backend out
 restarting or unrouting all of them would turn a coordination outage into an application outage. Add it to a group
 yourself (`management.endpoint.health.group.<name>.include=simba`) only if that is what you want, and disable it with
 `management.health.simba.enabled=false`.
-
-## Related Pages
-
-- [Spring Boot](/guide/configuration): every `simba.*` property and the beans the starter creates.
-- [Concepts and Correctness](/guide/correctness#failure-modes): what each failure looks like.
 </doc>
 
 <doc title="Testing" path="guide/testing.md">
 # Testing
 
-Two test modules help you test code built on Simba and code Simba depends on:
+Leadership code fails in the gaps: a lease that expires mid-step, a takeover during a pause, two nodes that briefly
+disagree. Those gaps are about time, so the useful question for a test is how much control over time it needs:
 
-| Module | Contents |
-|---|---|
-| `simba-testing` | `InMemoryLeaseBackend`, `VirtualClock`, `VirtualScheduler`, `Simulation` |
-| `simba-tck` | `FencingSpec` (for your token-checking resource) and `LeaseBackendSpec` (for a backend) |
+| You want to test... | Use | Time |
+|---|---|---|
+| Code that takes a `Simba`: elections, leader work, locks | `InMemoryLeaseBackend` | Real, short leases |
+| Failover, expiry, cooldowns, without waiting | `InMemoryLeaseBackend` + `VirtualScheduler` | Virtual, deterministic |
+| The engine under faults, over thousands of interleavings | `Simulation` | Virtual, seeded |
+| Your resource rejects stale owners | `FencingSpec` | — |
+| A `LeaseBackend` of your own | `LeaseBackendSpec` | The backend's |
 
 ```kotlin
-testImplementation("me.ahoo.simba:simba-testing:${simbaVersion}")
-testImplementation("me.ahoo.simba:simba-tck:${simbaVersion}")
+testImplementation("me.ahoo.simba:simba-testing:${simbaVersion}")   // in-memory backend, virtual time, simulation
+testImplementation("me.ahoo.simba:simba-tck:${simbaVersion}")       // FencingSpec, LeaseBackendSpec
 ```
 
 The examples assert with [FluentAssert](https://github.com/Ahoo-Wang/FluentAssert) (`.assert()`), which `simba-tck`
@@ -1427,11 +1656,15 @@ brings in; with `simba-testing` alone, add `me.ahoo.test:fluent-assert-core` or 
 
 ## In-Memory Backend
 
-`InMemoryLeaseBackend` implements the full `LeaseBackend` contract in memory (sessions, leases with never-resetting
-tokens, groups, release and membership hints). It needs no infrastructure, so it fits unit tests of anything that
-takes a `Simba`. By default leases live as long as their session (JDBC, Zookeeper); `selfExpiringLeases = true` makes
-them expire on their own, each grant lasting one full lease, and `InMemoryLeaseBackend.builder()` (since 5.1) with
-`selfExpiringLeases(true).sessionBoundGrants(true)` limits a grant to the time its session has left, as on Redis:
+`InMemoryLeaseBackend` implements the full `LeaseBackend` contract in memory: sessions, leases with never-resetting
+tokens, groups, release and membership hints. It needs no infrastructure, so it fits unit tests of anything that takes
+a `Simba`. It models each storage style:
+
+| Construction | Leases behave like |
+|---|---|
+| `InMemoryLeaseBackend()` | JDBC, Zookeeper: a lease lives as long as its session |
+| `InMemoryLeaseBackend(selfExpiringLeases = true)` | Redis: leases expire on their own, each grant lasting one full lease (as a Cluster's lease slots grant) |
+| `InMemoryLeaseBackend.builder().selfExpiringLeases(true).sessionBoundGrants(true)` (since 5.1) | A single Redis node: a grant lasts only what its session has left |
 
 ```kotlin
 @Test
@@ -1455,8 +1688,9 @@ fun `only one client leads`() {
 }
 ```
 
-`owner(name)` and `token(name)` let a test inspect the backend directly. Wait on queues, latches or futures, never
-`sleep`.
+`owner(name)` and `token(name)` let a test inspect the backend directly; `peekOwner` and `peekExpiry` read without
+side effects, and `expireSession` and `loseLease` play a server ending a session early or a store losing a lease. Wait
+on queues, latches or futures, never `sleep`.
 
 In a Spring Boot test, define the backend as a bean: the starter builds the `Simba` client over any `LeaseBackend`
 bean, with no backend module on the test classpath.
@@ -1471,8 +1705,8 @@ class InMemorySimba {
 
 ## Virtual Time
 
-With the in-memory backend on real time, a test of a failover still waits for a lease to expire. To run such tests
-instantly and deterministically, drive the client and the backend from one `VirtualScheduler`:
+On real time a failover test still waits for a lease to expire. To run such tests instantly and deterministically,
+drive the client and the backend from one `VirtualScheduler`:
 
 ```kotlin
 @OptIn(InternalSimbaApi::class)
@@ -1496,7 +1730,8 @@ class FailoverTest {
 
 `scheduler.advance(duration, settle)` moves virtual time forward and fires every due timer in order, calling `settle`
 before each so that what a timer triggers completes before time moves on. Leader work still runs on its own (virtual)
-threads; wait for what it does through queues.
+threads that `awaitIdle()` does not cover: wait for what it does through queues, and wait for work to start before
+stopping it.
 
 `Simba.Builder.scheduler`, `Simba.awaitIdle` and `Scheduler` are marked `@InternalSimbaApi`: they need an explicit
 opt-in and carry no compatibility guarantee between minor versions. `VirtualClock` alone is a plain `Ticker` for code
@@ -1505,28 +1740,39 @@ that only reads time.
 ## Deterministic Simulation
 
 `Simulation(seed, params).run()` runs several engines against the in-memory backend in virtual time while injecting
-message delays and loss, process pauses, node clock rates that vary over time, groups joined and left (partition
-elections follow each node's view), nodes closed mid-fault, grants reported shorter than granted, backend-side
-faults (a session expired, a lease deleted or lost by the backend on its own), and optionally no backend hints (as on
-JDBC). It checks the invariants: at most one valid term per name (partitions included), each valid term's deadline
-within the backend's expiry of its lease, no term valid again once invalid, strictly increasing tokens, paired
-callbacks, liveness of names and partitions after faults stop, no leaked lease, and the handover order. Terms a
-backend-side fault removed are exempt from the first checks until revoked, since such a fault breaks the backend's
+the faults that matter:
+
+- message delays and loss, process pauses, node clock rates that vary over time;
+- groups joined and left (partition elections follow each node's view), nodes closed mid-fault;
+- grants reported shorter than granted, and backend-side faults: a session expired, a lease deleted or lost by the
+  backend on its own; optionally no backend hints (as on JDBC).
+
+It then checks the invariants:
+
+| | Invariant |
+|---|---|
+| I1 | At most one valid term per name (partitions included); each valid term's deadline within the backend's expiry of its lease; no term valid again once invalid |
+| I2 | Strictly increasing tokens |
+| I3 | Paired callbacks |
+| I4 | Liveness of names and partitions after faults stop; no leaked lease |
+| I5 | The handover order |
+
+Terms a backend-side fault removed are exempt from I1 and I2 until revoked, since such a fault breaks the backend's
 contract; a lost lease restarting its tokens is counted (`premise:tokenReset`) rather than failed, because only a
-backend that never loses data keeps tokens increasing. `SimulationParams.builder()` sets the knobs (the table lists those added in 5.1),
-and `SimulationResult.events`
-counts the events and the exercised paths (`path:*`). Simba runs it over 10⁴ seeds in its own build; it is available to anyone changing the engine, and a failing seed
-replays exactly:
+backend that never loses data keeps tokens increasing. `SimulationResult.events` counts the events and the exercised
+paths (`path:*`). Simba runs the simulation over 10⁴ seeds in its own build, and a failing seed replays exactly:
 
 ```bash
 ./gradlew simba-testing:test -Psimba.simulation.seed=42
 ```
 
-| `SimulationParams` (since 5.1) | Default | Meaning |
+`SimulationParams.builder()` sets the knobs; these were added in 5.1:
+
+| `SimulationParams` | Default | Meaning |
 |---|---|---|
 | `sessionBoundGrants` | `false` | With `selfExpiringLeases`, a grant lasts only as long as its session has left, as on Redis |
 | `truncatedGrantShare` | `0.3` | Share of runs whose backend reports less time than it grants (as a Zookeeper server capping the session timeout) |
-| `meanInjectionInterval` | `20s` | Mean interval of backend-side faults (a session expired, a lease deleted or lost by the backend); `Duration.ZERO` disables them |
+| `meanInjectionInterval` | `20s` | Mean interval of backend-side faults; `Duration.ZERO` disables them |
 | `groupPartitions` | `3` | Partitions of one group the nodes join and leave at random; `0` disables groups |
 | `earlyCloseShare` | `0.02` | Share of random operations that close a node for good during the fault phase |
 | `backendHints` | `true` | The backend sends release and membership hints; `false` models JDBC, which sends none |
@@ -1534,8 +1780,7 @@ replays exactly:
 ## Verifying a Fencing Resource
 
 `FencingSpec` checks a resource that guards its writes with fencing tokens (see
-[Checking Tokens in the Resource](/guide/correctness#checking-tokens-in-the-resource)). Extend it and implement two
-methods:
+[The Fencing Protocol](/guide/correctness#the-fencing-protocol)). Extend it and implement two methods:
 
 ```kotlin
 class LedgerFencingTest : FencingSpec() {
@@ -1586,6 +1831,11 @@ backends run this spec in Simba's own build; see [Contributing](/contributing/#a
 <doc title="Upgrading" path="guide/upgrading.md">
 # Upgrading
 
+Two things must stay compatible for an upgrade to be safe: your **code**, which must keep compiling, and the **storage
+format**, which nodes of different versions share while you roll the upgrade. Simba's version numbers state both.
+
+## What a Version Promises
+
 Simba follows [Semantic Versioning](https://semver.org/) at the source level: within a major version, code that
 compiled against an earlier release compiles against a later one unchanged, so recompile when you upgrade. Binary
 compatibility (running code compiled against another release without recompiling) is not promised. Source-breaking
@@ -1605,15 +1855,10 @@ New fields, tags, enum constants and events may be added in a minor version: rea
 enums and events tolerantly. Types marked `@InternalSimbaApi` (the engine, `Simba.Builder.scheduler`,
 `Simba.awaitIdle`) and anything `internal` carry no guarantee.
 
-## From 4.x
-
-5.0 is not compatible with 4.x in API, configuration or storage, and needs every node stopped before the switch. Follow
-[Migrating from 4.x to 5.0](/guide/migration).
-
 ## Within 5.x
 
-Minor and patch releases keep the storage format, so nodes of different 5.x versions can contend for the same names
-and you can roll an upgrade node by node. Release notes list every change:
+Minor and patch releases keep the storage format, so nodes of different 5.x versions contend for the same names and
+see each other's leases: roll the upgrade node by node. Release notes list every change:
 [GitHub Releases](https://github.com/Ahoo-Wang/Simba/releases).
 
 ### 5.0 to 5.1 {#from-5-0-to-5-1}
@@ -1655,26 +1900,33 @@ keep-alives, and keeps 5.0's storage, so nodes of both versions can run side by 
     the time since the session call answered), not by a full lease from whenever the script ran: a delayed keep-alive
     no longer keeps a lease of a dead session for up to two leases.
   - No node's `TIME` is compared with another's.
+
+## From 4.x
+
+5.0 changed the storage format, so a 4.x node and a 5.0 node do not see each other's leases and would both lead. The
+switch therefore needs every node stopped first; follow [Migrating from 4.x to 5.0](/guide/migration).
 </doc>
 
 <doc title="Migrating from 4.x to 5.0" path="guide/migration.md">
 # Migrating from 4.x to 5.0
 
 Simba 5 is a rewrite ([ADR 0010](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0010-simba-5-target-architecture.md)):
-one session per process instead of one lease per mutex, a `Term` object instead of owner state, and one engine for
-all three backends. It is **not compatible** with 4.x in source, in binary, or on the wire:
+one session per process instead of one lease per mutex, a `Term` object instead of owner state, and one engine for all
+three backends. It is **not compatible** with 4.x in source, in binary, or on the wire:
 
-- the JDBC tables, Redis keys and Zookeeper paths are different, so a 4.x node and a 5.x node do not see each other's
-  leases and would both lead;
+- the JDBC tables, Redis keys and Zookeeper paths are different;
 - the configuration properties and the Spring beans are different;
 - Java 21 is required, and the starter needs Spring Boot 4.1 or later;
 - the Redis backend is split: `simba-redis` alone only defines the `RedisScripting` port and cannot run. Depend on
   `simba-spring-redis` (Spring Data Redis with Lettuce, which brings `simba-redis`), or implement `RedisScripting` for
   another client.
 
-You therefore cannot roll the upgrade node by node. **Stop every node that contends for the same names, then start
-them on 5.0.** If a short double run would be harmful, make sure no 4.x node is running before the first 5.0 node
-starts.
+## Why Every Node Must Stop
+
+Mutual exclusion only works between nodes that look at the same lease. A 4.x node and a 5.0 node store their leases in
+different places, so each sees the name as free and both would lead. You therefore cannot roll this upgrade node by
+node: **stop every node that contends for the same names, then start them on 5.0.** If even a short double run would
+be harmful, make sure no 4.x node is running before the first 5.0 node starts.
 
 ## Steps
 
@@ -1845,7 +2097,7 @@ follow the values set. `build()` validates `renewInterval × 2 ≤ leaseDuration
 `leaseDuration × (1 − drift) − margin > renewInterval`; `toBuilder()` derives a variant. There is no public
 constructor: `SimbaConfig`, the events and the snapshots are plain classes with value equality (no `copy` or
 destructuring), so later versions can add properties compatibly. See
-[Timing](/guide/correctness#timing).
+[Timing](/guide/concepts#timing).
 
 ## Elections — `me.ahoo.simba`
 
@@ -1903,7 +2155,7 @@ overruns skips the missed starts.
 ### `RevokeReason`
 
 `STOPPED`, `STEPPED_DOWN`, `SESSION_EXPIRED`, `DEADLINE_PASSED`, `TAKEN_OVER`; see
-[Leases, Terms and Tokens](/guide/correctness#leases-terms-and-tokens).
+[Leases, Terms and Tokens](/guide/concepts#leases-terms-and-tokens).
 
 ## Locks — `me.ahoo.simba`
 
@@ -2005,7 +2257,20 @@ See [Spring Boot](/guide/configuration) and [Leader Work](/guide/leader-work#spr
 # Architecture
 
 This page is for people changing Simba. It explains how the pieces fit and which rules they rely on;
-[ADR 0010](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0010-simba-5-target-architecture.md) records why.
+[ADR 0010](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0010-simba-5-target-architecture.md) records why. The
+user-facing model (sessions, deadlines, terms, handover) is on [How Simba Works](/guide/concepts); this page assumes it.
+
+## Design Goals
+
+The hard part of a lease library is not the happy path but the interleavings: a reply that arrives after its deadline,
+a release racing a takeover, a keep-alive in flight while a lease is acquired. Three decisions follow from that:
+
+1. **Put every decision in one pure function.** The engine is `step(state, event, now)`: no threads, clock or I/O. A
+   race is then just an order of events, which a unit test can write down and a simulation can enumerate.
+2. **Keep the backend dumb.** The `LeaseBackend` SPI stores and answers; it never schedules, notifies (beyond optional
+   hints) or keeps local lease state. All backends then share one engine and one TCK.
+3. **Measure time only locally.** The backend returns durations; the engine turns them into monotonic deadlines. No
+   two clocks are ever compared.
 
 ## Modules
 
@@ -2030,20 +2295,12 @@ graph BT
     testing --> core
     tck --> core
     coroutines --> core
-    style core fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style jdbc fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style redis fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style sredis fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style zk fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style starter fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style testing fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style tck fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
-    style coroutines fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 
-`simba-core` knows no backend and depends only on kotlin-logging. `simba-redis` must not depend on Spring; the
-starter depends on the backends as optional features. `simba-bom` and `simba-dependencies` are publication metadata;
-`simba-example` is a runnable sample per backend.
+`simba-core` knows no backend and depends only on kotlin-logging. `simba-redis` must not depend on Spring;
+`simba-coroutines` is the only module that depends on kotlinx-coroutines. The starter depends on the backends as
+optional features. `simba-bom` and `simba-dependencies` are publication metadata; `simba-example` is a runnable sample
+per backend.
 
 ## Layers
 
@@ -2051,33 +2308,51 @@ starter depends on the backends as optional features. `simba-bom` and `simba-dep
 |---|---|---|
 | User API | `Simba`, `Election`, `DistributedLock`, `PartitionGroup`, `Term` | Handles; no state of their own beyond what the engine publishes |
 | Engine | `engine.step(state, event, now)` | Pure state machine: no threads, clock or I/O |
-| Shell | `EngineShell` | Runs `step` on one loop thread, executes its effects: backend calls, timers, callbacks, group views |
+| Shell | `EngineShell` | Runs `step` on one loop thread and executes its effects: backend calls, timers, callbacks, group views |
 | SPI | `LeaseBackend` | A bounded number of calls per method: sessions, leases, groups, optional hints |
 
-### The Pure Engine
+### From Event to Effects
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant X as API, timer, backend reply
+    participant L as Loop thread (EngineShell)
+    participant E as step(state, event, now)
+    participant IO as I/O executor
+    participant CB as Callback dispatcher
+    X->>L: event
+    L->>E: state, event, ticker now
+    E-->>L: new state, effects
+    L->>IO: Call (backend request, with timeout)
+    L->>CB: Elected / Revoked / Publish
+    IO-->>L: Reply(requestId, result) as the next event
+```
 
 ```kotlin
 fun step(state: EngineState, event: Event, now: Long): Pair<EngineState, List<Effect>>
 ```
 
-Events are `Boot`, `Start`, `Stop`, `StepDown`, `Timer`, `Reply` (a backend result, tagged with its request id and send
-time), `Hint`, `WorkExited`, `Join`, `Leave` and `Close`. Effects are `Call` (a backend request), `Arm` (a timer),
-`Deadline` (publish the session's local deadline to its terms), `Elected` / `Revoked`, `Complete` (a future),
-`Publish` (a `SimbaEvent`) and `Members` (a group view). Because `step` is pure, every race is a sequence of events: unit
-tests feed events and assert effects, and the [simulation](/guide/testing#deterministic-simulation) explores
-interleavings over thousands of seeds.
+Events are `Boot`, `Start`, `Stop`, `StepDown`, `Timer`, `Reply` (a backend result, tagged with its request id),
+`Hint`, `WorkExited`, `Join`, `Leave` and `Close`. Effects are `Call` (a backend request with its timeout), `Arm` (a
+timer), `Deadline` (publish the session's local deadline to its terms), `Elected` / `Revoked`, `Complete` (a future),
+`Publish` (a `SimbaEvent`) and `Members` (a group view). Because `step` is pure, unit tests feed events and assert
+effects, and the [simulation](/guide/testing#deterministic-simulation) explores interleavings over thousands of seeds.
 
 ### The Election State Machine
+
+The user-visible states are on [How Simba Works](/guide/concepts#the-lifecycle-of-an-election). Inside the engine the
+transitions carry the conditions that make them safe:
 
 ```mermaid
 stateDiagram-v2
     [*] --> Candidate: start
-    Candidate --> Leader: Granted(token), session live, before the deadline
-    Candidate --> Candidate: HeldBy / retry after jitter or released hint
+    Candidate --> Leader: Granted(token), current attempt,<br>before the deadline, token above released ones
+    Candidate --> Candidate: HeldBy, retry after jitter<br>or a release hint
     Leader --> Candidate: deadline, TAKEN_OVER, SESSION_EXPIRED
     Leader --> Handover: stop / stepDown with work
-    Handover --> Cooldown: work exited or deadline, release (stepDown)
-    Handover --> [*]: work exited or deadline, release (stop)
+    Handover --> Cooldown: WorkExited or deadline, release (stepDown)
+    Handover --> [*]: WorkExited or deadline, release (stop)
     Leader --> Cooldown: stepDown without work
     Candidate --> Cooldown: stepDown
     Cooldown --> Candidate: cooldown over
@@ -2090,37 +2365,41 @@ Rules the engine keeps:
 
 - A term is adopted only from the reply to the election's current attempt, before the session's local deadline, and
   only with a token above every token the session released for that name.
-- A term is revoked before its lease is released; releases carry the token.
+- A term is revoked before its lease is released; releases carry the token, so a late one is a no-op.
 - Keep-alive replies list the leases the session owns: a term adopted before the request but missing from the reply is
   revoked (`TAKEN_OVER`); an owned lease that nobody holds or is acquiring is released.
 - An expired session is never revived: every term is revoked and a new session is opened.
-- Handover: an election started with work keeps the lease of a stopped or stepped-down term until the work exited or
-  the session's local deadline at the stop, whichever comes first; terms without work release at once.
+- A hint is never dropped because its request is in flight (the reply may predate the change): a release hint makes a
+  losing in-flight attempt retry at once, a membership hint repeats an in-flight members read at once.
+- Handover: an election started with work keeps the lease of a stopped or stepped-down term until `WorkExited` for that
+  term or the session's local deadline at the stop, whichever comes first; terms without work release at once.
 
 ## Threads
 
 | Thread | Runs |
 |---|---|
-| Loop (one platform thread per client) | `step`, timers; the only thread touching engine state |
-| I/O executor (default: a virtual thread per call) | Backend calls, with a timeout of one renew interval; at most one keep-alive per session and one acquire per election in flight |
-| Callback executor (default: virtual threads) | `onElected` / `onRevoked`, through one serial dispatcher per election |
+| Loop (one platform daemon thread per client) | `step`, timers; the only thread touching engine state |
+| I/O executor (default: a virtual thread per call) | Backend calls, each with a timeout of the renew period in effect; at most one keep-alive per session and one acquire per election in flight |
+| Callback executor (default: virtual threads) | `onElected` / `onRevoked` through one serial dispatcher per election; `SimbaEvent`s through one serial dispatcher, never on the loop |
 | Work executor (default: a virtual thread per term) | `runWhileLeader` / `schedule` / group work; interrupted on revocation |
 
 The engine never waits for a callback except through the futures of `stop()` and `stepDown()`. Blocking `close()`
-methods do not wait when called from a callback or leader work. `SimbaEventListener`s are called from the loop.
+methods do not wait when called from a callback or leader work. On a loop thread (reachable only with a direct callback
+executor) blocking calls throw `IllegalStateException` instead of deadlocking.
 
 ## Time
 
 - The client never reads a wall clock for lease decisions. Every remaining time comes from the backend as a duration,
   and the local deadline is `sentAt + remaining × (1 − drift) − margin` on the monotonic clock (`Ticker`).
 - `Term.isValid` and `remaining()` read the session's volatile deadline and the ticker; no watchdog thread has to run.
+  Monotonic instants are compared by difference, never with `maxOf`.
 - Backends decide with their own clock: database `now` (JDBC), Redis `TIME`, Zookeeper session expiry.
 
 ## Wire Contracts
 
 Nodes of the same major version may run together, so these must not change within 5.x:
 
-- **Lease names:** 1–128 characters of `[A-Za-z0-9._:-]`; partition `p` of group `g` is `{g}.{p}`.
+- **Lease names:** 1–128 characters of `[A-Za-z0-9._:-]`, not `.` or `..`; partition `p` of group `g` is `{g}.{p}`.
 - **Partition assignment:** `PartitionAssignment.weight` (FNV-1a 64 of `"$partition@$member"` mixed with SplitMix64,
   members are session ids).
 - **JDBC:** tables `simba_session`, `simba_lease`, `simba_member`; `simba_lease` rows are never deleted and release
@@ -2129,8 +2408,11 @@ Nodes of the same major version may run together, so these must not change withi
   `session_id` (left-to-right `SET`).
 - **Redis:** `simba:lease:{name}` = `{session, token, expires}` (never expires, never deleted),
   `simba:session:{sid}` (`PX`) with `:leases` / `:groups`, `simba:group:{g}` scored by expiry, `released` published on
-  the lease key; with `routeBySlot` every script call stays within one hash slot.
+  the lease key; with `routeBySlot` every script call stays within one hash slot and only durations cross nodes.
 - **Zookeeper:** ephemeral `/simba/leases/{name}` (token = `czxid`), `/simba/groups/{g}/{sid}`.
+
+The full list, kept with the code, is in
+[AGENTS.md](https://github.com/Ahoo-Wang/Simba/blob/main/AGENTS.md#wire-contracts).
 
 ## Design Records
 
@@ -2206,11 +2488,15 @@ the JDBC SQL or schema, or the public `simba-core` API needs agreement before co
 | `docs/adr/` | Design decisions and their rationale |
 | `AGENTS.md` | Invariants and traps for maintainers and coding agents |
 
-Every page change is made in both languages. After editing English pages, regenerate `wiki/llms-full.txt`:
+Every page change is made in both languages; the page ownership and writing rules are in
+[`wiki/AGENTS.md`](https://github.com/Ahoo-Wang/Simba/blob/main/wiki/AGENTS.md). Mermaid diagrams render in the
+browser, so a passing build says nothing about their syntax: check them with headless Chrome. After editing English
+pages, regenerate `wiki/llms-full.txt`:
 
 ```bash
 cd wiki
 pnpm install
+pnpm run check:mermaid   # parses every diagram with the real Mermaid parser
 pnpm run sync:llms
 pnpm run build
 ```

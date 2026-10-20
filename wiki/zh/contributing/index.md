@@ -64,11 +64,14 @@ description: 构建 Simba、运行测试、安全地修改引擎、借助 TCK �
 | `docs/adr/` | 设计决策及其理由 |
 | `AGENTS.md` | 面向维护者和编码 agent 的不变量与陷阱 |
 
-每次页面修改都要同时更新两种语言。编辑英文页面后，重新生成 `wiki/llms-full.txt`：
+每次页面修改都要同时更新两种语言；页面归属和写作规则见
+[`wiki/AGENTS.md`](https://github.com/Ahoo-Wang/Simba/blob/main/wiki/AGENTS.md)。Mermaid 图在浏览器中渲染，因此构建通过并不能说明其语法正确：
+请用无头 Chrome 检查。编辑英文页面后，重新生成 `wiki/llms-full.txt`：
 
 ```bash
 cd wiki
 pnpm install
+pnpm run check:mermaid   # 用真正的 Mermaid 解析器解析每一张图
 pnpm run sync:llms
 pnpm run build
 ```

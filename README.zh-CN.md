@@ -20,7 +20,7 @@ Simba 是一个用于 **选主与分布式锁** 的 JVM 库。每个进程在你
 - **每个节点一个会话。** 一次续约就续上进程内所有的选举、锁和分区。
 - **任务绑定任期。** Leader 任务运行在虚拟线程上，任期结束时被中断，并在释放租约之前结束。
 
-保护任何绝不能重复写入的资源之前，请先阅读 [核心概念与正确性](https://simba.ahoo.me/zh/guide/correctness)。
+保护任何绝不能重复写入的资源之前，请先阅读 [Fencing 与故障](https://simba.ahoo.me/zh/guide/correctness)。
 从 4.x 升级？请看 [迁移到 5.0](https://simba.ahoo.me/zh/guide/migration)。
 
 ## 安装
@@ -140,12 +140,13 @@ simba.lock("invoice-42").withLock(Duration.ofSeconds(5)) { term -> invoiceStore.
 
 | | |
 |---|---|
-| [简介](https://simba.ahoo.me/zh/guide/) | 保证什么，如何选择 API 和后端 |
+| [为什么选择 Simba](https://simba.ahoo.me/zh/guide/) | 从第一性原理看问题，保证什么，如何选择 API 和后端 |
 | [快速开始](https://simba.ahoo.me/zh/guide/quick-start) | 依赖、后端配置、每个 API 的第一段代码 |
-| [核心概念与正确性](https://simba.ahoo.me/zh/guide/correctness) | 会话、租约、任期、fencing token、交接、故障模式 |
+| [Simba 如何工作](https://simba.ahoo.me/zh/guide/concepts) | 会话、本地截止时刻、任期、token、选举生命周期、交接、时序 |
+| [Fencing 与故障](https://simba.ahoo.me/zh/guide/correctness) | Fencing 协议与实现示例、token 来源、故障模式 |
 | [后端](https://simba.ahoo.me/zh/guide/backends) | JDBC、Redis、Zookeeper：表结构、key、路径、运维要点 |
 | [Spring Boot](https://simba.ahoo.me/zh/guide/configuration) | `simba.*` 属性、bean、关闭顺序 |
-| [Leader 任务与分区](https://simba.ahoo.me/zh/guide/leader-work) | `runWhileLeader`、调度、分区组、注解 |
+| [选举与 Leader 任务](https://simba.ahoo.me/zh/guide/leader-work) | 选举、`runWhileLeader`、调度、分区组、注解 |
 | [锁](https://simba.ahoo.me/zh/guide/locks) | `lock(name)` 与 `LockTerm` |
 | [可观测性](https://simba.ahoo.me/zh/guide/observability) | 快照、事件、指标、Actuator 端点、健康检查 |
 | [测试](https://simba.ahoo.me/zh/guide/testing) | 内存后端、虚拟时间、TCK |

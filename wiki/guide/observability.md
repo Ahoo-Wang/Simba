@@ -1,13 +1,21 @@
 ---
 title: Observability
-description: Read the client's state with snapshot(), receive SimbaEvents, use the Micrometer metrics and alert rules, the simba Actuator endpoint and the simba health indicator.
+description: What to watch in a Simba deployment and why — the snapshot, SimbaEvents, Micrometer metrics, alert rules, the simba Actuator endpoint and the simba health indicator.
 ---
 
 # Observability
 
-Simba reports what it does in two ways: a point-in-time `snapshot()` of the session and every election, and a stream
-of `SimbaEvent`s. The Spring Boot starter builds the Actuator endpoint and the health indicator on the snapshot, and
-the Micrometer metrics on the events.
+Three questions matter when running Simba, and each maps to one signal:
+
+| Question | Why it matters | Signal |
+|---|---|---|
+| Is this node's session live? | Without a live session a node can neither keep nor win any term | `session.status`, `simba.session.state`, the health indicator |
+| Does every role have a leader? | A role without a leader means work is not done | `simba.leadership`, `snapshot().elections` |
+| Are terms lost involuntarily? | Every such loss is a moment where a paused node might still write | `simba.revocations{reason}` |
+
+Simba reports through a point-in-time `snapshot()` of the session and every election, and a stream of `SimbaEvent`s.
+The Spring Boot starter builds the Actuator endpoint and the health indicator on the snapshot, and the Micrometer
+metrics on the events. Everything is **this node's view**: no API asks other nodes who leads.
 
 ## Snapshot
 
@@ -23,9 +31,10 @@ the Micrometer metrics on the events.
 | `leaseDuration` | The configured session lease |
 | `healthy` | `notLiveFor ≤ leaseDuration` |
 
-An election's `status` is `CANDIDATE` (contending), `LEADER` (holding a valid term), `COOLDOWN` (stepped down, waiting
-for the cooldown to end) or `HANDOVER` (stopped or stepped down, waiting for its work to exit before releasing the
-lease). `token` and `remaining` are `0` without a term.
+An election's `status` is one of the [lifecycle states](/guide/concepts#the-lifecycle-of-an-election): `CANDIDATE`
+(contending), `LEADER` (holding a valid term), `COOLDOWN` (stepped down, waiting for the cooldown to end) or
+`HANDOVER` (stopped or stepped down, waiting for its work to exit before releasing the lease). `token` and `remaining`
+are `0` without a term.
 
 ## Events
 
@@ -43,7 +52,7 @@ are plain classes with value equality (no `copy` or destructuring), so later ver
 | `SessionExpired(session, reason)` | The session ended: `reason` is `DEADLINE_PASSED` (no keep-alive succeeded before the local deadline) or `SESSION_EXPIRED` (the backend reported it expired) |
 | `SessionLeaseShortened(session, remaining, renewEvery)` | The backend grants less than the configured lease (e.g. a capped Zookeeper session timeout), so the client renews every `renewEvery` (a third of the local validity) instead; once per session, also logged as a warning |
 | `SessionClosed(session)` | The client closed (`session` is `null` when none was open); published once |
-| `Elected(name, token, kind)` | This node got a term; `kind` (`ELECTION`, `LOCK`, `GROUP`) tells which API started the election, so metrics can label by kind instead of by unbounded lock names |
+| `Elected(name, token, kind)` | This node got a term; `kind` (`ELECTION`, `LOCK`, `GROUP`) tells which API started the election |
 | `Revoked(name, token, reason, kind)` | A term ended |
 | `AcquireFailed(name, cause, kind)` | An acquire call failed (not "held by someone else", which is normal) |
 | `WorkCompleted(name, token, outcome, duration, cause, kind)` | One run of leader work ended: `COMPLETED`, `FAILED` or `CANCELLED` |
@@ -64,7 +73,8 @@ class AuditListener(private val audit: Audit) : SimbaEventListener {
 ## Micrometer Metrics
 
 With Micrometer on the classpath and a `MeterRegistry` bean, the starter registers `MicrometerSimbaEventListener`
-(disable with `simba.metrics.enabled=false`):
+(disable with `simba.metrics.enabled=false`). Without Spring, add `MicrometerSimbaEventListener(registry)` to the
+builder yourself.
 
 | Meter | Type | Tags | Meaning |
 |---|---|---|---|
@@ -76,11 +86,10 @@ With Micrometer on the classpath and a `MeterRegistry` bean, the starter registe
 | `simba.work` | Timer | `name`, `outcome` | Leader work runs (`completed`, `failed`, `cancelled`) |
 
 Only elections and partitions (`{group}.{partition}`), whose names come from your code, are tagged by name. Locks,
-whose names often come from data (`invoice-42`), are counted together: `simba.locks.held` and the `kind="lock"`
-revocations, so a normal unlock never reads as "no leader". A name's `simba.leadership` series exists from its first
-term until a term ends `stopped` (the election stopped, the partition moved to another node, or the client closed), so
-stopped elections leave no series behind. Without Spring, add
-`MicrometerSimbaEventListener(registry)` to the builder yourself.
+whose names often come from data (`invoice-42`), would make the number of series unbounded, so they are counted
+together: `simba.locks.held` and the `kind="lock"` revocations. That also keeps a normal unlock from reading as "no
+leader". A name's `simba.leadership` series exists from its first term until a term ends `stopped` (the election
+stopped, the partition moved to another node, or the client closed), so stopped elections leave no series behind.
 
 ## Alert Rules
 
@@ -114,10 +123,10 @@ groups:
           summary: "Leader work of {{ $labels.name }} failed"
 ```
 
-Nodes are scraped at different moments, so a handover can briefly look like zero or two leaders; the `for: 1m`
-clause filters that out. `simba_leadership` is each node's local view: two nodes reporting `1` for longer than a lease
-point at a paused node or a backend that lost writes (for example a Redis failover), which is exactly what
-[fencing tokens](/guide/correctness#fencing-tokens) protect against.
+Nodes are scraped at different moments, so a handover can briefly look like zero or two leaders; the `for: 1m` clause
+filters that out. `simba_leadership` is each node's local view: two nodes reporting `1` for longer than a lease point
+at a paused node or a backend that lost writes (for example a Redis failover), which is exactly what
+[fencing tokens](/guide/correctness) protect against.
 
 ## Actuator Endpoint
 
@@ -149,8 +158,7 @@ management:
 }
 ```
 
-`GET /actuator/simba/{name}` returns one election, or `404` when it is not started on this node. The endpoint shows
-only this node's view; it does not query who leads elsewhere.
+`GET /actuator/simba/{name}` returns one election, or `404` when it is not started on this node.
 
 ## Health Indicator
 
@@ -177,8 +185,3 @@ The indicator is **not** part of the liveness or readiness groups. A backend out
 restarting or unrouting all of them would turn a coordination outage into an application outage. Add it to a group
 yourself (`management.endpoint.health.group.<name>.include=simba`) only if that is what you want, and disable it with
 `management.health.simba.enabled=false`.
-
-## Related Pages
-
-- [Spring Boot](/guide/configuration): every `simba.*` property and the beans the starter creates.
-- [Concepts and Correctness](/guide/correctness#failure-modes): what each failure looks like.

@@ -1,12 +1,14 @@
 ---
 title: Locks
-description: Hold a distributed lock with simba.lock(name), use the LockTerm as the credential, and understand timeouts, early loss and fencing.
+description: Hold a distributed lock around one step with simba.lock(name) — blocking, asynchronous and coroutine acquisition, the LockTerm as the credential, early loss, and when to use an election instead.
 ---
 
 # Locks
 
-`simba.lock(name)` holds a lease around a step and releases it afterwards. The lock is an election of the same lease
-name that takes its first term and gives it back when you are done.
+A lock is the short-lived form of a lease: take it, do one step, give it back. In Simba it is an election of the
+lease name that takes its **first** term and releases it when you are done. Everything about leases still holds: the
+lock is bounded by the session's deadline, it can end before you release it, and the term it gives you carries a
+fencing token.
 
 ```kotlin
 simba.lock("invoice-42").acquire(Duration.ofSeconds(5)).use { term ->
@@ -26,6 +28,10 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 }
 ```
 
+Within one client a name has **at most one holder**: a second `acquire` of the same name waits until the first is
+released (or its own timeout passes). A lock and an election of the same name share one lease, so do not use one name
+for both.
+
 ## Acquiring
 
 | Method | Behavior |
@@ -40,13 +46,9 @@ try (LockTerm term = simba.lock("invoice-42").acquire(Duration.ofSeconds(5))) {
 `acquireAsync` and `tryAcquireAsync` wait without a thread and complete on the client's callback executor (on its
 event loop only with a direct callback executor, as callbacks do). Their dependents run like callbacks: `close()` on
 the term there releases without waiting. A term that ends before the stage could complete with it is never returned:
-the lock contends again. **Cancelling** the returned future (`toCompletableFuture().cancel(...)`) abandons the attempt and
-releases a term it already won, so a cancelled acquisition never leaves the lock held. Reactor users can wrap the
+the lock contends again. **Cancelling** the returned future (`toCompletableFuture().cancel(...)`) abandons the attempt
+and releases a term it already won, so a cancelled acquisition never leaves the lock held. Reactor users can wrap the
 stage with `Mono.fromCompletionStage`.
-
-A callback executor that rejects tasks never delivers the `onElected` of a won term (see
-[Callbacks and Lifecycle](/guide/correctness#callbacks-and-lifecycle)): the lock's election steps down for one lease
-duration and the attempt never sees that term, so it keeps waiting until its timeout or a later term.
 
 ```kotlin
 simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
@@ -62,12 +64,16 @@ simba.lock("invoice-42").acquireAsync(Duration.ofSeconds(5))
         .whenComplete((result, error) -> term.releaseAsync()));
 ```
 
+A callback executor that rejects tasks never delivers the `onElected` of a won term (see
+[Callbacks and Lifecycle](/guide/concepts#callbacks-and-lifecycle)): the lock's election steps down for one lease
+duration and the attempt never sees that term, so it keeps waiting until its timeout or a later term.
 `DistributedLock` implementations other than the client's inherit default methods that run the blocking call on a
 virtual thread and interrupt it on cancellation.
 
 ### Coroutines
 
-`simba-coroutines` (since 5.1, depends on `kotlinx-coroutines-core`; `simba-core` does not) adapts the async calls:
+`simba-coroutines` (since 5.1) adapts the asynchronous calls. It depends on `kotlinx-coroutines-core`, which
+`simba-core` does not.
 
 ```kotlin
 simba.lock("invoice-42").withLock(Duration.ofSeconds(5)) { term ->
@@ -83,13 +89,9 @@ simba.lock("invoice-42").withLock(Duration.ofSeconds(5)) { term ->
 | `Term.awaitRevoked()` | Suspends until the term is revoked and returns the `RevokeReason`; cancelling the wait does not affect the term. |
 | `SimbaEventFlow` | A `SimbaEventListener` to register with `Simba.builder().listener(...)`; `events` is a hot `SharedFlow<SimbaEvent>` that drops the oldest events for a collector more than `bufferCapacity` behind. |
 
-Within one client a name has **at most one holder**: a second `acquire` of the same name waits until the first is
-released (or its own timeout passes). A lock and an election of the same name share one lease, so do not use one
-name for both.
-
 ## The `LockTerm` Is the Credential
 
-`acquire` returns a `LockTerm`: a [`Term`](/guide/correctness#leases-terms-and-tokens) that also releases the lease.
+`acquire` returns a `LockTerm`: a [`Term`](/guide/concepts#leases-terms-and-tokens) that can also release the lease.
 
 - It is **not bound to a thread**: hand it to another thread or coroutine and close it there.
 - `close()` revokes the term and releases the lease, and waits for that (except inside a leadership callback or leader
@@ -102,17 +104,18 @@ name for both.
 
 A held lock ends before you close it when its term is revoked: the session's local deadline passed, the backend
 reported the session expired, or another session took the lease over. The lock is then **released for good**, not
-re-acquired behind your back:
+re-acquired behind your back, because code that believes it still holds the lock must not silently get a new term with
+a new token:
 
 - `term.isValid` turns `false` and `term.revoked` completes with the reason;
 - your next `ensureValid()` throws `TermExpiredException`;
 - closing the `LockTerm` afterwards is a harmless no-op.
 
 Because a lock can end while your code still runs, pass `term.token` to the protected resource and let it reject
-lower tokens; see [Fencing Tokens](/guide/correctness#fencing-tokens). Use `ensureValid(expectedStepDuration)`
-before each step so that you do not start a step the term cannot cover.
+lower tokens ([Fencing and Failures](/guide/correctness)). Call `ensureValid(expectedStepDuration)` before each step so
+that you do not start a step the term cannot cover.
 
-## Choosing Between a Lock and an Election
+## Lock or Election?
 
 | | Lock | Election |
 |---|---|---|

@@ -1,20 +1,24 @@
 ---
 title: 测试
-description: 用内存后端和虚拟时间测试使用 Simba 的代码，用 FencingSpec 验证 fencing 资源，并用 LeaseBackendSpec TCK 检查后端。
+description: 在合适的层次测试基于 Simba 的代码：内存后端、虚拟时间、确定性模拟、用于你的校验 token 资源的 FencingSpec，以及用于后端的 LeaseBackendSpec TCK。
 ---
 
 # 测试
 
-两个测试模块帮助你测试基于 Simba 构建的代码，以及 Simba 所依赖的代码：
+Leader 相关代码往往在缝隙中出错：租约在某一步中途过期，暂停期间被接管，两个节点短暂地意见不一。这些缝隙都与时间有关，
+所以对一个测试来说，有用的问题是它需要对时间有多大的控制：
 
-| 模块 | 内容 |
-|---|---|
-| `simba-testing` | `InMemoryLeaseBackend`、`VirtualClock`、`VirtualScheduler`、`Simulation` |
-| `simba-tck` | `FencingSpec`（用于你的校验 token 的资源）和 `LeaseBackendSpec`（用于后端） |
+| 你想测试…… | 使用 | 时间 |
+|---|---|---|
+| 接受 `Simba` 的代码：选举、Leader 任务、锁 | `InMemoryLeaseBackend` | 真实时间，短租约 |
+| 故障转移、过期、冷却期，无需等待 | `InMemoryLeaseBackend` + `VirtualScheduler` | 虚拟时间，确定性 |
+| 引擎在故障下、跨越成千上万种交错的表现 | `Simulation` | 虚拟时间，按 seed |
+| 你的资源会拒绝过期的持有者 | `FencingSpec` | — |
+| 你自己的 `LeaseBackend` | `LeaseBackendSpec` | 后端自己的时间 |
 
 ```kotlin
-testImplementation("me.ahoo.simba:simba-testing:${simbaVersion}")
-testImplementation("me.ahoo.simba:simba-tck:${simbaVersion}")
+testImplementation("me.ahoo.simba:simba-testing:${simbaVersion}")   // in-memory backend, virtual time, simulation
+testImplementation("me.ahoo.simba:simba-tck:${simbaVersion}")       // FencingSpec, LeaseBackendSpec
 ```
 
 示例使用 [FluentAssert](https://github.com/Ahoo-Wang/FluentAssert)（`.assert()`）断言，`simba-tck` 会带上它；只依赖
@@ -22,10 +26,14 @@ testImplementation("me.ahoo.simba:simba-tck:${simbaVersion}")
 
 ## 内存后端 {#in-memory-backend}
 
-`InMemoryLeaseBackend` 在内存中实现完整的 `LeaseBackend` 契约（会话、token 永不重置的租约、组、释放以及成员变化提示）。
-它不需要任何基础设施，因此适合对任何接受 `Simba` 的代码做单元测试。默认情况下租约与会话同生共死（如 JDBC、Zookeeper）；
-`selfExpiringLeases = true` 让租约自行过期，每次授予持续一个完整租期；`InMemoryLeaseBackend.builder()`（5.1 起）配合
-`selfExpiringLeases(true).sessionBoundGrants(true)`，让一次授予只持续其会话剩余的时间，与 Redis 相同：
+`InMemoryLeaseBackend` 在内存中实现完整的 `LeaseBackend` 契约：会话、token 永不重置的租约、组、释放以及成员变化提示。
+它不需要任何基础设施，因此适合对任何接受 `Simba` 的代码做单元测试。它可以模拟每种存储风格：
+
+| 构造方式 | 租约的行为类似 |
+|---|---|
+| `InMemoryLeaseBackend()` | JDBC、Zookeeper：租约与其会话同生共死 |
+| `InMemoryLeaseBackend(selfExpiringLeases = true)` | Redis：租约自行过期，每次授予持续一个完整租期（与 Cluster 的租约槽授予相同） |
+| `InMemoryLeaseBackend.builder().selfExpiringLeases(true).sessionBoundGrants(true)`（5.1 起） | 单个 Redis 节点：一次授予只持续其会话剩余的时间 |
 
 ```kotlin
 @Test
@@ -49,7 +57,8 @@ fun `only one client leads`() {
 }
 ```
 
-`owner(name)` 和 `token(name)` 让测试可以直接检查后端。在队列、latch 或 future 上等待，绝不使用 `sleep`。
+`owner(name)` 和 `token(name)` 让测试可以直接检查后端；`peekOwner` 和 `peekExpiry` 读取时没有副作用，`expireSession` 和
+`loseLease` 模拟服务器提前结束会话或存储丢失租约。在队列、latch 或 future 上等待，绝不使用 `sleep`。
 
 在 Spring Boot 测试中，把后端定义为 bean：starter 会基于任何 `LeaseBackend` bean 构建 `Simba` 客户端，测试 classpath 上无需任何后端模块。
 
@@ -63,7 +72,7 @@ class InMemorySimba {
 
 ## 虚拟时间 {#virtual-time}
 
-内存后端运行在真实时间上时，故障转移测试仍要等待租约过期。要让此类测试瞬间且确定性地运行，请用同一个 `VirtualScheduler` 驱动客户端和后端：
+在真实时间上，故障转移测试仍要等待租约过期。要让此类测试瞬间且确定性地运行，请用同一个 `VirtualScheduler` 驱动客户端和后端：
 
 ```kotlin
 @OptIn(InternalSimbaApi::class)
@@ -86,37 +95,52 @@ class FailoverTest {
 ```
 
 `scheduler.advance(duration, settle)` 推进虚拟时间并按顺序触发每个到期的定时器，在每个定时器之前调用 `settle`，
-使定时器触发的操作在时间继续推进前完成。leader 任务仍在它自己的（虚拟）线程上运行；通过队列等待它的结果。
+使定时器触发的操作在时间继续推进前完成。Leader 任务仍在它自己的（虚拟）线程上运行，`awaitIdle()` 覆盖不到：通过队列等待它所做的事，
+并在停止任务之前先等它启动。
 
 `Simba.Builder.scheduler`、`Simba.awaitIdle` 和 `Scheduler` 标记为 `@InternalSimbaApi`：它们需要显式 opt-in，
 且在次版本之间不提供兼容性保证。单独的 `VirtualClock` 是一个普通的 `Ticker`，适用于只读取时间的代码。
 
 ## 确定性模拟 {#deterministic-simulation}
 
-`Simulation(seed, params).run()` 在虚拟时间中让多个引擎针对内存后端运行，同时注入消息延迟与丢失、进程暂停、随时间变化的节点时钟速率、
-随机加入和离开分组（分区选举跟随各节点的视图）、在故障期间关闭节点、报告的剩余时间短于实际授予、后端侧故障（后端单方面让会话过期、
-删除或丢失租约），并可选择不发后端提示（模拟 JDBC）。它检查以下不变量：每个名称（包括分区）最多一个有效任期、每个有效任期的截止时刻不晚于
-后端记录的租约过期时刻、任期失效后不会再变有效、token 严格递增、回调成对出现、故障停止后名称和分区的活性、没有泄漏的租约，以及交接顺序。
-被后端侧故障移除的任期在撤销之前不受前几条检查约束，因为这类故障违反了后端的契约；租约丢失导致 token 重新计数时只做统计
-（`premise:tokenReset`），不判失败，因为只有从不丢数据的后端才能保证 token 递增。
-`SimulationParams.builder()` 设置参数，`SimulationResult.events` 统计事件和被执行到的路径（`path:*`）。Simba 在自己的构建中用 10⁴ 个 seed 运行它；任何修改引擎的人都可以使用它，失败的 seed 可以精确重放：
+`Simulation(seed, params).run()` 在虚拟时间中让多个引擎针对内存后端运行，同时注入关键的故障：
+
+- 消息延迟与丢失、进程暂停、随时间变化的节点时钟速率；
+- 加入和离开组（分区选举跟随各节点的视图），在故障期间关闭节点；
+- 报告的时长短于实际授予，以及后端侧故障：后端单方面让会话过期、删除或丢失租约；可选择不发后端提示（与 JDBC 相同）。
+
+然后它检查以下不变量：
+
+| | 不变量 |
+|---|---|
+| I1 | 每个名称（包括分区）最多一个有效任期；每个有效任期的截止时刻不晚于后端记录的该租约过期时刻；任期一旦失效不会再变有效 |
+| I2 | token 严格递增 |
+| I3 | 回调成对出现 |
+| I4 | 故障停止后名称和分区的活性；没有泄漏的租约 |
+| I5 | 交接顺序 |
+
+被后端侧故障移除的任期在撤销之前不受 I1 和 I2 约束，因为这类故障违反了后端的契约；租约丢失导致 token 重新计数时只做统计
+（`premise:tokenReset`），不判失败，因为只有从不丢数据的后端才能保证 token 递增。`SimulationResult.events` 统计事件和被执行到的路径（`path:*`）。
+Simba 在自己的构建中用 10⁴ 个 seed 运行模拟，失败的 seed 可以精确重放：
 
 ```bash
 ./gradlew simba-testing:test -Psimba.simulation.seed=42
 ```
 
-| `SimulationParams`（5.1 起） | 默认值 | 含义 |
+`SimulationParams.builder()` 设置参数；以下参数在 5.1 中加入：
+
+| `SimulationParams` | 默认值 | 含义 |
 |---|---|---|
 | `sessionBoundGrants` | `false` | 配合 `selfExpiringLeases`，一次授予只持续其会话剩余的时间，与 Redis 相同 |
 | `truncatedGrantShare` | `0.3` | 后端报告的时长短于实际授予时长的运行所占比例（如 Zookeeper 服务器限制会话超时） |
-| `meanInjectionInterval` | `20s` | 后端侧故障（后端自行使会话过期、删除或丢失租约）的平均间隔；`Duration.ZERO` 表示关闭 |
+| `meanInjectionInterval` | `20s` | 后端侧故障的平均间隔；`Duration.ZERO` 表示关闭 |
 | `groupPartitions` | `3` | 节点随机加入和离开的一个组的分区数；`0` 表示不使用组 |
 | `earlyCloseShare` | `0.02` | 故障阶段中永久关闭某个节点的随机操作所占比例 |
 | `backendHints` | `true` | 后端发送释放和成员变化提示；`false` 模拟不发提示的 JDBC |
 
 ## 验证 fencing 资源 {#verifying-a-fencing-resource}
 
-`FencingSpec` 检查一个用 fencing token 保护写入的资源（见[在资源中校验 token](/zh/guide/correctness#checking-tokens-in-the-resource)）。
+`FencingSpec` 检查一个用 fencing token 保护写入的资源（见 [Fencing 协议](/zh/guide/correctness#the-fencing-protocol)）。
 继承它并实现两个方法：
 
 ```kotlin

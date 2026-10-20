@@ -9,14 +9,17 @@ Simba 5 是一次重写（[ADR 0010](https://github.com/Ahoo-Wang/Simba/blob/mai
 每个进程一个会话，而不是每个 mutex 一个租约；用 `Term` 对象取代 owner 状态；三种后端共用一个引擎。它在源码、二进制和线协议上都
 **与 4.x 不兼容**：
 
-- JDBC 表、Redis 键和 Zookeeper 路径都不同，因此 4.x 节点和 5.x 节点看不到彼此的租约，会同时成为 leader；
+- JDBC 表、Redis 键和 Zookeeper 路径都不同；
 - 配置属性和 Spring bean 都不同；
 - 需要 Java 21，starter 需要 Spring Boot 4.1 或更高版本；
 - Redis 后端被拆分：单独的 `simba-redis` 只定义了 `RedisScripting` 端口，无法运行。请依赖 `simba-spring-redis`
   （基于 Lettuce 的 Spring Data Redis，它会带上 `simba-redis`），或者为其他客户端自行实现 `RedisScripting`。
 
-因此你无法逐个节点滚动升级。**先停止竞争同一名称的所有节点，再以 5.0 启动它们。** 如果短暂的双重运行会造成危害，请确保第一个
-5.0 节点启动前没有任何 4.x 节点在运行。
+## 为什么必须停止所有节点 {#why-every-node-must-stop}
+
+互斥只在查看同一份租约的节点之间成立。4.x 节点和 5.0 节点把租约存放在不同的地方，因此双方都认为该名称空闲，会同时成为 leader。
+所以你无法逐个节点滚动这次升级：**先停止竞争同一名称的所有节点，再以 5.0 启动它们。** 如果哪怕短暂的双重运行也会造成危害，
+请确保第一个 5.0 节点启动前没有任何 4.x 节点在运行。
 
 ## 步骤 {#steps}
 

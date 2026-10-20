@@ -1,16 +1,18 @@
 ---
 title: Quick Start
-description: Add Simba to a Spring Boot or plain JVM application, wire a backend, and run an election, leader work, a lock and a partition group.
+description: Add Simba to a Spring Boot or plain JVM application, wire a backend, and run a leader-only job, leader work, a lock, a partition group and a bare election.
 ---
 
 # Quick Start
 
-Simba 5 needs Java 21 or later (work and backend calls run on virtual threads). The starter needs Spring Boot 4
-(4.1 or later); the libraries are compiled for Kotlin 2.2 or later.
+From zero to a job that runs on exactly one node, then the other APIs in increasing order of control.
 
-## Dependencies
+**Requirements:** Java 21 or later (work and backend calls run on virtual threads). The starter needs Spring Boot 4.1
+or later; the libraries are compiled for Kotlin 2.2 or later.
 
-Add the Spring Boot starter and **one** backend module.
+## 1. Add the Dependencies
+
+The Spring Boot starter plus **one** backend module:
 
 ::: code-group
 
@@ -55,22 +57,20 @@ implementation("me.ahoo.simba:simba-coroutines:${simbaVersion}")
 
 :::
 
-`simba-bom` aligns the versions of every Simba module. `simba-coroutines` (since 5.1) adds suspending lock calls,
-`withLock` and a `Flow` of events on top of any backend; see [Locks](/guide/locks#coroutines). Without Spring, depend
-on `simba-core` plus a backend module:
+`simba-bom` aligns the versions of every Simba module. Without Spring, depend on `simba-core` plus a backend module:
 `simba-jdbc`, `simba-zookeeper`, or for Redis `simba-spring-redis` (which brings `simba-redis`). `simba-redis` alone
-only defines the `RedisScripting` port: use it without `simba-spring-redis` only with your own adapter for another
+only defines the `RedisScripting` port; use it without `simba-spring-redis` only with your own adapter for another
 Redis client.
 
-## Backend Setup
+## 2. Point It at a Backend
 
-| Backend | What you provide | Notes |
-|---|---|---|
-| JDBC | One `DataSource` bean and the three tables | Run [`init-simba-mysql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-mysql.sql) or [`init-simba-postgresql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-postgresql.sql) once; the dialect is detected from the `DataSource` |
-| Redis | One `RedisConnectionFactory` bean (Spring Boot creates it from `spring.data.redis.*`) | Redis 7; standalone, Sentinel or Cluster |
-| Zookeeper | `simba.zookeeper.connect-string` | Simba opens its own Zookeeper clients, one per session |
+| Backend | What you provide |
+|---|---|
+| JDBC | One `DataSource` bean, plus the three tables created once with [`init-simba-mysql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-mysql.sql) or [`init-simba-postgresql.sql`](https://github.com/Ahoo-Wang/Simba/blob/main/simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-postgresql.sql); the dialect is detected from the `DataSource` |
+| Redis | One `RedisConnectionFactory` bean (Spring Boot creates it from `spring.data.redis.*`); standalone, Sentinel or Cluster |
+| Zookeeper | `simba.zookeeper.connect-string`; Simba opens its own Zookeeper clients, one per session |
 
-The scripts are on the classpath of `simba-jdbc`, so Spring Boot can run them for you:
+The JDBC scripts are on the classpath of `simba-jdbc`, so Spring Boot can run them for you:
 
 ```yaml
 spring:
@@ -80,14 +80,92 @@ spring:
       schema-locations: classpath:me/ahoo/simba/jdbc/init-simba-mysql.sql
 ```
 
-With more than one backend module on the classpath, set `simba.backend=jdbc|redis|zookeeper`; startup fails
-otherwise. The [Backends](/guide/backends) page has the schema, the keys and the operating notes of each.
+With more than one backend module on the classpath, set `simba.backend=jdbc|redis|zookeeper`, or startup fails. The
+starter now creates one `Simba` bean; inject it wherever you use an API below. Storage layout and operating notes of
+each backend are on [Backends](/guide/backends).
 
-The starter creates one `Simba` bean. Inject it wherever you need an API below.
+## 3. Run a Job on One Node
 
-## Election
+The most common need: a periodic job that must not run on two nodes at once.
 
-The base API: callbacks when this node gains and loses a term.
+::: code-group
+
+```java [Spring]
+@Service
+public class ReportJobs {
+    @SimbaScheduled(name = "report", fixedDelay = "1m")
+    public void generate(Term term) {
+        reportService.generate(term.getToken());
+    }
+}
+```
+
+```kotlin [Kotlin]
+simba.election("report").schedule(Schedule.fixedDelay(Duration.ofMinutes(1))) { term ->
+    reportService.generate(fencingToken = term.token)
+}
+```
+
+:::
+
+Start two instances: one leads `report` and runs the job, the other waits. Stop the leader and the other takes over.
+The `Term` the job receives carries the fencing token; pass it to whatever the job writes (see
+[Fencing and Failures](/guide/correctness)).
+
+## 4. The Other APIs
+
+### Work While Leading
+
+`runWhileLeader` runs a block once per term, on its own virtual thread, and interrupts it when the term ends:
+
+```kotlin
+val task = simba.election("ingest").runWhileLeader { term ->
+    while (term.isValid) {
+        sink.write(source.poll(), fencingToken = term.token)
+    }
+}
+// later: stops the election, waits for the block to exit, then releases the lease
+task.close()
+```
+
+### Partitions over the Live Nodes
+
+Each of 16 partitions runs on exactly one node at a time; nodes joining or leaving move only their share:
+
+::: code-group
+
+```java [Spring]
+@SimbaPartitioned(group = "billing", partitions = 16, fixedDelay = "1m")
+public void bill(Term term, int partition) {
+    billing.run(partition, term.getToken());
+}
+```
+
+```kotlin [Kotlin]
+simba.group("billing", partitions = 16).schedule(Schedule.fixedDelay(Duration.ofMinutes(1))) { term, partition ->
+    billing.run(shard = partition, fencingToken = term.token)
+}
+```
+
+:::
+
+### A Lock around One Step
+
+`acquire` returns a `LockTerm`; closing it releases the lease:
+
+```kotlin
+simba.lock("invoice-42").acquire(Duration.ofSeconds(5)).use { term ->
+    term.ensureValid(Duration.ofSeconds(2))      // enough time left for this step?
+    invoiceStore.write(invoice, fencingToken = term.token)
+}
+```
+
+`acquire` throws `LockTimeoutException` when no term was won in time; `tryAcquire()` makes one attempt and returns
+`null` instead.
+
+### A Bare Election
+
+When you manage the work yourself, listen for terms:
 
 ```kotlin
 val election = simba.election("order-dispatcher")
@@ -100,86 +178,14 @@ election.start(object : LeadershipListener {
 election.stop().toCompletableFuture().join()
 ```
 
-Every `onElected(term)` is followed by exactly one `onRevoked(term, reason)`. Keep callbacks short; they run one at a
+Every `onElected(term)` is followed by exactly one `onRevoked(term, reason)`. Keep callbacks short: they run one at a
 time per election.
 
-## Leader Work
-
-Usually you want code to run *while* this node leads. `runWhileLeader` runs a block once per term, on its own virtual
-thread, and interrupts it when the term ends:
-
-```kotlin
-val task = simba.election("report").runWhileLeader { term ->
-    while (term.isValid) {
-        reportStore.writeChunk(nextChunk(), fencingToken = term.token)
-    }
-}
-// later
-task.close()
-```
-
-Periodic work on the leader only:
-
-::: code-group
-
-```kotlin [Kotlin]
-simba.election("report").schedule(Schedule.fixedDelay(Duration.ofMinutes(1))) { term ->
-    reportService.generate(fencingToken = term.token)
-}
-```
-
-```java [Spring]
-@Service
-public class ReportJobs {
-    @SimbaScheduled(name = "report", fixedDelay = "1m")
-    public void generate(Term term) {
-        reportService.generate(term.getToken());
-    }
-}
-```
-
-:::
-
-See [Leader Work](/guide/leader-work) for schedules, handover and partition groups.
-
-## Lock
-
-`acquire` returns a `LockTerm`: the credential of the lock. Closing it releases the lease.
-
-```kotlin
-simba.lock("invoice-42").acquire(Duration.ofSeconds(5)).use { term ->
-    term.ensureValid(Duration.ofSeconds(2))      // enough time left for this step?
-    invoiceStore.write(invoice, fencingToken = term.token)
-}
-```
-
-`acquire` throws `LockTimeoutException` when no term was won in time; `tryAcquire()` makes one attempt and returns
-`null` instead. See [Locks](/guide/locks).
-
-## Partition Group
-
-Spread partitions over the live nodes; each partition runs on exactly one node at a time.
-
-::: code-group
-
-```kotlin [Kotlin]
-simba.group("billing", partitions = 16).schedule(Schedule.fixedDelay(Duration.ofMinutes(1))) { term, partition ->
-    billing.run(shard = partition, fencingToken = term.token)
-}
-```
-
-```java [Spring]
-@SimbaPartitioned(group = "billing", partitions = 16, fixedDelay = "1m")
-public void bill(Term term, int partition) {
-    billing.run(partition, term.getToken());
-}
-```
-
-:::
+The details of each are on [Leader Work](/guide/leader-work) and [Locks](/guide/locks).
 
 ## Without Spring
 
-Build the client yourself over a backend; `Simba` is `AutoCloseable` and closing it frees every lease at once.
+Build the client over a backend yourself. `Simba` is `AutoCloseable`; closing it frees every lease at once.
 
 ```kotlin
 val backend = JdbcLeaseBackend.postgres(dataSource)          // or JdbcLeaseBackend.mysql(dataSource)
@@ -198,8 +204,8 @@ Simba.builder()
 backend.close()
 ```
 
-Create one `Simba` per process: every election, lock and group shares its session, so one keep-alive renews all of
-them. The [Spring Boot](/guide/configuration#without-spring) page lists the builder options.
+Create **one** `Simba` per process: every election, lock and group shares its session, so one keep-alive renews all of
+them. The builder options are listed under [Without Spring](/guide/configuration#without-spring).
 
 ## Run the Example
 
@@ -207,7 +213,8 @@ The [example application](https://github.com/Ahoo-Wang/Simba/tree/main/simba-exa
 `@SimbaPartitioned` and an election against the backend you choose:
 
 ```bash
-./gradlew simba-example:run -PexampleBackend=redis   # jdbc | redis | zookeeper
+./gradlew simba-example:run -PexampleBackend=redis
 ```
 
-Start it twice and stop one instance to watch the other take over.
+`-PexampleBackend` takes `jdbc`, `redis` or `zookeeper`. Start it twice and stop one instance to watch the other take
+over.

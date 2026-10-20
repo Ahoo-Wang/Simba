@@ -23,17 +23,33 @@ export const zh: DefaultTheme.Config = {
     sidebar: {
       '/zh/guide/': [
         {
-          text: '指南',
+          text: '入门',
           items: [
-            { text: '简介', link: '/zh/guide/' },
+            { text: '为什么选择 Simba', link: '/zh/guide/' },
             { text: '快速开始', link: '/zh/guide/quick-start' },
-            { text: '核心概念与正确性', link: '/zh/guide/correctness' },
-            { text: '后端', link: '/zh/guide/backends' },
-            { text: 'Spring Boot', link: '/zh/guide/configuration' },
-            { text: 'Leader 任务与分区', link: '/zh/guide/leader-work' },
+            { text: 'Simba 如何工作', link: '/zh/guide/concepts' },
+          ],
+        },
+        {
+          text: '使用 Simba',
+          items: [
+            { text: '选举与 Leader 任务', link: '/zh/guide/leader-work' },
             { text: '锁', link: '/zh/guide/locks' },
-            { text: '可观测性', link: '/zh/guide/observability' },
+            { text: 'Spring Boot', link: '/zh/guide/configuration' },
             { text: '测试', link: '/zh/guide/testing' },
+          ],
+        },
+        {
+          text: '生产运行',
+          items: [
+            { text: 'Fencing 与故障', link: '/zh/guide/correctness' },
+            { text: '后端', link: '/zh/guide/backends' },
+            { text: '可观测性', link: '/zh/guide/observability' },
+          ],
+        },
+        {
+          text: '版本',
+          items: [
             { text: '升级', link: '/zh/guide/upgrading' },
             { text: '从 4.x 迁移', link: '/zh/guide/migration' },
           ],

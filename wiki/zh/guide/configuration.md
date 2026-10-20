@@ -1,12 +1,20 @@
 ---
 title: Spring Boot
-description: 所有 simba.* 属性、Spring Boot starter 创建的 bean、关闭顺序，以及如何在不使用 Spring 的情况下构建 Simba 客户端。
+description: Simba Spring Boot starter 做了什么，所有 simba.* 属性，它创建的 bean，注解方法，关闭顺序，以及如何在不使用 Spring 的情况下构建 Simba 客户端。
 ---
 
 # Spring Boot
 
-`simba-spring-boot-starter` 基于 classpath 上的后端构建一个 `Simba` 客户端，运行 `@SimbaScheduled` 和
-`@SimbaPartitioned` 方法，并提供 Micrometer 指标、`simba` Actuator 端点和 `simba` 健康指示器。
+`simba-spring-boot-starter` 把 classpath 变成一个 `Simba` 客户端：它选出后端，在其上构建客户端，运行 `@SimbaScheduled` 和
+`@SimbaPartitioned` 方法，并提供 Micrometer 指标、`simba` Actuator 端点和 `simba` 健康指示器。关闭按特定顺序进行，让 Leader 任务能在后端连接消失之前完成交接。
+
+```mermaid
+graph LR
+    CP["classpath 上的<br>后端模块"] --> LB["LeaseBackend bean<br>除非你自己定义"]
+    LB --> S["Simba bean<br>simba.session.*，<br>所有 SimbaEventListener bean"]
+    S --> A["@SimbaScheduled /<br>@SimbaPartitioned 方法"]
+    S --> O["指标、Actuator 端点、<br>健康指示器"]
+```
 
 ## 属性 {#properties}
 
@@ -14,8 +22,8 @@ description: 所有 simba.* 属性、Spring Boot starter 创建的 bean、关闭
 |---|---|---|
 | `simba.enabled` | `true` | 启用整个自动配置 |
 | `simba.backend` | — | `jdbc`、`redis` 或 `zookeeper`；有多个后端模块生效时必须设置 |
-| `simba.session.lease-duration` | `15s` | 会话最后一次续约 (keep-alive) 之后，后端经过这段时间使会话过期。在 Zookeeper 上节点只能扛住约为它 5/12 的停顿；更看重容忍停顿而不是故障转移时间时请调大（见[后端](/zh/guide/backends#zookeeper)） |
-| `simba.session.renew-interval` | `lease-duration / 3` | 续约 (keep-alive) 周期；最多为租约时长的一半 |
+| `simba.session.lease-duration` | `15s` | 会话最后一次续约之后，后端经过这段时间使会话过期。在 Zookeeper 上节点只能扛住约为它 5/12 的停顿；更看重容忍停顿而不是故障转移时间时请调大（见[后端](/zh/guide/backends#zookeeper)） |
+| `simba.session.renew-interval` | `lease-duration / 3` | 续约周期；最多为租约时长的一半 |
 | `simba.session.drift` | `0.01` | 节点与后端之间时钟速率差异的上限，取值范围 `[0, 0.5)` |
 | `simba.session.margin` | `50ms` | 从每个本地截止时刻中额外扣除的安全余量 |
 | `simba.jdbc.enabled` | `true` | 启用 JDBC 后端 |
@@ -36,7 +44,7 @@ description: 所有 simba.* 属性、Spring Boot starter 创建的 bean、关闭
 | `simba.metrics.enabled` | `true` | 存在 `MeterRegistry` bean 时记录 Micrometer 指标 |
 | `management.health.simba.enabled` | `true` | `simba` 健康指示器 |
 
-会话相关属性的含义见[核心概念与正确性](/zh/guide/correctness#timing)；无效的组合会导致启动失败。典型配置：
+会话相关属性之间的取舍见[时序](/zh/guide/concepts#timing)；无效的组合会导致启动失败。典型配置：
 
 ```yaml
 simba:
@@ -50,11 +58,19 @@ management:
         include: health,simba
 ```
 
+## 选择后端 {#selecting-the-backend}
+
+每个后端的自动配置在以下条件同时满足时生效：其模块位于 classpath 上，`simba.enabled` 和 `simba.<backend>.enabled` 不为 `false`，
+且 `simba.backend` 未设置或指定了它。除非应用自己定义了 `LeaseBackend` bean，否则它会定义一个。
+
+classpath 上有多个后端模块时请设置 `simba.backend`，否则启动失败；`simba.backend` 指定了一个未生效的后端时同样失败。
+要使用 starter 不配置的后端（测试中的 `InMemoryLeaseBackend`，或你自己的 `LeaseBackend`），请自行定义 `LeaseBackend` bean。
+
 ## Starter 创建的 Bean {#beans-the-starter-creates}
 
 | Bean | 条件 |
 |---|---|
-| `LeaseBackend`（`JdbcLeaseBackend`、`RedisLeaseBackend` 或 `ZookeeperLeaseBackend`） | 该后端生效且应用未定义 `LeaseBackend`；JDBC 需要唯一的 `DataSource`，Redis 需要唯一的 `RedisConnectionFactory`；Zookeeper 在存在时使用 `ACLProvider` 和 `ZKClientConfig` bean |
+| `LeaseBackend`（`JdbcLeaseBackend`、`RedisLeaseBackend` 或 `ZookeeperLeaseBackend`） | 该后端生效且应用未定义 `LeaseBackend`；JDBC 需要唯一的 `DataSource`，Redis 需要唯一的 Lettuce `RedisConnectionFactory`；Zookeeper 在存在时使用 `ACLProvider` 和 `ZKClientConfig` bean |
 | `Simba` | 存在 `LeaseBackend` bean；使用 `simba.session.*` 和所有 `SimbaEventListener` bean 构建 |
 | `SimbaLifecycle` | 在关闭时关闭客户端 |
 | `SimbaScheduledBeanPostProcessor` | `simba.scheduling.enabled` |
@@ -63,20 +79,22 @@ management:
 | `SimbaHealthIndicator`（`simba`） | classpath 上有 Actuator 且 `management.health.simba.enabled` |
 
 除基础设施 bean（`SimbaBackendSelection`，即 `simba.backend` 的启动检查，以及 `SimbaScheduledBeanPostProcessor`）外，
-所有 bean 都是 `@ConditionalOnMissingBean`：自行定义即可替换。若要在属性之外定制客户端（执行器、固定的
-seed），请用 `Simba.builder()` 自行定义 `Simba` bean。
+所有 bean 都是 `@ConditionalOnMissingBean`：自行定义即可替换。若要在属性之外定制客户端（执行器、固定的 seed），请用
+`Simba.builder()` 自行定义 `Simba` bean。
 
 ## 注解方法 {#annotated-methods}
 
 `@SimbaScheduled` 在某个选举的 leader 上运行一个 bean 方法；`@SimbaPartitioned` 为本节点作为 leader 的组内每个分区运行该方法。
-两者都在上下文刷新后启动、在关闭时停止。它们的属性和方法签名见 [Leader 任务与分区](/zh/guide/leader-work#spring-annotations)页面。
-两种注解选举的租约名（`@SimbaScheduled` 的 `name`、`@SimbaPartitioned` 的 `{group}.{partition}`）和组名必须彼此唯一，
+两者都在上下文刷新后启动、在关闭时停止。它们的属性和方法签名见 [Leader 任务](/zh/guide/leader-work#spring-annotations)。
+两种注解选举的租约名（`@SimbaScheduled` 的 `name`、`@SimbaPartitioned` 的 `{group}.{partition}`）和组名必须彼此唯一：
 冲突时启动失败。
 
 ## 关闭顺序 {#shutdown-order}
 
+Leader 任务必须在后端仍然可达时完成并交接，因此关闭分两个阶段进行：
+
 1. `SimbaScheduledBeanPostProcessor`（phase `DEFAULT_PHASE`）停止所有注解方法：任务被中断，每个租约在其任务退出后释放
-   （见[交接顺序](/zh/guide/correctness#handover-order)）。
+   （见[交接顺序](/zh/guide/concepts#handover-order)）。
 2. 随后 `SimbaLifecycle`（phase `DEFAULT_PHASE - 4096`）关闭 `Simba` 客户端：撤销所有剩余任期、关闭会话并释放其租约，
    这发生在连接工厂等更低 phase 的基础设施停止之前。
 
@@ -97,14 +115,13 @@ val simba = Simba.builder()
 | Builder 方法 | 默认值 | 说明 |
 |---|---|---|
 | `backend(LeaseBackend)` | 必填 | 后端；客户端不会关闭它 |
-| `config(SimbaConfig)` | `SimbaConfig.builder().build()` | 会话时序，见[时序](/zh/guide/correctness#timing) |
+| `config(SimbaConfig)` | `SimbaConfig.builder().build()` | 会话时序，见[时序](/zh/guide/concepts#timing) |
 | `listener(SimbaEventListener)` | 无 | 接收每个 [`SimbaEvent`](/zh/guide/observability#events)；可多次调用 |
 | `ioExecutor(Executor)` | 每次调用一个虚拟线程 | 执行后端调用 |
-| `callbackExecutor(Executor)` | 虚拟线程 | 执行 leader 身份回调，每个选举内串行 |
-| `workExecutor(Executor)` | 每个任期一个虚拟线程 | 执行 leader 任务 |
+| `callbackExecutor(Executor)` | 虚拟线程 | 执行领导权回调，每个选举内串行 |
+| `workExecutor(Executor)` | 每个任期一个虚拟线程 | 执行 Leader 任务 |
 | `ticker(Ticker)` | `System.nanoTime()` | 单调时钟；推进速率必须与 `System.nanoTime()` 一致 |
 | `seed(Long)` | 随机 | 重试抖动的 seed |
 
 **每个进程创建一个客户端**。一个进程中的多个客户端就是多个会话：仅在需要让几组租约互不受对方续约失败影响时才有用，
-代价是每个客户端各自一次续约 (keep-alive)。`close()`（或 `closeAsync()`）撤销所有任期、关闭会话，
-并在最后一个回调执行完后完成；之后再关闭后端。
+代价是每个客户端各自一次续约。`close()`（或 `closeAsync()`）撤销所有任期、关闭会话，并在最后一个回调执行完后完成；之后再关闭后端。
