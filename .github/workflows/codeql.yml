@@ -24,9 +24,35 @@ permissions:
   contents: read
 
 jobs:
+  # Documentation-only pull requests skip the Java / Kotlin analysis (see the Changes action); the actions analysis is
+  # cheap and always runs. The matrix job still runs and skips its steps: a skipped matrix job reports under its
+  # unexpanded name, which would leave the required checks pending. Unless Changes answered 'false' (also when it
+  # failed), everything is analyzed.
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: .github/actions
+
+      - name: Detect code changes
+        id: changes
+        uses: ./.github/actions/changes
+
   analyze:
     name: Analyze (${{ matrix.language }})
+    needs: [ changes ]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    env:
+      ANALYZE: ${{ matrix.language != 'java-kotlin' || needs.changes.outputs.code != 'false' }}
     permissions:
       actions: read
       contents: read
@@ -41,16 +67,18 @@ jobs:
             build-mode: none
     steps:
       - name: Checkout
+        if: env.ANALYZE == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK 21
-        if: matrix.language == 'java-kotlin'
+        if: env.ANALYZE == 'true' && matrix.language == 'java-kotlin'
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
         with:
           java-version: '21'
           distribution: 'temurin'
 
       - name: Initialize CodeQL
+        if: env.ANALYZE == 'true'
         uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           languages: ${{ matrix.language }}
@@ -58,11 +86,12 @@ jobs:
           queries: security-and-quality
 
       - name: Build
-        if: matrix.build-mode == 'manual'
+        if: env.ANALYZE == 'true' && matrix.build-mode == 'manual'
         # A clean, uncached build so the CodeQL tracer observes every compilation.
         run: ./gradlew --no-daemon --no-build-cache clean classes
 
       - name: Analyze
+        if: env.ANALYZE == 'true'
         uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           category: /language:${{ matrix.language }}

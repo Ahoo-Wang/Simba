@@ -13,15 +13,56 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  codecov:
-    name: Codecov
+  # Documentation-only pull requests skip the coverage run (see the Changes action).
+  changes:
+    name: Changes
     runs-on: ubuntu-latest
-    # MySQL and Redis run through Testcontainers (Docker is available on GitHub-hosted runners).
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: .github/actions
+
+      - name: Detect code changes
+        id: changes
+        uses: ./.github/actions/changes
+
+  codecov:
+    name: Codecov
+    needs: [ changes ]
+    # Runs (and builds) also when Changes failed: a skipped job would count as a passed check.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    # MySQL and Redis run through Testcontainers (Docker is available on GitHub-hosted runners).
+    steps:
+      # Codecov posts the required codecov/patch and codecov/project statuses only after an upload, so a pull request
+      # without code reports them itself (a fork's read-only token cannot: those stay pending for a maintainer).
+      - name: Report coverage unchanged
+        if: needs.changes.outputs.code == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          for context in codecov/patch codecov/project; do
+            gh api "repos/$REPO/statuses/$SHA" -f state=success -f context="$context" \
+              -f description='Documentation only: coverage not measured'
+          done
+
+      - name: Checkout
+        if: needs.changes.outputs.code != 'false'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK 21
+        if: needs.changes.outputs.code != 'false'
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
         with:
           java-version: '21'
@@ -32,9 +73,11 @@ jobs:
           settings-path: ${{ github.workspace }}
 
       - name: Build Code Coverage Report
+        if: needs.changes.outputs.code != 'false'
         run: ./gradlew codeCoverageReport --stacktrace
 
       - name: Upload Code Coverage Report to Codecov
+        if: needs.changes.outputs.code != 'false'
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
