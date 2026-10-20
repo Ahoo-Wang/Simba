@@ -74,7 +74,8 @@ jobs:
 
       - name: Build Code Coverage Report
         if: needs.changes.outputs.code != 'false'
-        run: ./gradlew codeCoverageReport --stacktrace
+        # Coverage does not grow with more seeds; SimulationSpec's full 10^4 seeds run in Simba Core Test.
+        run: ./gradlew codeCoverageReport -Psimba.simulation.seeds=1000 --stacktrace
 
       - name: Upload Code Coverage Report to Codecov
         if: needs.changes.outputs.code != 'false'

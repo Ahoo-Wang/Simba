@@ -260,7 +260,7 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
 ## Change Playbooks
 
 - **Engine:** change `step()` and cover it with `EngineTest`-style table tests (events in, effects out); keep
-  `SimulationSpec` (I1–I5 over 10⁴ seeds, four backend modes: owned, self-expiring, session-bound, no hints) green.
+  `SimulationSpec` (I1–I5 over 10⁴ seeds in `Simba Core Test`, 10³ in the JDK 25 and Codecov jobs; four backend modes: owned, self-expiring, session-bound, no hints) green.
   The simulation varies node clock rates over time (beyond `drift`, within what `margin` covers), truncates grants,
   expires sessions, deletes and loses leases backend-side (those terms are exempt from I1/I2 until revoked; a lost
   lease restarting tokens counts as `premise:tokenReset`, not a failure), drives a partition group and closes nodes
