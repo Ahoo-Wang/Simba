@@ -74,9 +74,17 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * The Zookeeper client heartbeats on its own, so a session would otherwise outlive a caller that stopped keeping it
  * alive. A local watchdog therefore closes a session (deleting its nodes) once no keep-alive started within the last
- * `lease`. Remaining durations are `min(lease, negotiated session timeout)`. While the client is disconnected
+ * `lease`. While the client is disconnected
  * (Curator's `SUSPENDED`), [keepAlive] and [acquire] fail, so the caller's own deadline runs out; when Zookeeper
  * reports the session expired (`LOST`), the session answers [KeepAliveResult.Expired].
+ *
+ * Only the leader expires sessions, and a follower answers reads on its own (until it notices it lost the leader,
+ * `syncLimit` ticks later) while it reports the session's activity to the leader only on its next ping. So a
+ * keep-alive first `sync`s through the leader, and a read that succeeded proves the session alive at the leader only
+ * up to that bound: the remaining duration is `min(lease, 5/12 × negotiated session timeout)`. The client sends at
+ * least every third of the timeout and the leader pings every half tick (at most a quarter of the timeout, which is
+ * at least two ticks), so the leader last saw activity of the session at most `7/12` of the timeout before the sync
+ * reply, which came after the keep-alive was sent.
  *
  * Security: every client (each session's and the reader's) authenticates with [authInfo] and is built with
  * [clientConfig]; every node the backend creates (leases, members, and the parents it creates) gets the ACL of
@@ -85,12 +93,16 @@ import java.util.concurrent.atomic.AtomicLong
  * Parents that already exist keep their ACL; the ACL of `{root}/leases` and `{root}/groups/{group}` decides who may
  * create or delete their children.
  *
- * [members] reads through a separate client, so it first `sync`s the group path: a member that just joined through a
- * session client is always in the view.
+ * [members] reads through the client of the session that last joined or left the group here, so that change is
+ * always in the view (Zookeeper orders the requests of one session); without one, through a separate reader client.
+ * It `sync`s the group path first, which brings a follower up to date with the leader. `sync` is no barrier on the
+ * leader itself, which answers it locally: there a change made through another client can show a moment later.
  *
  * @param connectString Zookeeper connect string, shared by every session client and the client [members] reads with.
  * @param root parent path of the lease and group nodes.
- * @param connectionTimeout how long [openSession] waits for a new session.
+ * @param connectionTimeout how long [openSession] waits for a new session. Keep it at most the caller's call timeout
+ *   (the engine's renew interval): a session that connects after the caller gave up has no keep-alive, so the
+ *   watchdog closes it only after its lease.
  * @param authInfo authentication (scheme and credentials) every client adds before its first request.
  * @param aclProvider ACL of each node the backend creates, by path.
  * @param clientConfig configuration of every client (TLS, SASL, ...); `null` for the defaults.
@@ -98,7 +110,7 @@ import java.util.concurrent.atomic.AtomicLong
 class ZookeeperLeaseBackend @JvmOverloads constructor(
     private val connectString: String,
     root: String = DEFAULT_ROOT,
-    private val connectionTimeout: Duration = Duration.ofSeconds(DEFAULT_CONNECTION_TIMEOUT_SECONDS),
+    val connectionTimeout: Duration = Duration.ofSeconds(DEFAULT_CONNECTION_TIMEOUT_SECONDS),
     authInfo: List<AuthInfo> = emptyList(),
     private val aclProvider: ACLProvider = DefaultACLProvider(),
     private val clientConfig: ZKClientConfig? = null,
@@ -112,8 +124,9 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         private const val RETRY_COUNT = 3
         private val EMPTY = ByteArray(0)
 
-        /** Stands for `/` in a keep-alive without leases; the root is never an ephemeral node, so never reported. */
-        private val ROOT_PROBE = LeaseName("root")
+        /** Remaining share of the negotiated session timeout a leader-confirmed keep-alive may report. */
+        private const val REMAINING_TWELFTHS = 5L
+        private const val TWELFTHS = 12L
 
         internal fun sessionIdOf(zookeeperSessionId: Long): SessionId = SessionId("%016x".format(zookeeperSessionId))
     }
@@ -124,6 +137,9 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
     private val groupsPath = "${this.root}/groups"
     private val sessions = ConcurrentHashMap<SessionId, Session>()
     private val listeners = CopyOnWriteArrayList<BackendHintListener>()
+
+    /** Per group, the session that last joined or left it here: [members] reads through its client. */
+    private val groupWriters = ConcurrentHashMap<String, Session>()
     private val epochs = AtomicLong()
 
     @Volatile
@@ -210,14 +226,19 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         return live.expiringOn {
             live.ensureConnected()
             val heldPaths = held.associateWith(::leasePath)
-            val (candidates, pending) = live.sendLocked {
+            val (candidates, synced, pending) = live.sendLocked {
                 val candidates = HashMap(live.candidates)
                 val paths = heldPaths + candidates.keys.associateWith(::leasePath)
-                candidates to paths.mapValues { live.zooKeeper.existsAsync(it.value, null) }
+                // The sync goes through the leader, and the reads queue behind it: a follower that lost the leader
+                // cannot answer this keep-alive from its own state.
+                val synced = live.zooKeeper.syncAsync("/")
+                Triple(candidates, synced, paths.mapValues { live.zooKeeper.existsAsync(it.value, null) })
             }
-            // At least one round trip, so the reply proves Zookeeper still knows the session.
-            val stats = pending.ifEmpty { mapOf(ROOT_PROBE to live.zooKeeper.existsAsync("/", null)) }
-                .mapValues { it.value.await() }
+            val code = synced.await()
+            if (code != KeeperException.Code.OK) {
+                throw KeeperException.create(code, "/")
+            }
+            val stats = pending.mapValues { it.value.await() }
             if (!live.extend(startedAt, lease)) {
                 return KeepAliveResult.Expired
             }
@@ -279,9 +300,11 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
             repeat(MAX_ATTEMPTS) {
                 try {
                     live.zooKeeper.create(path, EMPTY, aclFor(path), CreateMode.EPHEMERAL)
+                    groupWriters[group] = live
                     publish(BackendHint.MembersChanged(group))
                     return@expiringOn
                 } catch (_: KeeperException.NodeExistsException) {
+                    groupWriters[group] = live
                     return@expiringOn
                 } catch (_: KeeperException.NoNodeException) {
                     // The group container is missing or was just reaped.
@@ -304,11 +327,16 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
             } catch (_: KeeperException.NoNodeException) {
                 // Not a member.
             }
+            groupWriters[group] = live
         }
     }
 
     override fun members(group: String): List<SessionId> {
         val path = groupPath(group)
+        // Through the last writer when it can answer; a missing group node goes to the reader, which watches for it.
+        groupWriters[group]?.takeIf(Session::isConnected)?.let { writer ->
+            writer.expiringOn { writer.members(path) }?.let { return it }
+        }
         sync(path)
         repeat(MAX_ATTEMPTS) {
             try {
@@ -430,7 +458,24 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
 
         fun owns(stat: Stat): Boolean = stat.ephemeralOwner == ownerId
 
-        fun remaining(lease: Duration): Duration = minOf(lease, Duration.ofMillis(zooKeeper.sessionTimeout.toLong()))
+        /** See the class KDoc: the share of the session timeout a leader-confirmed reply leaves for certain. */
+        fun remaining(lease: Duration): Duration =
+            minOf(lease, Duration.ofMillis(zooKeeper.sessionTimeout * REMAINING_TWELFTHS / TWELFTHS))
+
+        fun isConnected(): Boolean = zooKeeper.state == ZooKeeper.States.CONNECTED
+
+        /** The members under [path] read after a `sync`, with a children watch; `null` when the group node is missing. */
+        fun members(path: String): List<SessionId>? {
+            val code = zooKeeper.syncAsync(path).await()
+            if (code != KeeperException.Code.OK) {
+                throw KeeperException.create(code, path)
+            }
+            return try {
+                zooKeeper.getChildren(path, groupWatcher).map(::SessionId).sortedBy { it.value }
+            } catch (_: KeeperException.NoNodeException) {
+                null
+            }
+        }
 
         fun ensureConnected() {
             val state = zooKeeper.state
@@ -484,6 +529,7 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
                 check?.cancel(false)
             }
             sessions.remove(id, this)
+            groupWriters.values.removeIf { it === this }
             // ZooKeeper.close() swallows a pending interrupt: close uninterrupted and restore the flag afterwards.
             var interrupted = Thread.interrupted()
             try {
@@ -612,6 +658,13 @@ private fun ZooKeeper.createAsync(path: String, data: ByteArray, acl: List<ACL>)
     val reply = CompletableFuture<KeeperException.Code>()
     val callback = AsyncCallback.StringCallback { rc, _, _, _ -> reply.complete(KeeperException.Code.get(rc)) }
     create(path, data, acl, CreateMode.EPHEMERAL, callback, null)
+    return reply
+}
+
+private fun ZooKeeper.syncAsync(path: String): CompletableFuture<KeeperException.Code> {
+    val reply = CompletableFuture<KeeperException.Code>()
+    val callback = AsyncCallback.VoidCallback { rc, _, _ -> reply.complete(KeeperException.Code.get(rc)) }
+    sync(path, callback, null)
     return reply
 }
 

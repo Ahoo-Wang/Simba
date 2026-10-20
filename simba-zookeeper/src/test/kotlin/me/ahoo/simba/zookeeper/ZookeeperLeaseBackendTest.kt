@@ -64,7 +64,7 @@ class ZookeeperLeaseBackendTest {
         val zooKeeper = checkNotNull(backend.zooKeeperOf(grant.id))
 
         grant.id.value.assert().isEqualTo("%016x".format(zooKeeper.sessionId))
-        grant.remaining.assert().isEqualTo(minOf(lease, Duration.ofMillis(zooKeeper.sessionTimeout.toLong())))
+        grant.remaining.assert().isEqualTo(minOf(lease, Duration.ofMillis(zooKeeper.sessionTimeout * 5L / 12)))
     }
 
     @Test

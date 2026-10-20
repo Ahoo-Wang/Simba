@@ -215,13 +215,17 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
 - Zookeeper (`ZookeeperLeaseBackend`): one raw `ZooKeeper` client per session, never reconnected to another session;
   `SessionId` = zk session id as 16 hex digits. Leases are ephemeral `/simba/leases/{name}`, owner = `ephemeralOwner`,
   token = czxid (strictly increasing, not consecutive). Members are ephemeral `/simba/groups/{g}/{sid}`. A local
-  watchdog closes a session no keep-alive started within `lease`; remaining is `min(lease, negotiated timeout)`. A
+  watchdog closes a session no keep-alive started within `lease`. A keep-alive `sync`s through the leader before its
+  reads (a follower cut off from the leader still answers reads), and remaining is `min(lease, 5/12 × negotiated
+  timeout)`: the leader may have last seen the session a client ping interval plus a leader ping earlier. A
   disconnected client fails `keepAlive` / `acquire`; a zk-expired one is `Expired`, and so is a `CONNECTIONLOSS` of a
   closing client (Zookeeper fails requests that way while closing, before the state turns `CLOSED`).
   A name is a keep-alive candidate from before its create is sent (under the session's send lock, so a keep-alive read
   sent earlier cannot drop it); keep-alive reports candidates the session owns and forgets the others. Releases of a
   session are serialized (the czxid check and the delete are not atomic). Lease paths of a batch are validated before
-  any request; `members` syncs the group path, then leaves a children watch (an exists watch on a missing group). A
+  any request; `members` reads through the client of the session that last joined or left the group here (its own
+  change is ordered; else the reader), `sync`s first (no barrier on the leader, which answers it locally), then leaves
+  a children watch (an exists watch on a missing group). A
   closed backend opens no session. Group names follow the `LeaseName` rules. Every client adds `authInfo` and uses
   `clientConfig`; every node the backend creates gets `aclProvider`'s ACL (default open; existing parents keep theirs, also
   when the backend may not create in their parent: `NoAuth` on an existing ancestor is ignored).
@@ -238,7 +242,8 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
 - Shutdown order: `SimbaScheduledBeanPostProcessor` (phase `DEFAULT_PHASE`) stops `@SimbaScheduled` /
   `@SimbaPartitioned` work and waits for the handover; `SimbaLifecycle` (phase `DEFAULT_PHASE - 4096`) then closes the
   client, before lower-phase infrastructure such as connection factories stops.
-- JDBC `query-timeout` defaults to the session renew interval (the engine gives up on a call after it anyway).
+- JDBC `query-timeout` and Zookeeper `connection-timeout` default to the session renew interval (the engine gives up
+  on a call after it anyway).
 - The properties classes are Kotlin data classes bound through their primary constructor, which needs
   `kotlin-reflect` at runtime: the starter declares it (without it Boot falls back to JavaBean binding and fails on
   any non-default value). Tests must not rely on MockK bringing it in; `ExampleBackendTest` runs without MockK.

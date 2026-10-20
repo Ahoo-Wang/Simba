@@ -64,7 +64,7 @@ class ConfigurationMetadataTest {
             Triple("simba.zookeeper.connect-string", "java.lang.String", "\"localhost:2181\""),
             // The processor escapes the slash.
             Triple("simba.zookeeper.root", "java.lang.String", "\"\\/simba\""),
-            Triple("simba.zookeeper.connection-timeout", DURATION, "\"15s\""),
+            Triple("simba.zookeeper.connection-timeout", DURATION, null),
             Triple("simba.zookeeper.auth.scheme", "java.lang.String", "\"digest\""),
             Triple("simba.zookeeper.auth.credentials", "java.lang.String", null),
             Triple(

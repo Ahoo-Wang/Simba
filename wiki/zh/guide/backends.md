@@ -172,8 +172,12 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 - 名字从发出 create 的那一刻起就被视为"可能拥有"：即使 create 已在服务端成功而回复丢失（连接断开、超时），下一次续约在核实节点持有者后
   仍会报告该租约，由引擎释放。同一会话的释放逐个执行。
 - Zookeeper 客户端会自行发送心跳，因此一个本地看门狗会关闭在租约时长内没有被续约的会话：停止续约的节点永远不会仅靠心跳保住自己的租约。
-- 剩余时间为 `min(leaseDuration, 协商后的会话超时)`。客户端断开连接期间，续约和获取都会失败，因此本地截止时刻会耗尽；当 Zookeeper
-  报告会话过期时，会话为 `Expired`。
+- 只有 leader 会让会话过期；follower 在发现自己与 leader 失联之前（`syncLimit` 个 tick）会用本地状态应答读请求，并且只在下一次
+  ping 时才把会话的活动上报给 leader。因此续约会先经 leader 执行 `sync`，剩余时间为 `min(leaseDuration, 5/12 × 协商后的会话超时)`：
+  客户端至少每隔会话超时的三分之一发送一次请求，leader 每半个 tick（最多为会话超时的四分之一）ping 一次，所以 leader 最后一次看到该会话
+  不早于应答前会话超时的 `7/12`。在默认租约下，客户端因此大约每两秒续约一次，并且每个会话发布一次 `SessionLeaseShortened`。
+- 客户端断开连接期间，或者在与 leader 失联的 follower 上，续约和获取都会失败，因此本地截止时刻会耗尽；当 Zookeeper 报告会话过期时，
+  会话为 `Expired`。
 
 ### 运维说明 {#operating-notes-1}
 
@@ -181,9 +185,11 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
   崩溃后的故障转移需要协商后的超时时长。
 - 写入经法定人数提交，因此 leader 切换不会丢失 token；只有集群数据丢失或从更早的快照恢复时，token 才可能回退。
   会话超时按服务器的流逝时间计算，因此集群主机的墙钟跳变不会缩短它们。
-- `simba.zookeeper.connection-timeout` 限制打开会话所需的最长时间。
-- 组名遵循 `LeaseName` 的规则（1–128 个 `[A-Za-z0-9._:-]` 字符，且不能是 `.` 或 `..`），与所有后端一致。`members` 先对组路径执行
-  sync，因此刚刚返回的 join 一定出现在视图中。
+- `simba.zookeeper.connection-timeout` 限制打开会话所需的最长时间，默认等于续约间隔，超过它引擎就会放弃这次调用。之后才连上的会话不会被续约，
+  看门狗会在 `leaseDuration` 之后关闭它。
+- 组名遵循 `LeaseName` 的规则（1–128 个 `[A-Za-z0-9._:-]` 字符，且不能是 `.` 或 `..`），与所有后端一致。`members` 通过本节点上最近一次 join 或 leave 该组的会话的客户端读取，
+  因此这次变化一定出现在视图中（Zookeeper 按顺序处理同一会话的请求）；读取前先执行 `sync`，让 follower 追上 leader。leader 会在本地直接应答
+  `sync`，所以其他节点的变化在 leader 上可能稍晚才出现，成员变化提示和定期刷新会补上。
 
 ### 安全 {#security}
 

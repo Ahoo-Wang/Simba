@@ -205,19 +205,31 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
   released by the engine. Releases of one session run one at a time.
 - The Zookeeper client heartbeats on its own, so a local watchdog closes a session that no keep-alive renewed within
   the lease: a node that stopped renewing never keeps its leases through heartbeats alone.
-- Remaining time is `min(leaseDuration, negotiated session timeout)`. While the client is disconnected, keep-alive and
-  acquire fail, so the local deadline runs out; when Zookeeper reports the session expired, the session is `Expired`.
+- Only the leader expires sessions, and a follower answers reads from its own state until it notices it lost the
+  leader (`syncLimit` ticks), while it reports the session's activity to the leader only on its next ping. So a
+  keep-alive first `sync`s through the leader, and its remaining time is `min(leaseDuration, 5/12 × negotiated session
+  timeout)`: the client sends at least every third of the timeout and the leader pings every half tick (at most a
+  quarter of the timeout), so the leader saw the session at most `7/12` of the timeout before the reply. With the
+  default lease the client therefore renews about every two seconds and publishes `SessionLeaseShortened` once per
+  session.
+- While the client is disconnected, or on a follower cut off from the leader, keep-alive and acquire fail, so the local
+  deadline runs out; when Zookeeper reports the session expired, the session is `Expired`.
 
 ### Operating Notes
 
 - The session timeout requested is `leaseDuration`; the ensemble clamps it to `[minSessionTimeout,
   maxSessionTimeout]` (by default 2 to 20 ticks). Failover after a crash takes the negotiated timeout.
-- `simba.zookeeper.connection-timeout` bounds how long opening a session may take.
+- `simba.zookeeper.connection-timeout` bounds how long opening a session may take; it defaults to the renew interval,
+  after which the engine gives up on the call. A session that connects later anyway is never kept alive, and the
+  watchdog closes it after `leaseDuration`.
 - Writes commit through a quorum, so a leader change keeps every token; tokens can only go back if the ensemble's data
   is lost or restored from an older snapshot. Session timeouts are tracked with the servers' elapsed time, so a wall
   clock step on an ensemble host does not shorten them.
 - Group names follow the `LeaseName` rules (1–128 characters of `[A-Za-z0-9._:-]`, not `.` or `..`), as on every
-  backend. `members` syncs the group path first, so a join that just returned is always in the view.
+  backend. `members` reads through the client of the session that last joined or left the group on this node, so
+  that change is always in the view (Zookeeper orders the requests of a session), after a `sync` that brings a
+  follower up to date with the leader. A `sync` is answered locally on the leader, so a change made by another node can
+  show there a moment later; membership hints and the periodic refresh pick it up.
 
 ### Security
 

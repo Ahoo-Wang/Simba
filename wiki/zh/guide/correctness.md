@@ -100,7 +100,8 @@ deadline = sentAt + remaining × (1 − drift) − margin
 
 后端给出的时间可能少于 `leaseDuration`——Zookeeper 服务端会把会话超时限制在 `maxSessionTimeout` 以内。当它给出的本地有效期内已容纳不下两次间隔为
 `renewInterval` 的续约时，客户端改为每隔本地有效期的三分之一续约一次，并且每个会话发布一次 `SessionLeaseShortened`（同时记录 warn 日志），
-而不是让每个任期都以 `DEADLINE_PASSED` 结束。
+而不是让每个任期都以 `DEADLINE_PASSED` 结束。Zookeeper 给出的时间总是更少：一次续约只能证明会话在 leader 上至少还能存活会话超时的 `5/12`
+（见[后端](/zh/guide/backends#zookeeper)），因此在默认租约下大约每两秒续约一次。
 
 如何选择：
 
@@ -255,6 +256,7 @@ autonumber
 | 后端报告会话已过期 | 每个任期都被撤销（`SESSION_EXPIRED`），打开新会话，重新竞争。 |
 | Leader 暂停时间超过租约（GC、虚拟机冻结） | 醒来时 `term.isValid` 已为 `false`；引擎撤销该任期。已经在途的写入仍可能落地：[fencing token](#fencing-tokens) 是唯一的防线。 |
 | 续约显示租约被他人拥有 | 任期被撤销（`TAKEN_OVER`）。 |
+| Zookeeper follower 与 leader 失联 | 在最多 `syncLimit` 个 tick 内，该 follower 仍会用本地状态应答读请求，而 leader 已看不到这个会话并会让它过期。续约会先经 leader 执行 `sync`，因此在这样的 follower 上续约会失败，本地截止时刻随之耗尽，绝不会晚于 leader 对该会话的判定。 |
 | 时钟速率差异超过 `drift` | 安全性论证不再成立；请调大 `drift`。 |
 | Redis 主从切换丢失最近的写入 | Token 可能回退；见 [后端](/zh/guide/backends#token-regression-after-a-failover)。 |
 | Redis 在内存压力下淘汰键（`allkeys-*` 策略） | 被淘汰的租约 hash 会让 token 从 1 重新开始，因此 token 回退；请使用 `noeviction` 或专用实例，见 [后端](/zh/guide/backends#memory-eviction)。 |

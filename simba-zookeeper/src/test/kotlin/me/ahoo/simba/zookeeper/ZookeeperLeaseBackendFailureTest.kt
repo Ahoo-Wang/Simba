@@ -34,6 +34,7 @@ import org.junit.jupiter.api.assertThrows
 import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
@@ -219,6 +220,48 @@ class ZookeeperLeaseBackendFailureTest {
         backend.keepAlive(session, lease, emptySet()).assert().isEqualTo(KeepAliveResult.Expired)
         backend.acquire(backend.openSession(lease).id, setOf(name)).values.single().assert()
             .isInstanceOf(AcquireResult.Granted::class.java)
+    }
+
+    @Test
+    fun membersOfAGroupDeletedAfterItsLastChangeFallsBackToTheReader() {
+        val session = backend.openSession(lease).id
+        val group = group()
+        backend.join(session, group)
+        backend.leave(session, group)
+        admin.delete("/simba/groups/$group", -1)
+
+        backend.members(group).assert().isEmpty()
+    }
+
+    @Test
+    fun membersFallsBackToTheReaderWhenTheWriterClientIsClosed() {
+        val session = backend.openSession(lease).id
+        val other = backend.openSession(lease).id
+        val group = group()
+        backend.join(other, group)
+        backend.join(session, group)
+        checkNotNull(backend.zooKeeperOf(session)).close()
+
+        backend.members(group).assert().containsExactly(other)
+    }
+
+    @Test
+    fun aSessionNobodyKeepsAliveIsClosedAfterItsLease() {
+        // Like a session that connected after the caller's call timeout: its lease ends without a keep-alive.
+        val session = backend.openSession(Duration.ofMillis(200)).id
+        val closed = CountDownLatch(1)
+        val poller = Executors.newSingleThreadScheduledExecutor()
+        try {
+            poller.scheduleWithFixedDelay({
+                if (backend.zooKeeperOf(session) == null) {
+                    closed.countDown()
+                }
+            }, 0, 20, TimeUnit.MILLISECONDS)
+            closed.await(30, TimeUnit.SECONDS).assert().isTrue()
+        } finally {
+            poller.shutdownNow()
+        }
+        backend.keepAlive(session, lease, emptySet()).assert().isEqualTo(KeepAliveResult.Expired)
     }
 
     private fun name(): LeaseName = LeaseName("zk.${UUID.randomUUID()}")

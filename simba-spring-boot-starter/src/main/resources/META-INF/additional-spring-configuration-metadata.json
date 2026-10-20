@@ -110,9 +110,8 @@
     {
       "name": "simba.zookeeper.connection-timeout",
       "type": "java.time.Duration",
-      "description": "Connection timeout of the Zookeeper clients.",
-      "sourceType": "me.ahoo.simba.spring.boot.starter.zookeeper.ZookeeperProperties",
-      "defaultValue": "15s"
+      "description": "How long opening a session may wait for the ensemble; defaults to simba.session.renew-interval, after which the engine gives up on the call.",
+      "sourceType": "me.ahoo.simba.spring.boot.starter.zookeeper.ZookeeperProperties"
     },
     {
       "name": "simba.zookeeper.auth.scheme",
