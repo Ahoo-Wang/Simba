@@ -97,7 +97,9 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
    measured by the backend's clock. Keep-alive reports every owned lease (`held` is only a hint); inputs are validated
    alike (`LeaseBackend.requireLease` ≥ 1 ms, `requireGroup` = `LeaseName` rules, `requireBatch` ≤ `MAX_BATCH` 64).
    `InMemoryLeaseBackend(selfExpiringLeases = true)` models Redis-style leases (a grant lasts one full lease; with
-   `sessionBoundGrants = true`, as on Redis, only what the session has left); `SimulationSpec` runs all three modes.
+   `sessionBoundGrants = true`, as on a single Redis node, only what the session has left, and in the simulation the
+   Cluster's two-step acquire, `beginSlotAcquire` then `grant`, with events in between); `SimulationSpec` runs all
+   three modes.
    Within 5.x the public API stays source compatible (Kotlin and Java callers keep compiling); binary compatibility is
    not required.
 
@@ -198,10 +200,12 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   held and unchanged for a lease. Close: delete session, free indexed leases and groups, drop indexes (retry-safe).
   Groups: zset `simba:group:{g}` scored by expiry.
   Release publishes `released` on the lease key, the only broadcast. With `routeBySlot` (Cluster) every script call
-  keeps to one hash slot. Only durations cross nodes, never a node's `TIME`: every call after the session-slot one
-  carries what the session has left (its remaining time minus the client's monotonic time since that call
-  answered), and its node grants or extends nothing beyond its own `now` plus that (also the single-node second
-  keep-alive call). Acquire and join send nothing once the session's remaining time passed since the session call
+  keeps to one hash slot. Only durations cross nodes, never a node's `TIME`: acquire and join grant one full session
+  lease on the slot node's own clock (it covers a keep-alive that ran between the session call and the slot call,
+  which extends no lease the session does not hold yet; a grant to a session that died meanwhile outlives it by up to
+  a lease), while keep-alive's later calls carry what the session has left (its new remaining time minus the client's
+  monotonic time since the session call answered) and extend nothing beyond their node's `now` plus that (also the
+  single-node second keep-alive call). Acquire and join send nothing once the session's remaining time passed since the session call
   was sent; an acquire answering later than that releases the terms it began and fails. Group names follow the `LeaseName` rules. `wait-replicas` makes a new term wait for `WAIT`.
 - Zookeeper (`ZookeeperLeaseBackend`): one raw `ZooKeeper` client per session, never reconnected to another session;
   `SessionId` = zk session id as 16 hex digits. Leases are ephemeral `/simba/leases/{name}`, owner = `ephemeralOwner`,

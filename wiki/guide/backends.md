@@ -134,9 +134,13 @@ scripts can reach Redis long after the first one (a starved thread, a driver hol
 when the session may have died, and their nodes' clocks may differ from the session node's. Only durations cross
 nodes, so a fixed skew between node clocks changes nothing:
 
-- Each later script carries what the session has left: its remaining time from the session call minus the time the
-  client measured since that call answered. Its node grants and extends nothing beyond its own now plus that, so a
-  lease lasts at least as long as its session and outlasts it by at most the delay before the script ran.
+- Acquire and join grant one full session lease on the lease node's own clock. A keep-alive that runs between the
+  session call and the lease call extends the session but not a lease the session does not hold yet, and the term
+  is adopted with that keep-alive's deadline; a full lease covers it. The price is liveness only: a grant to a session
+  that died in between outlives it by up to one lease, blocking that name (or keeping a stale member) that long.
+- Keep-alive's later scripts carry what the session has left: its new remaining time minus the time the client
+  measured since the session call answered. Their node extends nothing beyond its own now plus that, so a lease lasts
+  at least as long as its session and outlasts it by at most the delay before the script ran.
 - Acquire and join send nothing once the session's remaining time passed since the session call was sent, and fail.
   An acquire answering later than that releases the terms it began and fails, even when other slots granted theirs:
   keep-alive drops a lost lease from the session's index one lease after the attempt, and `owned` would never report
