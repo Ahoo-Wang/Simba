@@ -91,9 +91,11 @@ class FailoverTest {
 
 ## 确定性模拟 {#deterministic-simulation}
 
-`Simulation(seed, params).run()` 在虚拟时间中让多个引擎针对内存后端运行，同时注入消息延迟与丢失、进程暂停以及最大为
-`drift` 的时钟漂移，并检查以下不变量：任一时刻每个名称最多一个有效任期、token 严格递增、回调成对出现、故障停止后的活性，
-以及交接顺序。Simba 在自己的构建中用 10⁴ 个 seed 运行它；任何修改引擎的人都可以使用它，失败的 seed 可以精确重放：
+`Simulation(seed, params).run()` 在虚拟时间中让多个引擎针对内存后端运行，同时注入消息延迟与丢失、进程暂停、最大为
+`drift` 的时钟漂移、随机加入和离开分组（分区选举跟随各节点的视图）、在故障期间关闭节点、报告的剩余时间短于实际授予，以及后端侧故障
+（后端单方面让会话过期或删除租约）。它检查以下不变量：任一时刻每个名称（包括分区）最多一个有效任期、token 严格递增、回调成对出现、
+故障停止后的活性，以及交接顺序；被后端侧故障移除的任期在撤销之前不受前两条约束，因为这类故障违反了后端的契约。
+`SimulationParams.builder()` 设置参数，`SimulationResult.events` 统计事件和被执行到的路径（`path:*`）。Simba 在自己的构建中用 10⁴ 个 seed 运行它；任何修改引擎的人都可以使用它，失败的 seed 可以精确重放：
 
 ```bash
 ./gradlew simba-testing:test -Psimba.simulation.seed=42

@@ -13,9 +13,12 @@
 
 package me.ahoo.simba.testing
 
+import me.ahoo.simba.RevokeReason
 import me.ahoo.test.asserts.assert
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 
 class SimulationSpec {
     private val seeds = System.getProperty("simba.simulation.seeds")?.toLong() ?: DEFAULT_SEEDS
@@ -57,10 +60,37 @@ class SimulationSpec {
         Simulation(SAMPLE_SEED).run().assert().isEqualTo(Simulation(SAMPLE_SEED).run())
     }
 
-    @Test
-    fun `faults actually happen`() {
-        val results = (0L until 50L).map { Simulation(it).run() }
-        results.sumOf { it.revocations.size }.assert().isGreaterThan(0)
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = ["owned", "self-expiring", "session-bound"])
+    fun `every fault path actually happens`(mode: String) {
+        val params = when (mode) {
+            "self-expiring" -> SELF_EXPIRING
+            "session-bound" -> SESSION_BOUND
+            else -> SimulationParams()
+        }
+        val results = (0L until COVERAGE_SEEDS).map { Simulation(it, params).run() }
+        val revocations = results.flatMap { it.revocations.entries }.groupBy({ it.key }, { it.value })
+            .mapValues { it.value.sum() }
+        val events = results.flatMap { it.events.entries }.groupBy(
+            { it.key },
+            { it.value }
+        ).mapValues { it.value.sum() }
+        // Every way a term ends, the reconcile revocation (TAKEN_OVER) and a session expiring mid-term included.
+        RevokeReason.entries.forEach { reason -> (revocations[reason] ?: 0).assert().isGreaterThan(0) }
+        listOf(
+            "SessionLeaseShortened",
+            "path:truncatedGrantRun",
+            "path:shortenedCallTimeout",
+            "path:injectSessionExpiry",
+            "path:injectLeaseDelete",
+            "path:join",
+            "path:leave",
+            "path:groupView",
+            "path:partitionElected",
+            "path:partitionHandedOver",
+            "path:earlyClose",
+            "path:closeWhileLeading",
+        ).forEach { path -> (events[path] ?: 0).assert().isGreaterThan(0) }
         results.sumOf { it.sessions - it.nodes }.assert().isGreaterThan(0)
     }
 
@@ -86,6 +116,7 @@ class SimulationSpec {
     companion object {
         const val DEFAULT_SEEDS = 10_000L
         const val SAMPLE_SEED = 42L
+        const val COVERAGE_SEEDS = 50L
         val SELF_EXPIRING = SimulationParams.builder().selfExpiringLeases(true).build()
         val SESSION_BOUND = SimulationParams.builder().selfExpiringLeases(true).sessionBoundGrants(true).build()
     }
