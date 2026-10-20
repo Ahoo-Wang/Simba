@@ -13,6 +13,7 @@
 
 package me.ahoo.simba.zookeeper
 
+import me.ahoo.simba.SimbaException
 import me.ahoo.simba.spi.LeaseName
 import me.ahoo.simba.spi.SessionExpiredException
 import me.ahoo.test.asserts.assert
@@ -21,6 +22,7 @@ import org.apache.curator.test.TestingServer
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
@@ -65,6 +67,24 @@ class ZookeeperLeaseBackendClosingTest {
         backend.closeSession(session)
 
         acquire.get(30, TimeUnit.SECONDS).assert().isInstanceOf(SessionExpiredException::class.java)
+    }
+
+    @Test
+    fun aKeepAliveWhoseSyncGetsNoAnswerFails() {
+        val session = backend.openSession(Duration.ofSeconds(30)).id
+        proxy.freeze()
+
+        // The leader never confirms the sync; the client gives up after its read timeout.
+        assertThrows<SimbaException> { backend.keepAlive(session, Duration.ofSeconds(30), emptySet()) }
+    }
+
+    @Test
+    fun membersThroughAWriterWhoseSyncGetsNoAnswerFails() {
+        val session = backend.openSession(Duration.ofSeconds(30)).id
+        backend.join(session, "group")
+        proxy.freeze()
+
+        assertThrows<SimbaException> { backend.members("group") }
     }
 
     /** Waits until [caller] blocks on a Zookeeper reply, so the close starts while its request is in flight. */

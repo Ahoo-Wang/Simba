@@ -18,6 +18,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * A TCP proxy to `127.0.0.1:[target]` that stops forwarding on [freeze]: from then on it silently drops what either
@@ -32,17 +33,24 @@ internal class FreezingProxy(private val target: Int) : AutoCloseable {
     val port: Int = listener.localPort
 
     init {
+        val accepting = CountDownLatch(1)
         Thread {
-            var client = runCatching { listener.accept() }.getOrNull()
-            while (client != null) {
-                connect(client)
-                client = runCatching { listener.accept() }.getOrNull()
+            accepting.countDown()
+            while (!listener.isClosed) {
+                runCatching { listener.accept() }
+                    .onSuccess { client -> Thread { connect(client) }.apply { isDaemon = true }.start() }
+                    .onFailure { if (!listener.isClosed) System.err.println("FreezingProxy accept failed: $it") }
             }
         }.apply { isDaemon = true }.start()
+        check(accepting.await(ACCEPT_START_SECONDS, TimeUnit.SECONDS)) { "FreezingProxy did not start." }
     }
 
     private fun connect(client: Socket) {
-        val upstream = runCatching { Socket("127.0.0.1", target) }.getOrNull()
+        val upstream = runCatching {
+            Socket().apply { connect(InetSocketAddress("127.0.0.1", target), CONNECT_TIMEOUT_MILLIS) }
+        }
+            .onFailure { System.err.println("FreezingProxy cannot reach 127.0.0.1:$target: $it") }
+            .getOrNull()
         if (upstream == null) {
             runCatching { client.close() }
             return
@@ -81,5 +89,7 @@ internal class FreezingProxy(private val target: Int) : AutoCloseable {
 
     private companion object {
         const val BUFFER_BYTES = 8192
+        const val ACCEPT_START_SECONDS = 10L
+        const val CONNECT_TIMEOUT_MILLIS = 5000
     }
 }

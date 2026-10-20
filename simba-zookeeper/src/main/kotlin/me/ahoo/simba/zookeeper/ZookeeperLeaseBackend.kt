@@ -333,8 +333,9 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
 
     override fun members(group: String): List<SessionId> {
         val path = groupPath(group)
+        // Through the last writer when it can answer; a missing group node goes to the reader, which watches for it.
         groupWriters[group]?.takeIf(Session::isConnected)?.let { writer ->
-            writer.expiringOn { writer.members(group, path) }?.let { return it }
+            writer.expiringOn { writer.members(path) }?.let { return it }
         }
         sync(path)
         repeat(MAX_ATTEMPTS) {
@@ -461,24 +462,19 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
         fun remaining(lease: Duration): Duration =
             minOf(lease, Duration.ofMillis(zooKeeper.sessionTimeout * REMAINING_TWELFTHS / TWELFTHS))
 
-        fun isConnected(): Boolean = !expired && zooKeeper.state == ZooKeeper.States.CONNECTED
+        fun isConnected(): Boolean = zooKeeper.state == ZooKeeper.States.CONNECTED
 
-        /** The members of [group] read after a `sync`, with a children (or, while missing, exists) watch. */
-        fun members(group: String, path: String): List<SessionId> {
+        /** The members under [path] read after a `sync`, with a children watch; `null` when the group node is missing. */
+        fun members(path: String): List<SessionId>? {
             val code = zooKeeper.syncAsync(path).await()
-            if (code != KeeperException.Code.OK && code != KeeperException.Code.NONODE) {
+            if (code != KeeperException.Code.OK) {
                 throw KeeperException.create(code, path)
             }
-            repeat(MAX_ATTEMPTS) {
-                try {
-                    return zooKeeper.getChildren(path, groupWatcher).map(::SessionId).sortedBy { it.value }
-                } catch (_: KeeperException.NoNodeException) {
-                    if (zooKeeper.exists(path, groupWatcher) == null) {
-                        return emptyList()
-                    }
-                }
+            return try {
+                zooKeeper.getChildren(path, groupWatcher).map(::SessionId).sortedBy { it.value }
+            } catch (_: KeeperException.NoNodeException) {
+                null
             }
-            throw SimbaException("Group [$group] kept appearing and disappearing while reading its members.")
         }
 
         fun ensureConnected() {
