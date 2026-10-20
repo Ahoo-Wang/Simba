@@ -571,6 +571,7 @@ it to move leadership off a node before a deploy or to drain it. `stop()` ends t
 | Keep-alive shows the lease owned by someone else | Term revoked (`TAKEN_OVER`). |
 | Clock rate differs by more than `drift` | The safety argument no longer holds; raise `drift`. |
 | Redis failover loses recent writes | A token can go back; see [Backends](/guide/backends#token-regression-after-a-failover). |
+| Redis evicts keys under memory pressure (`allkeys-*` policy) | An evicted lease hash restarts its token at 1, so tokens go back; use `noeviction` or a dedicated instance, see [Backends](/guide/backends#memory-eviction). |
 | Failover to an asynchronous database replica (MySQL replica, PostgreSQL standby promotion) | Like a Redis failover: recent token increments and keep-alives can be lost, so a token can go back. Use synchronous replication when fencing must hold; see [Backends](/guide/backends#operating-notes). |
 | Backend host's clock steps (NTP step, VM migration) | JDBC and Redis measure leases with that clock, so every lease shortens (forward step) or lengthens (backward step) at once. A forward step can expire a holder's lease on the backend while its local deadline has not passed: another node can win a term while the old holder still reads `isValid`. This is not rate drift and `drift` does not cover it; only the fencing token protects. Run the backend hosts with slewing time sync. |
 </doc>
@@ -728,6 +729,18 @@ accept a write from a node whose term is newer in time but lower in token, or re
 - Enable persistence (AOF) so a restart of a single node does not reset tokens.
 - When fencing must hold across failovers, use JDBC on synchronous replication or Zookeeper (quorum commits).
 - Leases are measured with Redis `TIME`: a step of the Redis hosts' clocks shortens or lengthens every lease at once.
+
+### Memory Eviction
+
+Lease hashes never expire, and their `token` field is what keeps tokens increasing. If Redis evicts one under memory
+pressure (any `allkeys-*` `maxmemory-policy`), the next acquire of that name starts again at token 1: a resource that
+checks tokens then rejects the new owner, or a stale owner's lower token looks valid again. Session hashes carry a TTL,
+so `volatile-*` policies can evict them, which ends the session early.
+
+- Run the Redis that Simba uses with `maxmemory-policy noeviction` (the Redis default), so a full instance fails
+  writes instead of dropping keys; Simba then reports failed calls and terms end at their deadline.
+- Or make sure the `simba:*` keys can never be evicted, e.g. a dedicated instance with its own memory budget. A
+  separate logical database on the same instance does not help: the policy and the memory limit are per instance.
 
 ## Zookeeper
 

@@ -133,6 +133,17 @@ Redis 复制是异步的。当主节点在副本收到最新的 `token` 递增�
 - 当 fencing 必须在故障切换中成立时，使用同步复制的 JDBC 或 Zookeeper（法定人数提交）。
 - 租约用 Redis `TIME` 测量：Redis 主机的时钟跳变会让所有租约同时缩短或延长。
 
+### 内存淘汰 {#memory-eviction}
+
+租约 hash 永不过期，正是它的 `token` 字段保证了 token 递增。如果 Redis 在内存压力下淘汰了它（任何 `allkeys-*` 的
+`maxmemory-policy`），该名称的下一次获取会从 token 1 重新开始：检查 token 的资源会拒绝新的持有者，或者让旧持有者更小的
+token 重新显得有效。会话 hash 带有 TTL，因此 `volatile-*` 策略可能淘汰它们，使会话提前结束。
+
+- 让 Simba 使用的 Redis 采用 `maxmemory-policy noeviction`（Redis 的默认值），这样实例写满时写入会失败而不是丢弃键；
+  Simba 随后报告调用失败，任期在截止时刻结束。
+- 或者确保 `simba:*` 键永远不会被淘汰，例如使用一个有独立内存预算的专用实例。同一实例上的另一个逻辑库没有帮助：
+  淘汰策略和内存上限都是按实例设置的。
+
 ## Zookeeper {#zookeeper}
 
 模块 `simba-zookeeper`，类 `ZookeeperLeaseBackend`：

@@ -25,7 +25,8 @@ Java 21+; the starter needs Spring Boot 4 (4.1+); Kotlin users need Kotlin 2.2+.
 
 Identify:
 1. The backend the project already runs (JDBC, Redis or Zookeeper). Any is fine; for strict fencing prefer JDBC or
-   Zookeeper (Redis tokens can go back after a failover).
+   Zookeeper (Redis tokens can go back after a failover, or after an eviction: run Redis with
+   `maxmemory-policy noeviction`).
 2. The pattern: callbacks (`election.start`), work per term (`runWhileLeader`), periodic leader work (`schedule`,
    `@SimbaScheduled`), partitions (`group`, `@SimbaPartitioned`), or a lock around a step (`lock`).
 3. Spring Boot or plain JVM.

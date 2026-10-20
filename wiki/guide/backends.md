@@ -156,6 +156,18 @@ accept a write from a node whose term is newer in time but lower in token, or re
 - When fencing must hold across failovers, use JDBC on synchronous replication or Zookeeper (quorum commits).
 - Leases are measured with Redis `TIME`: a step of the Redis hosts' clocks shortens or lengthens every lease at once.
 
+### Memory Eviction
+
+Lease hashes never expire, and their `token` field is what keeps tokens increasing. If Redis evicts one under memory
+pressure (any `allkeys-*` `maxmemory-policy`), the next acquire of that name starts again at token 1: a resource that
+checks tokens then rejects the new owner, or a stale owner's lower token looks valid again. Session hashes carry a TTL,
+so `volatile-*` policies can evict them, which ends the session early.
+
+- Run the Redis that Simba uses with `maxmemory-policy noeviction` (the Redis default), so a full instance fails
+  writes instead of dropping keys; Simba then reports failed calls and terms end at their deadline.
+- Or make sure the `simba:*` keys can never be evicted, e.g. a dedicated instance with its own memory budget. A
+  separate logical database on the same instance does not help: the policy and the memory limit are per instance.
+
 ## Zookeeper
 
 Module `simba-zookeeper`, class `ZookeeperLeaseBackend`:
