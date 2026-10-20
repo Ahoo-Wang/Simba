@@ -718,7 +718,9 @@ nodes, so a fixed skew between node clocks changes nothing:
 
 Redis replication is asynchronous. When a master fails before a replica received the latest `token` increment, the
 promoted replica can hand out a token that was already used, or a lower one. A resource that checks tokens can then
-accept a write from a node whose term is newer in time but lower in token, or reject a legitimate owner.
+accept a write from a node whose term is newer in time but lower in token, or reject a legitimate owner. No client
+can prevent this: the deterministic simulation injects such data loss and confirms that tokens then regress
+(`premise:tokenReset`), which is why the mitigations below are on the backend side.
 
 - Set `simba.redis.wait-replicas` (constructor parameter `waitReplicas`): a new term counts only once that many
   replicas acknowledged it with `WAIT`, otherwise the acquisition fails. This narrows the window; it does not close it,
@@ -1454,12 +1456,15 @@ that only reads time.
 ## Deterministic Simulation
 
 `Simulation(seed, params).run()` runs several engines against the in-memory backend in virtual time while injecting
-message delays and loss, process pauses and clock drift up to `drift`, groups joined and left (partition elections
-follow each node's view), nodes closed mid-fault, grants reported shorter than granted, and backend-side faults (a
-session expired or a lease deleted by the backend on its own). It checks the invariants: at most one valid term per
-name (partitions included) at any moment, strictly increasing tokens, paired callbacks, liveness after faults stop,
-and the handover order; terms a backend-side fault removed are exempt from the first two until revoked, since such a
-fault breaks the backend's contract. `SimulationParams.builder()` sets the knobs, and `SimulationResult.events`
+message delays and loss, process pauses, node clock rates that vary over time, groups joined and left (partition
+elections follow each node's view), nodes closed mid-fault, grants reported shorter than granted, backend-side
+faults (a session expired, a lease deleted or lost by the backend on its own), and optionally no backend hints (as on
+JDBC). It checks the invariants: at most one valid term per name (partitions included), each valid term's deadline
+within the backend's expiry of its lease, no term valid again once invalid, strictly increasing tokens, paired
+callbacks, liveness of names and partitions after faults stop, no leaked lease, and the handover order. Terms a
+backend-side fault removed are exempt from the first checks until revoked, since such a fault breaks the backend's
+contract; a lost lease restarting its tokens is counted (`premise:tokenReset`) rather than failed, because only a
+backend that never loses data keeps tokens increasing. `SimulationParams.builder()` sets the knobs, and `SimulationResult.events`
 counts the events and the exercised paths (`path:*`). Simba runs it over 10⁴ seeds in its own build; it is available to anyone changing the engine, and a failing seed
 replays exactly:
 

@@ -181,6 +181,53 @@ class InMemoryLeaseBackend(
             Owner(session, lease.token)
         }
 
+    /**
+     * The owner of [name] as [owner] reports it, without side effects: an expired session is not ended and no hint is
+     * sent, so a checker reading it cannot change the run it checks.
+     */
+    fun peekOwner(name: LeaseName): Owner? =
+        synchronized(lock) {
+            val lease = leases[name] ?: return null
+            val session = lease.session ?: return null
+            val live = sessions[session]?.takeIf { now() - it.expiresAt < 0 }
+            val holds = if (selfExpiringLeases) now() - lease.expiresAt < 0 else live != null
+            if (holds) Owner(session, lease.token) else null
+        }
+
+    /**
+     * The backend time (on [ticker]) at which [name] stops being owned by its current owner unless extended: its
+     * session's expiry, or with self-expiring leases its own; `null` when nobody owns it. Without side effects.
+     */
+    fun peekExpiry(name: LeaseName): Long? =
+        synchronized(lock) {
+            peekOwner(name) ?: return null
+            val lease = leases.getValue(name)
+            if (selfExpiringLeases) lease.expiresAt else sessions.getValue(lease.session!!).expiresAt
+        }
+
+    /**
+     * Expires [session] now on the backend's own initiative, as a server ending a session early does: its leases are
+     * freed with it, or with self-expiring leases they keep running until their own expiry.
+     */
+    fun expireSession(session: SessionId) {
+        withHints { hints ->
+            sessions[session]?.let { it.expiresAt = now() }
+            live(session, hints)
+        }
+    }
+
+    /**
+     * Forgets [name] entirely, as a store losing data does (an evicted key, a failover to a replica that missed the
+     * write): the lease is free and its token starts again from zero, breaking the never-reset rule on purpose.
+     */
+    fun loseLease(name: LeaseName) {
+        withHints { hints ->
+            if (leases.remove(name)?.session != null) {
+                hints += BackendHint.Released(name)
+            }
+        }
+    }
+
     /** The latest token of [name]; `0` when never acquired. */
     fun token(name: LeaseName): Long = synchronized(lock) { leases[name]?.token ?: 0 }
 

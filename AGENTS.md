@@ -150,7 +150,9 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
 - Groups: the engine joins the group with every session and publishes member views (`Effect.Members`); each node runs
   the partitions `PartitionAssignment` gives it over the session ids and hands the others over. Leaving while a join
   is in flight sends the leave once the join answers (even a failed one); a failed leave retries; the membership of
-  an ended session ends with it. `GroupTask.stop()` also waits for partitions still handing over.
+  an ended session ends with it. Joining again while leaving forgets the membership and the published view (the new
+  joiner has seen none): a pending leave joins anew whatever it answers (a failed reply may hide a leave that went
+  through), and without one the group joins at once. `GroupTask.stop()` also waits for partitions still handing over.
 - Events are delivered in order on one serial dispatcher over the callback executor, never on the loop, and
   `close()` waits for them; listener failures are logged and ignored. On a loop thread (reachable only with a direct
   callback executor) `snapshot()` / `footprint()` read in place and blocking calls (`acquire`, blocking `close()`,
@@ -241,10 +243,15 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
 ## Change Playbooks
 
 - **Engine:** change `step()` and cover it with `EngineTest`-style table tests (events in, effects out); keep
-  `SimulationSpec` (I1–I5 over 10⁴ seeds, three backend modes) green. The simulation also truncates grants, expires
-  sessions and deletes leases backend-side (those terms are exempt from I1/I2 until revoked), drives a partition
-  group and closes nodes mid-fault; `every fault path actually happens` asserts each path (`path:*` in
-  `SimulationResult.events`, every `RevokeReason`) is reached. Threaded-client tests run on virtual time: `VirtualScheduler`, direct
+  `SimulationSpec` (I1–I5 over 10⁴ seeds, four backend modes: owned, self-expiring, session-bound, no hints) green.
+  The simulation varies node clock rates over time (beyond `drift`, within what `margin` covers), truncates grants,
+  expires sessions, deletes and loses leases backend-side (those terms are exempt from I1/I2 until revoked; a lost
+  lease restarting tokens counts as `premise:tokenReset`, not a failure), drives a partition group and closes nodes
+  mid-fault. Its checks read the backend without side effects (`peekOwner` / `peekExpiry`): I1 also compares each
+  valid term's deadline in base time with the backend expiry and fails a term that becomes valid again; I4 covers
+  partitions and leaked leases. `every fault path actually happens` asserts each path (`path:*` in
+  `SimulationResult.events`, every `RevokeReason`) is reached; mutants of the engine (adoption past the deadline,
+  revival by a late renewal, no margin, no orphan release, partitions giving up, a lease of extra delay) are caught. Threaded-client tests run on virtual time: `VirtualScheduler`, direct
   I/O and callback executors, `awaitIdle()` between timers (see `VirtualSimba`); never sleep. Work runs on real
   threads that `awaitIdle()` does not cover: wait for the work to start before stopping it (work revoked before it
   starts never runs), start contenders one at a time when a test needs a particular winner, and keep session ids

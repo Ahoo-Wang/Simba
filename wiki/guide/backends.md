@@ -147,7 +147,9 @@ nodes, so a fixed skew between node clocks changes nothing:
 
 Redis replication is asynchronous. When a master fails before a replica received the latest `token` increment, the
 promoted replica can hand out a token that was already used, or a lower one. A resource that checks tokens can then
-accept a write from a node whose term is newer in time but lower in token, or reject a legitimate owner.
+accept a write from a node whose term is newer in time but lower in token, or reject a legitimate owner. No client
+can prevent this: the deterministic simulation injects such data loss and confirms that tokens then regress
+(`premise:tokenReset`), which is why the mitigations below are on the backend side.
 
 - Set `simba.redis.wait-replicas` (constructor parameter `waitReplicas`): a new term counts only once that many
   replicas acknowledged it with `WAIT`, otherwise the acquisition fails. This narrows the window; it does not close it,

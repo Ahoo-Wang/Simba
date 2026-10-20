@@ -98,12 +98,15 @@ that only reads time.
 ## Deterministic Simulation
 
 `Simulation(seed, params).run()` runs several engines against the in-memory backend in virtual time while injecting
-message delays and loss, process pauses and clock drift up to `drift`, groups joined and left (partition elections
-follow each node's view), nodes closed mid-fault, grants reported shorter than granted, and backend-side faults (a
-session expired or a lease deleted by the backend on its own). It checks the invariants: at most one valid term per
-name (partitions included) at any moment, strictly increasing tokens, paired callbacks, liveness after faults stop,
-and the handover order; terms a backend-side fault removed are exempt from the first two until revoked, since such a
-fault breaks the backend's contract. `SimulationParams.builder()` sets the knobs, and `SimulationResult.events`
+message delays and loss, process pauses, node clock rates that vary over time, groups joined and left (partition
+elections follow each node's view), nodes closed mid-fault, grants reported shorter than granted, backend-side
+faults (a session expired, a lease deleted or lost by the backend on its own), and optionally no backend hints (as on
+JDBC). It checks the invariants: at most one valid term per name (partitions included), each valid term's deadline
+within the backend's expiry of its lease, no term valid again once invalid, strictly increasing tokens, paired
+callbacks, liveness of names and partitions after faults stop, no leaked lease, and the handover order. Terms a
+backend-side fault removed are exempt from the first checks until revoked, since such a fault breaks the backend's
+contract; a lost lease restarting its tokens is counted (`premise:tokenReset`) rather than failed, because only a
+backend that never loses data keeps tokens increasing. `SimulationParams.builder()` sets the knobs, and `SimulationResult.events`
 counts the events and the exercised paths (`path:*`). Simba runs it over 10⁴ seeds in its own build; it is available to anyone changing the engine, and a failing seed
 replays exactly:
 
