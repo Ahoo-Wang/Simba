@@ -31,6 +31,7 @@ import me.ahoo.simba.util.SequentialExecutor
 import me.ahoo.simba.util.Threads
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Delayed
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
@@ -66,6 +67,20 @@ internal class EngineShell(
 
         /** `true` on a thread currently running a leadership callback or delivering events. */
         fun isDispatching(): Boolean = dispatching.get() == true
+
+        /**
+         * Runs [block] marked as a callback ([isDispatching]), so that a blocking `close()` in it does not wait for the
+         * callback executor it may occupy; restores the previous mark.
+         */
+        fun runAsCallback(block: () -> Unit) {
+            val outer = dispatching.get()
+            dispatching.set(true)
+            try {
+                block()
+            } finally {
+                if (outer == null) dispatching.remove() else dispatching.set(outer)
+            }
+        }
 
         /** `true` on the event loop thread of any shell. */
         fun isLoopThread(): Boolean = loopOf.get() != null
@@ -197,15 +212,16 @@ internal class EngineShell(
     fun schedule(at: Long, task: Runnable): Cancellable = timers.schedule(at, task)
 
     /**
-     * Completes, with the number of loop tasks handled so far, once the loop has nothing queued. Meaningful only with
-     * an external [Scheduler] (the loop then holds no delayed timers) and a direct I/O executor; tests use it to let
-     * engines settle before moving virtual time: two rounds with the same counts mean nothing ran in between.
+     * Completes, with the number of loop tasks handled so far, once the loop has nothing due queued. Meaningful only
+     * with an external [Scheduler] and a direct I/O executor; tests use it to let engines settle before moving virtual
+     * time: two rounds with the same counts mean nothing ran in between. Timers not yet due (the loop's own, without an
+     * external [Scheduler]) do not count, or the wait would never end.
      */
     fun idle(): CompletableFuture<Long> {
         checkNotOnLoop("awaitIdle()")
         val idle = CompletableFuture<Long>()
         fun check() {
-            if (loop.queue.isEmpty() || !submit(::check)) {
+            if (loop.queue.none(::isDue) || !submit(::check)) {
                 idle.complete(handled.get())
             }
         }
@@ -230,6 +246,8 @@ internal class EngineShell(
         }
         return delivered
     }
+
+    private fun isDue(task: Runnable): Boolean = (task as? Delayed)?.let { it.getDelay(TimeUnit.NANOSECONDS) <= 0 } ?: true
 
     /** Runs [action] on the loop without counting it as handled. */
     private fun submit(action: () -> Unit): Boolean = loop.enqueue(action, 0) != null

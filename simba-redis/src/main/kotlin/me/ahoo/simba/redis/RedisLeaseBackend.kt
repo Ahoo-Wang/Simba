@@ -25,6 +25,7 @@ import me.ahoo.simba.spi.LeaseName
 import me.ahoo.simba.spi.SessionExpiredException
 import me.ahoo.simba.spi.SessionGrant
 import me.ahoo.simba.spi.SessionId
+import me.ahoo.simba.spi.Ticker
 import java.time.Duration
 
 /**
@@ -38,49 +39,59 @@ import java.time.Duration
  *   attempt's Redis time) and group index live in the same slot.
  * - Keep-alive extends and reports every lease of the lease index the session still holds, whatever `held` says, so
  *   [KeepAliveResult.Live.owned] is complete; acquire extends a lease the session already holds as well. A new term
- *   lasts as long as its session on a single node, one full session lease on a Cluster.
+ *   lasts as long as its session.
  * - Group members are sorted sets `simba:group:{group}` scored by expiry in Redis time, extended by keep-alive.
  * - Release publishes `released` on the lease key's channel, the only broadcast ([BackendHint.Released]).
  * - Closing a session deletes it first, then frees its indexed leases and memberships, then drops its indexes:
  *   repeating a close that failed halfway finishes it.
  *
  * On a single node or Sentinel, acquire and join are one script call; keep-alive is one, plus one more when the
- * session has indexed leases beyond `held` or joined groups, which extends nothing beyond the session's new expiry.
- * With [routeBySlot] (default on a Redis Cluster) a call first touches the session's slot, then runs one script per
- * hash slot of the remaining keys. Those later scripts may run long after the first one (a starved thread, a driver
- * that holds commands until it reconnects), when the session may have died: each carries the session call's Redis
- * time plus the session lease plus [maxClockSkew], grants and extends nothing beyond it, and an acquire or join that
- * runs at or after it changes nothing and fails. Keep-alive drops a lost lease key from the session's index only
- * once no such acquire can still take it. The lease and session slots may live on nodes whose clocks differ: a
- * skew beyond [maxClockSkew] can end a lease before its session.
+ * session has indexed leases beyond `held` or joined groups. With [routeBySlot] (default on a Redis Cluster) a call
+ * first touches the session's slot, then runs one script per hash slot of the remaining keys.
+ *
+ * A script after the session's may run long after it (a starved thread, a driver holding commands until it
+ * reconnects), when the session may have died. Only durations cross nodes, never a node's clock reading, so a fixed
+ * skew between node clocks changes nothing:
+ * - The later scripts carry what the session has left: its remaining time from the session call minus the time
+ *   measured on [ticker] since that call answered. A lease node grants and extends nothing beyond its own now plus
+ *   that, so a lease lasts at least as long as its session and outlasts it by at most the delay before the script ran.
+ * - Acquire and join send nothing once the time since the session call was sent reached the session's remaining
+ *   time, and fail. An acquire whose reply arrives later than that releases the terms it began and fails, even when
+ *   other slots granted theirs: a late grant may have missed the session's index (keep-alive drops a lost key one
+ *   lease after its attempt), and [KeepAliveResult.Live.owned] would never report it. Only when that release fails
+ *   or the reply is lost does such a lease stay unreported, until it expires on its own.
  *
  * Redis replication is asynchronous: after a failover a replica may have missed a token increment, so a token can go
  * back. [waitReplicas] narrows that window (not on a Cluster); otherwise prefer JDBC or Zookeeper for strict fencing.
  *
  * @param waitReplicas when set, an acquisition that began a term fails unless that many replicas acknowledged it.
  * @param routeBySlot whether to split script calls by hash slot.
- * @param maxClockSkew with [routeBySlot], how far apart the clocks of the Redis nodes may be.
+ * @param ticker measures the time between the scripts of one call (tests substitute a virtual one).
  */
-class RedisLeaseBackend @JvmOverloads constructor(
+class RedisLeaseBackend internal constructor(
     private val scripting: RedisScripting,
-    private val waitReplicas: ReplicaWait? = null,
-    private val routeBySlot: Boolean = scripting.clustered,
-    private val maxClockSkew: Duration = DEFAULT_MAX_CLOCK_SKEW,
+    private val waitReplicas: ReplicaWait?,
+    private val routeBySlot: Boolean,
+    private val ticker: Ticker,
 ) : LeaseBackend {
-    companion object {
-        /** Default [maxClockSkew]. */
-        @JvmField
-        val DEFAULT_MAX_CLOCK_SKEW: Duration = Duration.ofSeconds(1)
+    /** Measures time on [Ticker.SYSTEM]. */
+    @JvmOverloads
+    constructor(
+        scripting: RedisScripting,
+        waitReplicas: ReplicaWait? = null,
+        routeBySlot: Boolean = scripting.clustered,
+    ) : this(scripting, waitReplicas, routeBySlot, Ticker.SYSTEM)
 
+    companion object {
         private val log = KotlinLogging.logger {}
         private const val EXPIRED = -1L
-        private const val LATE = -2L
+        private const val NANOS_PER_MILLI = 1_000_000L
         private const val WITH_SESSION = "1"
         private const val WITHOUT_SESSION = "0"
         private const val ANY_TOKEN = "*"
         private const val RELEASED = "released"
         private const val ACQUIRE_FIELDS = 3
-        private const val ACQUIRE_HEADER = 3
+        private const val ACQUIRE_HEADER = 2
 
         private val OPEN = LeaseScript.load("lease_session_open")
         private val SESSION_KEEP_ALIVE = LeaseScript.load("lease_session_keep_alive")
@@ -97,11 +108,7 @@ class RedisLeaseBackend @JvmOverloads constructor(
 
     init {
         require(waitReplicas == null || !scripting.clustered) { "waitReplicas is not supported on a Redis Cluster." }
-        require(!maxClockSkew.isNegative) { "maxClockSkew must not be negative: $maxClockSkew" }
     }
-
-    /** Clock skew allowed between the session's node and a lease's node: none when every call has the session. */
-    private val skewMillis: Long = if (routeBySlot) maxClockSkew.toMillis() else 0
 
     override val capabilities: Capabilities = Capabilities(releaseHints = true)
 
@@ -118,6 +125,7 @@ class RedisLeaseBackend @JvmOverloads constructor(
         val millis = LeaseBackend.requireLease(lease).toMillis()
         val inline = if (routeBySlot) emptyList() else held.map(RedisLeaseKeys::lease)
         val reply = eval(SESSION_KEEP_ALIVE, sessionKeys(session) + inline, listOf(session.value, millis.toString()))
+        val answered = ticker.nanoTime()
         if (reply.long(0) == EXPIRED) {
             log.debug { "Session [$session] expired on Redis." }
             return KeepAliveResult.Expired
@@ -132,12 +140,9 @@ class RedisLeaseBackend @JvmOverloads constructor(
             index += 2
         }
         val groups = reply.drop(index).mapTo(LinkedHashSet()) { it as String }
-        tokens += extend(session, millis, now + millis + skewMillis, others.keys.toList(), groups)
+        tokens += extend(session, millis, answered, others.keys.toList(), groups)
         if (routeBySlot) {
-            // An acquire's lease call grants only before its session call's time + lease + skew, as the lease's node
-            // reads it; that node's clock may lag this one by the skew.
-            val settled = millis + 2 * skewMillis
-            forget(session, others.filter { (key, score) -> tokens[key] == 0L && now - score.toLong() >= settled })
+            forget(session, others.filter { (key, score) -> tokens[key] == 0L && now - score.toLong() >= millis })
         }
         val owned = buildMap {
             for ((key, token) in tokens) {
@@ -156,13 +161,13 @@ class RedisLeaseBackend @JvmOverloads constructor(
         val replicas: Int?
         if (routeBySlot) {
             val sessionReply = sessionCall(ACQUIRE, session, RedisLeaseKeys.sessionLeases(session), keys)
-            val args = slotArgs(session, sessionReply)
+            val args = listOf(WITHOUT_SESSION, session.value, sessionReply.left("Acquiring $names").toString())
             val calls = routed(keys) { ScriptCall(ACQUIRE, it, args) }
             val result = if (calls.isEmpty()) ScriptReplies(emptyList()) else scripting.eval(calls, waitReplicas)
-            if (result.replies.any { it.long(0) == LATE }) {
-                throw SimbaException("Acquiring $names for session [$session] reached Redis after the session's lease.")
-            }
             replies = calls.map { it.keys }.zip(result.replies)
+            if (sessionReply.late()) {
+                abandon(session, names, replies)
+            }
             replicas = result.replicas
         } else {
             val result = scripting.eval(
@@ -235,9 +240,8 @@ class RedisLeaseBackend @JvmOverloads constructor(
         val key = RedisLeaseKeys.group(LeaseBackend.requireGroup(group))
         if (routeBySlot) {
             val sessionReply = sessionCall(JOIN, session, RedisLeaseKeys.sessionGroups(session), listOf(key))
-            if (eval(JOIN, listOf(key), slotArgs(session, sessionReply)).long(0) == LATE) {
-                throw SimbaException("Joining [$group] for session [$session] reached Redis after the session's lease.")
-            }
+            val left = sessionReply.left("Joining [$group]")
+            eval(JOIN, listOf(key), listOf(WITHOUT_SESSION, session.value, left.toString()))
             return
         }
         val reply = eval(
@@ -273,17 +277,18 @@ class RedisLeaseBackend @JvmOverloads constructor(
 
     /**
      * Extends the indexed lease keys [leaseKeys] the session still holds and its memberships in [groupKeys], after
-     * the session itself, never beyond the Redis time [until]; answers the token of each lease key, `0` when not
-     * held. On a single node this is one call that also drops the keys the session no longer holds from its lease
-     * index.
+     * the session itself was extended to [millis] in the call that answered at [answered] (on [ticker]), never
+     * beyond what the session has left since; answers the token of each lease key, `0` when not held. On a single
+     * node this is one call that also drops the keys the session no longer holds from its lease index.
      */
     private fun extend(
         session: SessionId,
         millis: Long,
-        until: Long,
+        answered: Long,
         leaseKeys: List<String>,
         groupKeys: Set<String>,
     ): Map<String, Long> {
+        val left = (millis - millisSince(answered)).coerceAtLeast(0)
         val calls = if (routeBySlot) {
             routed(leaseKeys + groupKeys) { keys ->
                 val slotLeases = keys.filter { it !in groupKeys }
@@ -295,7 +300,7 @@ class RedisLeaseBackend @JvmOverloads constructor(
                         session.value,
                         millis.toString(),
                         slotLeases.size.toString(),
-                        until.toString()
+                        left.toString()
                     )
                 )
             }
@@ -306,7 +311,7 @@ class RedisLeaseBackend @JvmOverloads constructor(
                 ScriptCall(
                     KEEP_ALIVE,
                     listOf(RedisLeaseKeys.sessionLeases(session)) + leaseKeys + groupKeys,
-                    listOf(WITH_SESSION, session.value, millis.toString(), leaseKeys.size.toString(), until.toString())
+                    listOf(WITH_SESSION, session.value, millis.toString(), leaseKeys.size.toString(), left.toString())
                 )
             )
         }
@@ -323,8 +328,9 @@ class RedisLeaseBackend @JvmOverloads constructor(
 
     /**
      * Drops [stale] lease keys (with the scores keep-alive read) from the session's lease index on a Cluster: keys
-     * the session did not hold, whose last attempt began at least one lease plus twice [maxClockSkew] ago, so no
-     * acquire can still take them.
+     * the session did not hold, whose last attempt began at least one lease ago. An acquire whose lease calls could
+     * still take one (a reply arriving later than the session's remaining time after its session call was sent)
+     * releases what it began.
      */
     private fun forget(session: SessionId, stale: Map<String, String>) {
         if (stale.isNotEmpty()) {
@@ -336,36 +342,72 @@ class RedisLeaseBackend @JvmOverloads constructor(
         }
     }
 
+    /** The answer of a [sessionCall]: what the session had left, and when (on [ticker]) the call was sent and answered. */
+    private inner class SessionReply(val session: SessionId, val remaining: Long, val sent: Long, val answered: Long) {
+        /** What the session has left now, as measured since the call answered; fails when nothing is left to grant. */
+        fun left(what: String): Long {
+            if (late()) {
+                throw SimbaException("$what for session [$session] came later than the session's remaining time.")
+            }
+            return remaining - millisSince(answered)
+        }
+
+        /** Whether the session may have expired: its remaining time passed since the call was sent. */
+        fun late(): Boolean = millisSince(sent) >= remaining
+    }
+
     /**
      * Runs [script] on the session's slot only: checks the session is live, records [indexed] in [index], and answers
-     * the reply (the session's remaining milliseconds, its lease, then the Redis time).
+     * the session's remaining time.
      */
     private fun sessionCall(
         script: LeaseScript,
         session: SessionId,
         index: String,
         indexed: List<String>,
-    ): List<Any?> {
+    ): SessionReply {
+        val sent = ticker.nanoTime()
         val reply = eval(
             script,
             listOf(RedisLeaseKeys.session(session), index),
             listOf(WITH_SESSION, session.value, "0") + indexed
         )
+        val answered = ticker.nanoTime()
         if (reply.long(0) == EXPIRED) {
             throw SessionExpiredException(session)
         }
-        return reply
+        return SessionReply(session, reply.long(0), sent, answered)
     }
 
     /**
-     * Arguments of an acquire or join on another slot after [sessionCall] answered [sessionReply]: one full session
-     * lease, and no later than the session call's time plus that lease plus [maxClockSkew].
+     * Releases the terms [replies] began after they arrived later than the session's remaining time, and fails:
+     * the session may have died, and keep-alive may have dropped their keys from its index.
      */
-    private fun slotArgs(session: SessionId, sessionReply: List<Any?>): List<String> {
-        val lease = sessionReply.long(1)
-        val deadline = sessionReply.long(2) + lease + skewMillis
-        return listOf(WITHOUT_SESSION, session.value, lease.toString(), deadline.toString())
+    private fun abandon(
+        session: SessionId,
+        names: Set<LeaseName>,
+        replies: List<Pair<List<String>, List<Any?>>>
+    ): Nothing {
+        val begun = HashMap<LeaseName, Long>()
+        for ((callKeys, reply) in replies) {
+            callKeys.forEachIndexed { index, key ->
+                val offset = ACQUIRE_HEADER + index * ACQUIRE_FIELDS
+                if (reply[offset + 1] == session.value && reply.long(offset + 2) == 1L) {
+                    begun[checkNotNull(RedisLeaseKeys.leaseOf(key))] = reply.long(offset)
+                }
+            }
+        }
+        try {
+            release(session, begun)
+        } catch (error: RuntimeException) {
+            log.warn(error) { "Releasing the late leases ${begun.keys} of session [$session] failed." }
+        }
+        throw SimbaException(
+            "Acquiring $names for session [$session] answered later than the session's remaining time."
+        )
     }
+
+    private fun millisSince(nanos: Long): Long = (ticker.nanoTime() - nanos) / NANOS_PER_MILLI
 
     private fun unreplicated(session: SessionId, begun: Map<LeaseName, Long>, replicas: Int): Nothing {
         val required = checkNotNull(waitReplicas).replicas

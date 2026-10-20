@@ -28,6 +28,9 @@ implementation("org.springframework.boot:spring-boot-starter-data-redis")
 
 // or Zookeeper
 implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
+
+// optional, since 5.1: suspending lock calls, withLock, event Flow
+implementation("me.ahoo.simba:simba-coroutines:${simbaVersion}")
 ```
 
 ```xml [Maven]
@@ -42,11 +45,19 @@ implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
     <artifactId>simba-spring-redis</artifactId>
     <version>${simba.version}</version>
 </dependency>
+<!-- optional, since 5.1: coroutine adapters -->
+<dependency>
+    <groupId>me.ahoo.simba</groupId>
+    <artifactId>simba-coroutines</artifactId>
+    <version>${simba.version}</version>
+</dependency>
 ```
 
 :::
 
-`simba-bom` aligns the versions of every Simba module. Without Spring, depend on `simba-core` plus a backend module:
+`simba-bom` aligns the versions of every Simba module. `simba-coroutines` (since 5.1) adds suspending lock calls,
+`withLock` and a `Flow` of events on top of any backend; see [Locks](/guide/locks#coroutines). Without Spring, depend
+on `simba-core` plus a backend module:
 `simba-jdbc`, `simba-zookeeper`, or for Redis `simba-spring-redis` (which brings `simba-redis`). `simba-redis` alone
 only defines the `RedisScripting` port: use it without `simba-spring-redis` only with your own adapter for another
 Redis client.

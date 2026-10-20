@@ -13,6 +13,7 @@
 
 package me.ahoo.simba.coroutines
 
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -22,6 +23,8 @@ import me.ahoo.simba.LockTimeoutException
 import me.ahoo.simba.RevokeReason
 import me.ahoo.simba.Term
 import java.time.Duration
+import java.util.Collections
+import java.util.WeakHashMap
 import java.util.concurrent.CompletionException
 import java.util.concurrent.CompletionStage
 import kotlin.coroutines.resume
@@ -55,9 +58,40 @@ suspend fun <R> DistributedLock.withLock(timeout: Duration, block: suspend (Lock
 
 /**
  * Suspends until the term is revoked and returns why. Cancelling the coroutine stops the wait only; the term is not
- * affected.
+ * affected, and the wait leaves nothing behind: every wait on a term shares one registration on [Term.revoked].
  */
-suspend fun Term.awaitRevoked(): RevokeReason = revoked.awaitCompletion()
+suspend fun Term.awaitRevoked(): RevokeReason = relays.computeIfAbsent(revoked, ::RevocationRelay).await()
+
+/** One relay per revocation stage, weakly keyed, so that waits on a term never pile up callbacks on its stage. */
+private val relays: MutableMap<CompletionStage<RevokeReason>, RevocationRelay> =
+    Collections.synchronizedMap(WeakHashMap())
+
+/** Registers once on [stage] and resumes the waits still suspended on it; a cancelled wait leaves the relay. */
+private class RevocationRelay(stage: CompletionStage<RevokeReason>) {
+    private val waiters = LinkedHashSet<CancellableContinuation<RevokeReason>>()
+    private var outcome: Result<RevokeReason>? = null
+
+    init {
+        stage.whenComplete { reason, error ->
+            val result = if (error == null) Result.success(reason) else Result.failure(error.unwrap())
+            val resumed = synchronized(this) {
+                outcome = result
+                waiters.toList().also { waiters.clear() }
+            }
+            resumed.forEach { it.resumeWith(result) }
+        }
+    }
+
+    suspend fun await(): RevokeReason =
+        suspendCancellableCoroutine { continuation ->
+            val done = synchronized(this) { outcome ?: null.also { waiters += continuation } }
+            if (done != null) {
+                continuation.resumeWith(done)
+            } else {
+                continuation.invokeOnCancellation { synchronized(this) { waiters -= continuation } }
+            }
+        }
+}
 
 /** Awaits [this] without cancelling it when the coroutine is cancelled. */
 private suspend fun <T> CompletionStage<T>.awaitCompletion(): T =

@@ -20,6 +20,7 @@ graph BT
     starter["simba-spring-boot-starter"]
     testing["simba-testing<br>内存后端、虚拟时间"]
     tck["simba-tck<br>LeaseBackendSpec、FencingSpec"]
+    coroutines["simba-coroutines<br>挂起函数、withLock、Flow"]
     jdbc --> core
     redis --> core
     sredis --> redis
@@ -29,6 +30,7 @@ graph BT
     starter --> zk
     testing --> core
     tck --> core
+    coroutines --> core
     style core fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style jdbc fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style redis fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
@@ -37,6 +39,7 @@ graph BT
     style starter fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style testing fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style tck fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
+    style coroutines fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 
 `simba-core` 不了解任何后端，只依赖 kotlin-logging。`simba-redis` 不得依赖 Spring；starter 以可选特性的方式依赖各后端。

@@ -25,6 +25,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.springframework.data.redis.connection.RedisConnection
+import org.springframework.data.redis.core.RedisCallback
 import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
@@ -187,7 +188,11 @@ class RedisLeaseBackendTest {
 
             backend.granted(session, name).assert().isEqualTo(token)
 
-            redis.opsForHash<String, String>().get(key, "expires")!!.toLong().assert().isGreaterThanOrEqualTo(expires)
+            // At least as long as the session lasts, read after the lease (so a lease ending with it still passes).
+            val leaseLeft = redis.opsForHash<String, String>().get(key, "expires")!!.toLong() - redisTime()
+            leaseLeft.assert().isGreaterThanOrEqualTo(
+                redis.getExpire(RedisLeaseKeys.session(session), TimeUnit.MILLISECONDS)
+            )
         }
     }
 
@@ -262,6 +267,8 @@ class RedisLeaseBackendTest {
         (acquire(session, setOf(name)).getValue(name) as AcquireResult.Granted).token
 
     private fun name(): LeaseName = LeaseName("redis.${UUID.randomUUID()}")
+
+    private fun redisTime(): Long = redis.execute(RedisCallback { it.serverCommands().time(TimeUnit.MILLISECONDS) })!!
 
     private fun awaitUntil(condition: () -> Boolean) {
         val done = CompletableFuture<Unit>()

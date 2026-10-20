@@ -31,7 +31,7 @@ Thanks for helping. This page is the contract for changes; the [contributor guid
 
 ## Versioning and releases
 
-Simba follows [Semantic Versioning](https://semver.org/): breaking API or behavior changes bump the major version, backward-compatible features the minor, fixes the patch. Breaking changes are listed with an upgrade path in the release notes and, for larger ones, in an ADR.
+Simba follows [Semantic Versioning](https://semver.org/) at the source level, as defined in [Upgrading](https://simba.ahoo.me/guide/upgrading): source-incompatible changes of the public API, properties, metrics, endpoint JSON or storage bump the major version; source-compatible features bump the minor (binary compatibility is not promised, so users recompile); fixes bump the patch. A behavior change that keeps the API (a fix that tightens a guarantee, a new default) ships in a minor or patch release and is called out in the release notes and on the Upgrading page; one that would break the documented contract waits for a major version. Breaking changes are listed with an upgrade path in the release notes and, for larger ones, in an ADR.
 
 To release `X.Y.Z`: merge a `chore: bump version to vX.Y.Z` pull request (updates `gradle.properties` and the documented coordinates), then create the GitHub release `vX.Y.Z` from `main`. The `Packages Deploy` workflow verifies the tag against the project version and publishes to GitHub Packages and Maven Central. Release notes are generated from the PR labels (`.github/release.yml`).
 

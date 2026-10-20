@@ -20,6 +20,7 @@ graph BT
     starter["simba-spring-boot-starter"]
     testing["simba-testing<br>in-memory backend, virtual time"]
     tck["simba-tck<br>LeaseBackendSpec, FencingSpec"]
+    coroutines["simba-coroutines<br>suspend, withLock, Flow"]
     jdbc --> core
     redis --> core
     sredis --> redis
@@ -29,6 +30,7 @@ graph BT
     starter --> zk
     testing --> core
     tck --> core
+    coroutines --> core
     style core fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style jdbc fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style redis fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
@@ -37,6 +39,7 @@ graph BT
     style starter fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style testing fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
     style tck fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
+    style coroutines fill:#2d333b,stroke:#6d5dfc,color:#e6edf3
 ```
 
 `simba-core` knows no backend and depends only on kotlin-logging. `simba-redis` must not depend on Spring; the

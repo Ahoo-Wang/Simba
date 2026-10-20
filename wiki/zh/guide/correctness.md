@@ -259,5 +259,6 @@ autonumber
 | Zookeeper follower 与 leader 失联 | 在最多 `syncLimit` 个 tick 内，该 follower 仍会用本地状态应答读请求，而 leader 已看不到这个会话并会让它过期。续约会先经 leader 执行 `sync`，因此在这样的 follower 上续约会失败，本地截止时刻随之耗尽，绝不会晚于 leader 对该会话的判定。 |
 | 时钟速率差异超过 `drift` | 安全性论证不再成立；请调大 `drift`。 |
 | Redis 主从切换丢失最近的写入 | Token 可能回退；见 [后端](/zh/guide/backends#token-regression-after-a-failover)。 |
+| Redis 在内存压力下淘汰键（`allkeys-*` 策略） | 被淘汰的租约 hash 会让 token 从 1 重新开始，因此 token 回退；请使用 `noeviction` 或专用实例，见 [后端](/zh/guide/backends#memory-eviction)。 |
 | 切换到异步复制的数据库副本（MySQL 从库、PostgreSQL 备库提升） | 与 Redis 主从切换相同：最近的 token 自增和续约可能丢失，因此 token 可能回退。需要 fencing 成立时请使用同步复制；见 [后端](/zh/guide/backends#operating-notes)。 |
 | 后端主机的时钟跳变（NTP step、虚拟机迁移） | JDBC 和 Redis 用该时钟测量租约，因此所有租约会同时缩短（向前跳）或延长（向后跳）。向前跳可能让持有者的租约在后端已过期，而它的本地截止时刻还没到：另一个节点可能赢得任期，旧持有者读到的 `isValid` 仍为真。这不是速率漂移，`drift` 无法覆盖；只有 fencing token 能防护。后端主机请使用平滑调整（slew）的时间同步。 |

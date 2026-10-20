@@ -256,6 +256,26 @@ class CoroutinesTest {
     }
 
     @Test
+    fun `cancelled awaitRevoked waits leave no callbacks behind on the term`() {
+        val revoked = CompletableFuture<RevokeReason>()
+        val term = FakeTerm(revoked)
+
+        runBlocking {
+            repeat(CANCELLED_WAITS) {
+                val waiting = launch { term.awaitRevoked() }
+                yield()
+                waiting.cancel()
+            }
+            revoked.numberOfDependents.assert().isEqualTo(1)
+            val waiting = async { term.awaitRevoked() }
+            yield()
+            revoked.complete(RevokeReason.STOPPED)
+            waiting.await().assert().isEqualTo(RevokeReason.STOPPED)
+        }
+        runBlocking { term.awaitRevoked() }.assert().isEqualTo(RevokeReason.STOPPED)
+    }
+
+    @Test
     fun `SimbaEventFlow rejects a buffer capacity below one`() {
         runCatching { SimbaEventFlow(0) }.exceptionOrNull().assert().isInstanceOf(IllegalArgumentException::class.java)
     }
@@ -273,5 +293,6 @@ class CoroutinesTest {
     companion object {
         const val WAIT_SECONDS = 5L
         const val WAIT_MILLIS = WAIT_SECONDS * 1000
+        const val CANCELLED_WAITS = 1_000
     }
 }

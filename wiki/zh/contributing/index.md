@@ -26,7 +26,7 @@ description: 构建 Simba、运行测试、安全地修改引擎、借助 TCK �
 
 | 模块 | 测试基础设施 |
 |---|---|
-| `simba-core`、`simba-testing`、`simba-tck` | 无 |
+| `simba-core`、`simba-testing`、`simba-tck`、`simba-coroutines` | 无 |
 | `simba-zookeeper` | 内嵌的 Curator `TestingServer` |
 | `simba-redis`（同时覆盖 `simba-spring-redis`） | Testcontainers `redis:7.4-alpine`（`RedisFixture`） |
 | `simba-jdbc` | Testcontainers `mysql:8.4` 和 `postgres:17`（`LeaseDatabaseFixture`） |

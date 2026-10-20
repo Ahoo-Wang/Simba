@@ -25,7 +25,8 @@ Java 21+; the starter needs Spring Boot 4 (4.1+); Kotlin users need Kotlin 2.2+.
 
 Identify:
 1. The backend the project already runs (JDBC, Redis or Zookeeper). Any is fine; for strict fencing prefer JDBC or
-   Zookeeper (Redis tokens can go back after a failover).
+   Zookeeper (Redis tokens can go back after a failover, or after an eviction: run Redis with
+   `maxmemory-policy noeviction`).
 2. The pattern: callbacks (`election.start`), work per term (`runWhileLeader`), periodic leader work (`schedule`,
    `@SimbaScheduled`), partitions (`group`, `@SimbaPartitioned`), or a lock around a step (`lock`).
 3. Spring Boot or plain JVM.
@@ -42,6 +43,9 @@ implementation("me.ahoo.simba:simba-spring-boot-starter")
 implementation("me.ahoo.simba:simba-jdbc")              // + spring-boot-starter-jdbc + driver; create tables once
 implementation("me.ahoo.simba:simba-spring-redis")      // + spring-boot-starter-data-redis
 implementation("me.ahoo.simba:simba-zookeeper")         // + simba.zookeeper.connect-string
+
+// optional (5.1+): coroutine adapters, needs kotlinx-coroutines
+implementation("me.ahoo.simba:simba-coroutines")
 ```
 
 JDBC tables: run `me/ahoo/simba/jdbc/init-simba-mysql.sql` or `init-simba-postgresql.sql` (on the `simba-jdbc`
@@ -153,6 +157,20 @@ simba.lock("invoice-42").tryAcquire()?.use { ... }                    // one att
 
 `LockTerm` is the credential, not thread-bound; closing releases. A lock lost early (deadline, expiry, take-over) is
 released for good, never re-acquired.
+
+Without blocking (5.1+): `acquireAsync(timeout)` / `tryAcquireAsync()` return a `CompletionStage` that completes on the
+callback executor (`LockTimeoutException`, `IllegalStateException` when closed, `IllegalArgumentException` for a
+negative timeout); cancelling its `toCompletableFuture()` abandons the attempt and releases a term already won.
+Reactor: `Mono.fromCompletionStage(...)`. With `simba-coroutines` (package `me.ahoo.simba.coroutines`):
+
+```kotlin
+simba.lock("invoice-42").withLock(Duration.ofSeconds(5)) { term -> store.write(invoice, term.token) }
+val term = simba.lock("invoice-42").awaitAcquire(Duration.ofSeconds(5))   // awaitTryAcquire(): one attempt
+val reason = term.awaitRevoked()                                          // cancelling the wait leaves the term
+```
+
+`SimbaEventFlow` is a `SimbaEventListener` to register with `Simba.builder().listener(...)`; collect its `events`
+(a hot `SharedFlow<SimbaEvent>` that drops the oldest events for a slow collector).
 
 ## Rules to Follow
 

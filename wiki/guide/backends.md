@@ -121,21 +121,27 @@ val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
 Release publishes `released` on the lease key's channel (`simba:lease:{name}`); it is the only broadcast and lets
 candidates take over at once. Every time decision uses Redis `TIME` inside the scripts.
 
-Leases expire on their own: a new term lasts as long as its session (one full session lease on a Cluster), and a
-keep-alive extends every lease the session holds, found through its lease index, so a lease acquired while a
-keep-alive was in flight is extended too. Closing a session deletes it first, then frees its leases and memberships,
-then drops its indexes, so a close repeated after a failure finishes the job.
+Leases expire on their own: a new term lasts as long as its session, and a keep-alive extends every lease the session
+holds, found through its lease index, so a lease acquired while a keep-alive was in flight is extended too. Closing a
+session deletes it first, then frees its leases and memberships, then drops its indexes, so a close repeated after a
+failure finishes the job.
 
 ### Cluster
 
 On a Redis Cluster (`RedisScripting.clustered`, or `simba.redis.route-by-slot=true`) every script call keeps to one
 hash slot: a call first touches the session's slot, then runs one script per slot of the remaining keys. Those later
-scripts can reach Redis long after the first one (a starved thread, a driver holding commands until it reconnects),
-when the session may have died. Each carries the session call's Redis time plus the session lease plus
-`maxClockSkew` (constructor parameter, default 1 s): nothing is granted or extended beyond that point, and an acquire
-or join that arrives after it changes nothing and fails. Keep-alive drops a lost lease from the session's index only
-once no such acquire can still take it, so `owned` stays complete. The lease and session slots may live on nodes
-whose clocks differ; a skew beyond `maxClockSkew` can end a lease before its session.
+scripts can reach Redis long after the first one (a starved I/O thread, a driver holding commands until it reconnects),
+when the session may have died, and their nodes' clocks may differ from the session node's. Only durations cross
+nodes, so a fixed skew between node clocks changes nothing:
+
+- Each later script carries what the session has left: its remaining time from the session call minus the time the
+  client measured since that call answered. Its node grants and extends nothing beyond its own now plus that, so a
+  lease lasts at least as long as its session and outlasts it by at most the delay before the script ran.
+- Acquire and join send nothing once the session's remaining time passed since the session call was sent, and fail.
+  An acquire answering later than that releases the terms it began and fails, even when other slots granted theirs:
+  keep-alive drops a lost lease from the session's index one lease after the attempt, and `owned` would never report
+  such a term. Only when that release fails or the reply is lost does a lease stay unreported, until it expires on
+  its own.
 
 ### Token Regression after a Failover
 
@@ -149,6 +155,18 @@ accept a write from a node whose term is newer in time but lower in token, or re
 - Enable persistence (AOF) so a restart of a single node does not reset tokens.
 - When fencing must hold across failovers, use JDBC on synchronous replication or Zookeeper (quorum commits).
 - Leases are measured with Redis `TIME`: a step of the Redis hosts' clocks shortens or lengthens every lease at once.
+
+### Memory Eviction
+
+Lease hashes never expire, and their `token` field is what keeps tokens increasing. If Redis evicts one under memory
+pressure (any `allkeys-*` `maxmemory-policy`), the next acquire of that name starts again at token 1: a resource that
+checks tokens then rejects the new owner, or a stale owner's lower token looks valid again. Session hashes carry a TTL,
+so `volatile-*` policies can evict them, which ends the session early.
+
+- Run the Redis that Simba uses with `maxmemory-policy noeviction` (the Redis default), so a full instance fails
+  writes instead of dropping keys; Simba then reports failed calls and terms end at their deadline.
+- Or make sure the `simba:*` keys can never be evicted, e.g. a dedicated instance with its own memory budget. A
+  separate logical database on the same instance does not help: the policy and the memory limit are per instance.
 
 ## Zookeeper
 

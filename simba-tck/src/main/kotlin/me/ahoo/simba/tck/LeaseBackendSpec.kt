@@ -252,7 +252,7 @@ abstract class LeaseBackendSpec {
 
         awaitExpired(expiring)
 
-        backend.grantedToken(contender, name).assertAfter(token)
+        awaitGranted(contender, name).assertAfter(token)
     }
 
     @Test
@@ -295,8 +295,11 @@ abstract class LeaseBackendSpec {
         val sessions = List(CONTENDERS) { open() }
 
         awaitExpired(expiring)
+        val free = open()
+        val freed = awaitGranted(free, name).also { it.assertAfter(token) }
+        backend.release(free, mapOf(name to freed))
 
-        race(sessions, name).second.assertAfter(token)
+        race(sessions, name).second.assertAfter(freed)
     }
 
     @Test
@@ -438,7 +441,7 @@ abstract class LeaseBackendSpec {
         val expiring = open(shortLease)
         backend.grantedToken(expiring, takenOver)
         awaitExpired(expiring)
-        backend.grantedToken(other, takenOver)
+        awaitGranted(other, takenOver)
         val kept = name()
         val keptToken = backend.grantedToken(session, kept)
 
@@ -516,7 +519,7 @@ abstract class LeaseBackendSpec {
 
         awaitExpired(expiring)
 
-        backend.members(group).assert().containsExactly(staying)
+        awaitUntil { backend.members(group) == listOf(staying) }
     }
 
     // ---- hints ----------------------------------------------------------------------------------------------------
@@ -638,6 +641,20 @@ abstract class LeaseBackendSpec {
     private fun KeepAliveResult.live(): KeepAliveResult.Live {
         assert().isInstanceOf(KeepAliveResult.Live::class.java)
         return this as KeepAliveResult.Live
+    }
+
+    /**
+     * Acquires [name] for [session] until it is granted and answers its token. Where leases expire on their own, a
+     * lease or membership of an expired session may outlast it briefly (by the latency of the call that granted or
+     * extended it), so a test that awaited the expiry polls for what the session held.
+     */
+    protected fun awaitGranted(session: SessionId, name: LeaseName): Long {
+        var token = 0L
+        awaitUntil {
+            token = (backend.acquire(session, setOf(name)).getValue(name) as? AcquireResult.Granted)?.token ?: 0
+            token > 0
+        }
+        return token
     }
 
     /**

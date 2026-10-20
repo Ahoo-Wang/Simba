@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
@@ -89,6 +90,7 @@ class ListenerAndLoopTest {
                 if (event is SimbaEvent.Elected && event.name.value == "inline") {
                     outcomes += client.snapshot().elections.size
                     outcomes += runCatching { client.lock("other").tryAcquire() }.exceptionOrNull()!!
+                    outcomes += runCatching { client.lock("another").acquire(Duration.ofSeconds(1)) }.exceptionOrNull()!!
                     outcomes += runCatching { client.awaitIdle() }.exceptionOrNull()!!
                 }
             }
@@ -98,6 +100,34 @@ class ListenerAndLoopTest {
             outcomes.poll(WAIT, TimeUnit.SECONDS).assert().isEqualTo(1)
             outcomes.poll(WAIT, TimeUnit.SECONDS).assert().isInstanceOf(IllegalStateException::class.java)
             outcomes.poll(WAIT, TimeUnit.SECONDS).assert().isInstanceOf(IllegalStateException::class.java)
+            outcomes.poll(WAIT, TimeUnit.SECONDS).assert().isInstanceOf(IllegalStateException::class.java)
+            // A refused acquire never started an attempt: no election of either lock name, nothing held.
+            it.snapshot().elections.map { election -> election.name.value }.assert().containsExactly("inline")
+        }
+    }
+
+    @Test
+    @OptIn(me.ahoo.simba.engine.InternalSimbaApi::class)
+    fun `awaitIdle returns without an external scheduler although the loop holds future timers`() {
+        Simba.builder().backend(GrantingBackend()).ioExecutor(Runnable::run).build().use { client ->
+            client.election("timed").start(Ignore)
+            CompletableFuture.supplyAsync { client.awaitIdle() }.get(WAIT, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
+    fun `closing a lock term in a dependent of acquireAsync does not wait for the callback executor it occupies`() {
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            Simba.builder().backend(GrantingBackend()).callbackExecutor(executor).build().use { client ->
+                val lock = client.lock("chained")
+                lock.acquireAsync(Duration.ofSeconds(WAIT)).thenAccept { it.close() }
+                    .toCompletableFuture().get(WAIT, TimeUnit.SECONDS)
+                // The release went through and the single callback thread is still serving the client.
+                lock.acquire(Duration.ofSeconds(WAIT)).close()
+            }
+        } finally {
+            executor.shutdownNow()
         }
     }
 

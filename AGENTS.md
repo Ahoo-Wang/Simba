@@ -32,8 +32,8 @@ This file records what is not obvious from the code. Describe the code as it is;
 | `simba-jdbc` | Docker: Testcontainers `mysql:8.4` and `postgres:17` (`LeaseDatabaseFixture`, schema from `simba-jdbc/src/main/resources/me/ahoo/simba/jdbc/init-simba-*.sql`) |
 
 CI (`.github/workflows/integration-test.yml`; job names are required checks, keep them): `Simba Core Test` (core,
-testing, tck, coroutines, starter), `Simba Spring Redis Test` (simba-redis and simba-spring-redis), `Simba Zookeeper Test`,
-`Simba Jdbc Test`, `Simba Example (jdbc|redis|zookeeper)`, `Simba Test (JDK 25)`. Wiki commands are in
+testing, tck, coroutines, starter), `Simba Spring Redis Test` (simba-redis and simba-spring-redis),
+`Simba Zookeeper Test`, `Simba Jdbc Test`, `Simba Example (jdbc|redis|zookeeper)`, `Simba Test (JDK 25)`. Wiki commands are in
 `wiki/AGENTS.md`.
 
 ## Architecture
@@ -96,9 +96,10 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
    optional hints. No scheduling, no notification, no local lease state; remaining durations come back as durations
    measured by the backend's clock. Keep-alive reports every owned lease (`held` is only a hint); inputs are validated
    alike (`LeaseBackend.requireLease` ≥ 1 ms, `requireGroup` = `LeaseName` rules, `requireBatch` ≤ `MAX_BATCH` 64).
-   `InMemoryLeaseBackend(selfExpiringLeases = true)` models Redis-style leases (Cluster: a grant lasts one full lease;
-   with `sessionBoundGrants = true`, single node: only what the session has left); `SimulationSpec` runs all three
-   modes.
+   `InMemoryLeaseBackend(selfExpiringLeases = true)` models Redis-style leases (a grant lasts one full lease; with
+   `sessionBoundGrants = true`, as on Redis, only what the session has left); `SimulationSpec` runs all three modes.
+   Within 5.x the public API stays source compatible (Kotlin and Java callers keep compiling); binary compatibility is
+   not required.
 
 ## Invariants
 
@@ -141,9 +142,11 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   `LeaderTask` or `LockTerm` stops only its own run (closing it again never touches a later run of the name).
 - `lock(name)`: one holder per name per client; a lock term lost other than by release is released for good, not
   re-acquired, but `acquire(timeout)` keeps contending until its timeout when the term it won ended before it
-  returned. `acquireAsync` / `tryAcquireAsync` wait without a thread and complete on the callback executor; the
-  blocking calls wait on them, and cancelling one (or interrupting a blocking caller) abandons the attempt and releases
-  a term it already won. Timers that are no longer needed (lock deadlines, schedule wake-ups, call timeouts) are cancelled.
+  returned. `acquireAsync` / `tryAcquireAsync` wait without a thread and complete on the callback executor, marked as
+  a callback (`close()` in a dependent does not wait), and never with a term that already ended (the lock contends
+  again); the blocking calls check the loop before starting an attempt and wait on it. Cancelling one (or
+  interrupting a blocking caller) abandons the attempt and releases a term it already won. Timers that are no longer
+  needed (lock deadlines, schedule wake-ups, call timeouts) are cancelled.
 - Groups: the engine joins the group with every session and publishes member views (`Effect.Members`); each node runs
   the partitions `PartitionAssignment` gives it over the session ids and hands the others over. Leaving while a join
   is in flight sends the leave once the join answers (even a failed one); a failed leave retries; the membership of
@@ -189,16 +192,17 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   `session`); `expires` is Redis `TIME`. Session hash `simba:session:{sid}` (PX) plus `:leases` / `:groups` index sets
   in the same slot (`:leases` is a zset of lease keys scored by the acquire attempt's Redis time); keep-alive, acquire
   and join fail once the session hash's `PTTL` is 0 (Redis still keeps the key in that millisecond, so a bare
-  `PEXPIRE` would revive it). Leases expire on their own: a new term lasts as long as its session (a full session
-  lease on a Cluster), acquire by the holder extends it, and keep-alive extends and reports every indexed lease the
+  `PEXPIRE` would revive it). Leases expire on their own: a new term lasts as long as its session, acquire by
+  the holder extends it, and keep-alive extends and reports every indexed lease the
   session holds (never only `held`). Index entries leave only atomically on a single node, or on a Cluster once not
   held and unchanged for a lease. Close: delete session, free indexed leases and groups, drop indexes (retry-safe).
   Groups: zset `simba:group:{g}` scored by expiry.
   Release publishes `released` on the lease key, the only broadcast. With `routeBySlot` (Cluster) every script call
-  keeps to one hash slot; every call after the session-slot one carries that call's Redis time + session lease +
-  `maxClockSkew` and grants or extends nothing beyond it (a late acquire or join fails), and keep-alive forgets a
-  lost index entry only `lease + 2 × maxClockSkew` after its attempt. On a single node the second keep-alive call is
-  capped at the session's new expiry. Group names follow the `LeaseName` rules. `wait-replicas` makes a new term wait for `WAIT`.
+  keeps to one hash slot. Only durations cross nodes, never a node's `TIME`: every call after the session-slot one
+  carries what the session has left (its remaining time minus the client's monotonic time since that call
+  answered), and its node grants or extends nothing beyond its own `now` plus that (also the single-node second
+  keep-alive call). Acquire and join send nothing once the session's remaining time passed since the session call
+  was sent; an acquire answering later than that releases the terms it began and fails. Group names follow the `LeaseName` rules. `wait-replicas` makes a new term wait for `WAIT`.
 - Zookeeper (`ZookeeperLeaseBackend`): one raw `ZooKeeper` client per session, never reconnected to another session;
   `SessionId` = zk session id as 16 hex digits. Leases are ephemeral `/simba/leases/{name}`, owner = `ephemeralOwner`,
   token = czxid (strictly increasing, not consecutive). Members are ephemeral `/simba/groups/{g}/{sid}`. A local
@@ -242,7 +246,10 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
 ## Change Playbooks
 
 - **Engine:** change `step()` and cover it with `EngineTest`-style table tests (events in, effects out); keep
-  `SimulationSpec` (I1–I5 over 10⁴ seeds) green. Threaded-client tests run on virtual time: `VirtualScheduler`, direct
+  `SimulationSpec` (I1–I5 over 10⁴ seeds, three backend modes) green. The simulation also truncates grants, expires
+  sessions and deletes leases backend-side (those terms are exempt from I1/I2 until revoked), drives a partition
+  group and closes nodes mid-fault; `every fault path actually happens` asserts each path (`path:*` in
+  `SimulationResult.events`, every `RevokeReason`) is reached. Threaded-client tests run on virtual time: `VirtualScheduler`, direct
   I/O and callback executors, `awaitIdle()` between timers (see `VirtualSimba`); never sleep. Work runs on real
   threads that `awaitIdle()` does not cover: wait for the work to start before stopping it (work revoked before it
   starts never runs), start contenders one at a time when a test needs a particular winner, and keep session ids

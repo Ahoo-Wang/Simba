@@ -51,9 +51,10 @@ interface DistributedLock {
 
     /**
      * [acquire] without blocking: completes with the term, or exceptionally with [LockTimeoutException] when none was
-     * won within [timeout] and with [IllegalStateException] when the client closes first. The client's own locks
-     * wait without a thread and complete on its callback executor; this default runs [acquire] on a virtual thread
-     * and interrupts it on cancellation.
+     * won within [timeout], with [IllegalStateException] when the client closes first and with
+     * [IllegalArgumentException] for a negative [timeout]; it never throws. The client's own locks wait without a
+     * thread and complete on its callback executor, where `close()` in a dependent does not wait (as in a callback);
+     * this default runs [acquire] on a virtual thread and interrupts it on cancellation.
      */
     fun acquireAsync(timeout: Duration): CompletionStage<LockTerm> = acquireOnVirtualThread { acquire(timeout) }
 
@@ -65,6 +66,7 @@ interface DistributedLock {
  * Runs a blocking [acquire] on a new virtual thread; cancelling the result interrupts it, and a term it returns
  * after the result was cancelled is released.
  */
+@JvmSynthetic
 internal fun <T : LockTerm?> acquireOnVirtualThread(acquire: () -> T): CompletableFuture<T> {
     val result = CompletableFuture<T>()
     val thread = Thread.ofVirtual().name("simba-lock-acquire").unstarted {

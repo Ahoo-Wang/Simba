@@ -28,6 +28,9 @@ implementation("org.springframework.boot:spring-boot-starter-data-redis")
 
 // or Zookeeper
 implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
+
+// 可选（5.1 起）：挂起版的锁调用、withLock、事件 Flow
+implementation("me.ahoo.simba:simba-coroutines:${simbaVersion}")
 ```
 
 ```xml [Maven]
@@ -42,11 +45,18 @@ implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
     <artifactId>simba-spring-redis</artifactId>
     <version>${simba.version}</version>
 </dependency>
+<!-- 可选（5.1 起）：协程适配 -->
+<dependency>
+    <groupId>me.ahoo.simba</groupId>
+    <artifactId>simba-coroutines</artifactId>
+    <version>${simba.version}</version>
+</dependency>
 ```
 
 :::
 
-`simba-bom` 统一所有 Simba 模块的版本。不使用 Spring 时，依赖 `simba-core` 加一个后端模块：`simba-jdbc`、
+`simba-bom` 统一所有 Simba 模块的版本。`simba-coroutines`（5.1 起）在任意后端之上提供挂起版的锁调用、`withLock`
+和事件 `Flow`，参阅 [锁](/zh/guide/locks#coroutines)。不使用 Spring 时，依赖 `simba-core` 加一个后端模块：`simba-jdbc`、
 `simba-zookeeper`，或者 Redis 用 `simba-spring-redis`（它会带上 `simba-redis`）。单独的 `simba-redis` 只定义了
 `RedisScripting` 端口：只有在你为其他 Redis 客户端自行实现适配器时，才单独使用它。
 
