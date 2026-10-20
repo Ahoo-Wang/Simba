@@ -40,7 +40,8 @@ runtimeOnly("com.mysql:mysql-connector-j") // 或 org.postgresql:postgresql
 implementation("me.ahoo.simba:simba-spring-redis:${simbaVersion}")
 implementation("org.springframework.boot:spring-boot-starter-data-redis")
 
-// 或 Zookeeper：设置 simba.zookeeper.connect-string
+// 或 Zookeeper：设置 simba.zookeeper.connect-string（节点只能扛住约为 simba.session.lease-duration 5/12 的停顿，
+// 默认约 6 秒：要容忍更长的 GC 或网络卡顿请调大它）
 implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
 
 // 可选（5.1 起）：挂起版的锁调用、withLock 和事件 Flow（依赖 kotlinx-coroutines）

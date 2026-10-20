@@ -217,7 +217,8 @@ simba-example (per-backend demo app), simba-bom, simba-dependencies, code-covera
   token = czxid (strictly increasing, not consecutive). Members are ephemeral `/simba/groups/{g}/{sid}`. A local
   watchdog closes a session no keep-alive started within `lease`. A keep-alive `sync`s through the leader before its
   reads (a follower cut off from the leader still answers reads), and remaining is `min(lease, 5/12 × negotiated
-  timeout)`: the leader may have last seen the session a client ping interval plus a leader ping earlier. A
+  timeout)`: the leader may have last seen the session a client ping interval plus a leader ping earlier (needs the
+  servers' `minSessionTimeout` ≥ 2 ticks). `connectionTimeout` defaults to the default renew interval. A
   disconnected client fails `keepAlive` / `acquire`; a zk-expired one is `Expired`, and so is a `CONNECTIONLOSS` of a
   closing client (Zookeeper fails requests that way while closing, before the state turns `CLOSED`).
   A name is a keep-alive candidate from before its create is sent (under the session's send lock, so a keep-alive read

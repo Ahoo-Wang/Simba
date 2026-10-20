@@ -43,7 +43,8 @@ runtimeOnly("com.mysql:mysql-connector-j") // or org.postgresql:postgresql
 implementation("me.ahoo.simba:simba-spring-redis:${simbaVersion}")
 implementation("org.springframework.boot:spring-boot-starter-data-redis")
 
-// or Zookeeper: set simba.zookeeper.connect-string
+// or Zookeeper: set simba.zookeeper.connect-string (a node keeps its terms through pauses of about 5/12 of
+// simba.session.lease-duration, about 6 s by default: raise it to tolerate longer GC or network stalls)
 implementation("me.ahoo.simba:simba-zookeeper:${simbaVersion}")
 
 // optional, since 5.1: suspending lock calls, withLock and an event Flow (kotlinx-coroutines)

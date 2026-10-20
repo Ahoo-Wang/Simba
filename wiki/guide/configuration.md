@@ -15,7 +15,7 @@ indicator.
 |---|---|---|
 | `simba.enabled` | `true` | Enables the whole auto-configuration |
 | `simba.backend` | — | `jdbc`, `redis` or `zookeeper`; required when several backend modules are active |
-| `simba.session.lease-duration` | `15s` | The backend expires the session this long after its last keep-alive |
+| `simba.session.lease-duration` | `15s` | The backend expires the session this long after its last keep-alive. On Zookeeper a node keeps its terms through a pause of only about 5/12 of it; raise it when pauses matter more than failover time (see [Backends](/guide/backends#zookeeper)) |
 | `simba.session.renew-interval` | `lease-duration / 3` | Keep-alive period; at most half of the lease duration |
 | `simba.session.drift` | `0.01` | Upper bound of the clock rate difference between a node and the backend, in `[0, 0.5)` |
 | `simba.session.margin` | `50ms` | Extra safety subtracted from every local deadline |

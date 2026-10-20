@@ -789,6 +789,11 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
   quarter of the timeout), so the leader saw the session at most `7/12` of the timeout before the reply. With the
   default lease the client therefore renews about every two seconds and publishes `SessionLeaseShortened` once per
   session.
+- So a node keeps its terms through a pause (GC, network stall) of only about `5/12` of the session timeout: about
+  6 s with the default 15 s lease, against about 15 s before 5.1, and renews about three times as often, each time
+  with a round trip to the leader. `leaseDuration` keeps its meaning (after a crash the others take over within about
+  a lease), so the session timeout is not enlarged: when tolerating pauses matters more than failover time, raise
+  `simba.session.lease-duration` (for example 36 s for 5.0's tolerance, with failover after a crash in about 36 s).
 - While the client is disconnected, or on a follower cut off from the leader, keep-alive and acquire fail, so the local
   deadline runs out; when Zookeeper reports the session expired, the session is `Expired`.
 
@@ -796,6 +801,8 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 
 - The session timeout requested is `leaseDuration`; the ensemble clamps it to `[minSessionTimeout,
   maxSessionTimeout]` (by default 2 to 20 ticks). Failover after a crash takes the negotiated timeout.
+- The `5/12` bound needs a tick of at most half the session timeout, that is a `minSessionTimeout` of at least the
+  default two ticks. Do not configure the servers below it.
 - `simba.zookeeper.connection-timeout` bounds how long opening a session may take; it defaults to the renew interval,
   after which the engine gives up on the call. A session that connects later anyway is never kept alive, and the
   watchdog closes it after `leaseDuration`.
@@ -854,7 +861,7 @@ indicator.
 |---|---|---|
 | `simba.enabled` | `true` | Enables the whole auto-configuration |
 | `simba.backend` | — | `jdbc`, `redis` or `zookeeper`; required when several backend modules are active |
-| `simba.session.lease-duration` | `15s` | The backend expires the session this long after its last keep-alive |
+| `simba.session.lease-duration` | `15s` | The backend expires the session this long after its last keep-alive. On Zookeeper a node keeps its terms through a pause of only about 5/12 of it; raise it when pauses matter more than failover time (see [Backends](/guide/backends#zookeeper)) |
 | `simba.session.renew-interval` | `lease-duration / 3` | Keep-alive period; at most half of the lease duration |
 | `simba.session.drift` | `0.01` | Upper bound of the clock rate difference between a node and the backend, in `[0, 0.5)` |
 | `simba.session.margin` | `50ms` | Extra safety subtracted from every local deadline |
@@ -1611,9 +1618,16 @@ and you can roll an upgrade node by node. Release notes list every change:
 
 ### 5.0 to 5.1 {#from-5-0-to-5-1}
 
-5.1 adds API, changes how the Redis backend times its calls on a Cluster, and keeps 5.0's storage, so nodes of both
-versions can run side by side:
+5.1 adds API, changes how the Redis backend times its calls on a Cluster and how the Zookeeper backend confirms
+keep-alives, and keeps 5.0's storage, so nodes of both versions can run side by side:
 
+- **Zookeeper keep-alives are confirmed through the leader**, and a keep-alive leaves `5/12` of the session timeout
+  instead of all of it (a follower cut off from the leader could renew a session the leader was about to expire). With
+  the default 15 s lease a node keeps its terms through a pause of about 6 s instead of about 15 s, and renews about
+  every two seconds. To tolerate longer pauses, raise `simba.session.lease-duration`; failover after a crash grows with
+  it. See [Backends](/guide/backends#zookeeper).
+- `simba.zookeeper.connection-timeout` and `ZookeeperLeaseBackend`'s `connectionTimeout` default to the renew
+  interval (5 s) instead of 15 s.
 - `DistributedLock.acquireAsync(timeout)` and `tryAcquireAsync()` acquire a lock without blocking; see
   [Locks](/guide/locks#without-blocking). They are default methods, so your own `DistributedLock` implementations
   keep compiling unchanged.

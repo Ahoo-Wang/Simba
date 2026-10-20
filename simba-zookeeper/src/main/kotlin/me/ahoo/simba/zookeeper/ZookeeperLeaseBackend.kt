@@ -14,6 +14,7 @@
 package me.ahoo.simba.zookeeper
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import me.ahoo.simba.SimbaConfig
 import me.ahoo.simba.SimbaException
 import me.ahoo.simba.spi.AcquireResult
 import me.ahoo.simba.spi.BackendHint
@@ -84,7 +85,9 @@ import java.util.concurrent.atomic.AtomicLong
  * up to that bound: the remaining duration is `min(lease, 5/12 × negotiated session timeout)`. The client sends at
  * least every third of the timeout and the leader pings every half tick (at most a quarter of the timeout, which is
  * at least two ticks), so the leader last saw activity of the session at most `7/12` of the timeout before the sync
- * reply, which came after the keep-alive was sent.
+ * reply, which came after the keep-alive was sent. That needs the servers' `minSessionTimeout` to be at least its
+ * default of two ticks. A node therefore keeps its terms through a pause of only about `5/12` of the session timeout;
+ * a longer `lease` tolerates longer pauses at the cost of a slower failover after a crash.
  *
  * Security: every client (each session's and the reader's) authenticates with [authInfo] and is built with
  * [clientConfig]; every node the backend creates (leases, members, and the parents it creates) gets the ACL of
@@ -110,7 +113,7 @@ import java.util.concurrent.atomic.AtomicLong
 class ZookeeperLeaseBackend @JvmOverloads constructor(
     private val connectString: String,
     root: String = DEFAULT_ROOT,
-    val connectionTimeout: Duration = Duration.ofSeconds(DEFAULT_CONNECTION_TIMEOUT_SECONDS),
+    val connectionTimeout: Duration = DEFAULT_CONNECTION_TIMEOUT,
     authInfo: List<AuthInfo> = emptyList(),
     private val aclProvider: ACLProvider = DefaultACLProvider(),
     private val clientConfig: ZKClientConfig? = null,
@@ -118,7 +121,9 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
     companion object {
         private val log = KotlinLogging.logger {}
         const val DEFAULT_ROOT = "/simba"
-        private const val DEFAULT_CONNECTION_TIMEOUT_SECONDS = 15L
+
+        /** The engine's default call timeout (the default renew interval): a slower open would be abandoned. */
+        private val DEFAULT_CONNECTION_TIMEOUT: Duration = SimbaConfig.builder().build().renewInterval
         private const val MAX_ATTEMPTS = 8
         private const val RETRY_BASE_MILLIS = 100
         private const val RETRY_COUNT = 3
@@ -333,9 +338,15 @@ class ZookeeperLeaseBackend @JvmOverloads constructor(
 
     override fun members(group: String): List<SessionId> {
         val path = groupPath(group)
-        // Through the last writer when it can answer; a missing group node goes to the reader, which watches for it.
+        // Through the last writer when it can answer; a missing group node goes to the reader, which watches for it,
+        // and so does a writer that got suspended after the check.
         groupWriters[group]?.takeIf(Session::isConnected)?.let { writer ->
-            writer.expiringOn { writer.members(path) }?.let { return it }
+            val view = try {
+                writer.expiringOn { writer.members(path) }
+            } catch (_: SimbaException) {
+                null
+            }
+            view?.let { return it }
         }
         sync(path)
         repeat(MAX_ATTEMPTS) {

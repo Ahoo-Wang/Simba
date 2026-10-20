@@ -176,6 +176,9 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
   ping 时才把会话的活动上报给 leader。因此续约会先经 leader 执行 `sync`，剩余时间为 `min(leaseDuration, 5/12 × 协商后的会话超时)`：
   客户端至少每隔会话超时的三分之一发送一次请求，leader 每半个 tick（最多为会话超时的四分之一）ping 一次，所以 leader 最后一次看到该会话
   不早于应答前会话超时的 `7/12`。在默认租约下，客户端因此大约每两秒续约一次，并且每个会话发布一次 `SessionLeaseShortened`。
+- 因此节点只能扛住约为会话超时 `5/12` 的停顿（GC、网络卡顿）而不丢失任期：默认 15 秒租约下约 6 秒，5.1 之前约为 15 秒；续约次数约为原来的
+  三倍，每次都多一个到 leader 的往返。`leaseDuration` 的含义不变（崩溃后其他节点在约一个租约时长内接管），所以不会放大会话超时：
+  如果更看重容忍停顿而不是故障转移时间，请调大 `simba.session.lease-duration`（例如设为 36 秒即可恢复 5.0 的容忍度，代价是崩溃后约 36 秒才会被接管）。
 - 客户端断开连接期间，或者在与 leader 失联的 follower 上，续约和获取都会失败，因此本地截止时刻会耗尽；当 Zookeeper 报告会话过期时，
   会话为 `Expired`。
 
@@ -183,6 +186,7 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 
 - 请求的会话超时为 `leaseDuration`；集群会将其限制在 `[minSessionTimeout, maxSessionTimeout]` 之内（默认为 2 到 20 个 tick）。
   崩溃后的故障转移需要协商后的超时时长。
+- `5/12` 这个界限要求 tick 不超过会话超时的一半，也就是 `minSessionTimeout` 不低于默认的两个 tick。请不要把服务端配置得比这更低。
 - 写入经法定人数提交，因此 leader 切换不会丢失 token；只有集群数据丢失或从更早的快照恢复时，token 才可能回退。
   会话超时按服务器的流逝时间计算，因此集群主机的墙钟跳变不会缩短它们。
 - `simba.zookeeper.connection-timeout` 限制打开会话所需的最长时间，默认等于续约间隔，超过它引擎就会放弃这次调用。之后才连上的会话不会被续约，
