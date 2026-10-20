@@ -23,7 +23,7 @@ run.
 - **Work bound to the term.** Leader work runs on virtual threads, is interrupted when the term ends, and finishes
   before the lease is released.
 
-Read [Concepts and Correctness](https://simba.ahoo.me/guide/correctness) before protecting anything that must never be
+Read [Fencing and Failures](https://simba.ahoo.me/guide/correctness) before protecting anything that must never be
 written twice. Coming from 4.x? See [Migrating to 5.0](https://simba.ahoo.me/guide/migration).
 
 ## Installation
@@ -145,12 +145,13 @@ to verify your token-checking resource and `LeaseBackendSpec` for backends.
 
 | | |
 |---|---|
-| [Introduction](https://simba.ahoo.me/guide/) | Guarantees, choosing an API and a backend |
+| [Why Simba](https://simba.ahoo.me/guide/) | The problem from first principles, guarantees, choosing an API and a backend |
 | [Quick Start](https://simba.ahoo.me/guide/quick-start) | Dependencies, backend setup, first code for each API |
-| [Concepts and Correctness](https://simba.ahoo.me/guide/correctness) | Sessions, leases, terms, fencing tokens, handover, failure modes |
+| [How Simba Works](https://simba.ahoo.me/guide/concepts) | Sessions, local deadline, terms, tokens, election lifecycle, handover, timing |
+| [Fencing and Failures](https://simba.ahoo.me/guide/correctness) | Fencing protocol and recipes, token sources, failure modes |
 | [Backends](https://simba.ahoo.me/guide/backends) | JDBC, Redis, Zookeeper: schema, keys, paths, operating notes |
 | [Spring Boot](https://simba.ahoo.me/guide/configuration) | `simba.*` properties, beans, shutdown order |
-| [Leader Work and Partitions](https://simba.ahoo.me/guide/leader-work) | `runWhileLeader`, schedules, partition groups, annotations |
+| [Elections and Leader Work](https://simba.ahoo.me/guide/leader-work) | Elections, `runWhileLeader`, schedules, partition groups, annotations |
 | [Locks](https://simba.ahoo.me/guide/locks) | `lock(name)` and `LockTerm` |
 | [Observability](https://simba.ahoo.me/guide/observability) | Snapshot, events, metrics, Actuator endpoint, health |
 | [Testing](https://simba.ahoo.me/guide/testing) | In-memory backend, virtual time, TCK |

@@ -8,7 +8,7 @@ description: Simba 5 的公共类型及其契约——Simba、Election、Term、
 公共 API 位于 `me.ahoo.simba`（`simba-core`）及其子包 `partition`、`event` 和 `spi`。时间一律使用 `java.time.Duration`。
 `me.ahoo.simba.engine` 中的类型以及标注了 `@InternalSimbaApi` 的成员需要显式 opt-in，不属于公共 API。
 
-## 客户端 — `me.ahoo.simba` {#client-me-ahoo-simba}
+## 客户端 — `me.ahoo.simba` {#client-—-me-ahoo-simba}
 
 ### `Simba` {#simba}
 
@@ -33,9 +33,9 @@ description: Simba 5 的公共类型及其契约——Simba、Election、Term、
 `SimbaConfig.builder()`，可设置 `leaseDuration`（15s）、`renewInterval`（`leaseDuration / 3`）、`drift`（0.01）、`margin`（50ms）、
 `retryJitter`（`renewInterval / 2`）、`minBackoff`（100ms）；未设置的值保持默认，派生值随已设置的值计算。`build()` 校验
 `renewInterval × 2 ≤ leaseDuration` 以及 `leaseDuration × (1 − drift) − margin > renewInterval`；`toBuilder()` 派生变体。没有公开构造器：
-`SimbaConfig`、事件和快照都是按值比较的普通类（没有 `copy` 和解构），以后的版本可以兼容地增加属性。参阅 [时间参数](/zh/guide/correctness#timing)。
+`SimbaConfig`、事件和快照都是按值比较的普通类（没有 `copy` 和解构），以后的版本可以兼容地增加属性。参阅 [时间参数](/zh/guide/concepts#timing)。
 
-## 选举 — `me.ahoo.simba` {#elections-me-ahoo-simba}
+## 选举 — `me.ahoo.simba` {#elections-—-me-ahoo-simba}
 
 ### `Election` {#election}
 
@@ -72,7 +72,7 @@ interface LeadershipListener {
 `Schedule.fixedDelay(delay, initialDelay = 0)`、`Schedule.fixedRate(period, initialDelay = 0)`、
 `withInitialDelay(initialDelay)`；`mode`、`period`、`initialDelay`。周期必须为正。超时的 fixed-rate 运行会跳过错过的启动。
 
-## 任期 — `me.ahoo.simba` {#terms-me-ahoo-simba}
+## 任期 — `me.ahoo.simba` {#terms-—-me-ahoo-simba}
 
 ### `Term` {#term}
 
@@ -88,9 +88,9 @@ interface LeadershipListener {
 ### `RevokeReason` {#revokereason}
 
 `STOPPED`、`STEPPED_DOWN`、`SESSION_EXPIRED`、`DEADLINE_PASSED`、`TAKEN_OVER`；参阅
-[租约、任期与 token](/zh/guide/correctness#leases-terms-and-tokens)。
+[租约、任期与 token](/zh/guide/concepts#leases-terms-and-tokens)。
 
-## 锁 — `me.ahoo.simba` {#locks-me-ahoo-simba}
+## 锁 — `me.ahoo.simba` {#locks-—-me-ahoo-simba}
 
 | 类型 | 成员 |
 |---|---|
@@ -100,7 +100,7 @@ interface LeadershipListener {
 
 参阅 [锁](/zh/guide/locks)。
 
-## 分区 — `me.ahoo.simba.partition` {#partitions-me-ahoo-simba-partition}
+## 分区 — `me.ahoo.simba.partition` {#partitions-—-me-ahoo-simba-partition}
 
 | 类型 | 成员 |
 |---|---|
@@ -109,7 +109,7 @@ interface LeadershipListener {
 | `GroupTask : AutoCloseable` | `group`；`partitions(): Set<Int>`（本节点在其最新视图中的分区）；`stop()`；`close()` |
 | `PartitionAssignment` | `ownerOf(partition, members)`、`partitionsOf(member, partitions, members)`、`weight(partition, member)`：rendezvous 哈希（FNV-1a 64 与 SplitMix64 混合），跨版本保持一致 |
 
-## 事件与快照 — `me.ahoo.simba.event` {#events-and-snapshot-me-ahoo-simba-event}
+## 事件与快照 — `me.ahoo.simba.event` {#events-and-snapshot-—-me-ahoo-simba-event}
 
 | 类型 | 成员 |
 |---|---|
@@ -123,7 +123,7 @@ interface LeadershipListener {
 
 参阅 [可观测性](/zh/guide/observability)。
 
-## 协程 — `me.ahoo.simba.coroutines` {#coroutines-me-ahoo-simba-coroutines}
+## 协程 — `me.ahoo.simba.coroutines` {#coroutines-—-me-ahoo-simba-coroutines}
 
 模块 `simba-coroutines`（5.1 起）。
 
@@ -137,7 +137,7 @@ interface LeadershipListener {
 
 参阅 [锁](/zh/guide/locks#coroutines)。
 
-## 后端 SPI — `me.ahoo.simba.spi` {#backend-spi-me-ahoo-simba-spi}
+## 后端 SPI — `me.ahoo.simba.spi` {#backend-spi-—-me-ahoo-simba-spi}
 
 ```kotlin
 interface LeaseBackend : AutoCloseable {
@@ -170,7 +170,7 @@ interface LeaseBackend : AutoCloseable {
 值类型：`LeaseName`（1–128 个 `[A-Za-z0-9._:-]` 字符，不能是 `.` 或 `..`）、`SessionId`（永不复用）——两者都是按值比较的普通不可变类，可在 Java 中使用——以及 `Ticker`（单调纳秒）。实现：`JdbcLeaseBackend`、
 `RedisLeaseBackend`、`ZookeeperLeaseBackend`、`InMemoryLeaseBackend`；参阅 [后端](/zh/guide/backends)。
 
-## Spring Boot — `me.ahoo.simba.spring.boot.starter` {#spring-boot-me-ahoo-simba-spring-boot-starter}
+## Spring Boot — `me.ahoo.simba.spring.boot.starter` {#spring-boot-—-me-ahoo-simba-spring-boot-starter}
 
 | 类型 | 说明 |
 |---|---|

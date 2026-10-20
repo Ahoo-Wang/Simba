@@ -1,13 +1,22 @@
 ---
 title: Spring Boot
-description: Every simba.* property, the beans the Spring Boot starter creates, the shutdown order, and how to build the Simba client without Spring.
+description: What the Simba Spring Boot starter does, every simba.* property, the beans it creates, annotated methods, the shutdown order, and how to build the Simba client without Spring.
 ---
 
 # Spring Boot
 
-`simba-spring-boot-starter` builds one `Simba` client over the backend on the classpath, runs `@SimbaScheduled` and
-`@SimbaPartitioned` methods, and adds Micrometer metrics, the `simba` Actuator endpoint and the `simba` health
-indicator.
+`simba-spring-boot-starter` turns the classpath into one `Simba` client: it picks the backend, builds the client over
+it, runs `@SimbaScheduled` and `@SimbaPartitioned` methods, and adds Micrometer metrics, the `simba` Actuator endpoint
+and the `simba` health indicator. Closing happens in an order that lets leader work hand over before the backend's
+connections go away.
+
+```mermaid
+graph LR
+    CP["Backend module<br>on the classpath"] --> LB["LeaseBackend bean<br>unless you define one"]
+    LB --> S["Simba bean<br>simba.session.*,<br>every SimbaEventListener bean"]
+    S --> A["@SimbaScheduled /<br>@SimbaPartitioned methods"]
+    S --> O["Metrics, Actuator endpoint,<br>health indicator"]
+```
 
 ## Properties
 
@@ -37,8 +46,8 @@ indicator.
 | `simba.metrics.enabled` | `true` | Records Micrometer metrics when a `MeterRegistry` bean exists |
 | `management.health.simba.enabled` | `true` | The `simba` health indicator |
 
-The session properties are explained in [Concepts and Correctness](/guide/correctness#timing); invalid combinations
-fail startup. A typical configuration:
+What the session properties trade off is explained in [Timing](/guide/concepts#timing); invalid combinations fail
+startup. A typical configuration:
 
 ```yaml
 simba:
@@ -52,11 +61,21 @@ management:
         include: health,simba
 ```
 
+## Selecting the Backend
+
+Each backend auto-configuration activates when its module is on the classpath, `simba.enabled` and
+`simba.<backend>.enabled` are not `false`, and `simba.backend` is unset or names it. It defines the `LeaseBackend`
+bean unless the application defines one.
+
+With several backend modules on the classpath, set `simba.backend`; startup fails otherwise, and also when
+`simba.backend` names a backend that is not active. To use a backend the starter does not configure (an
+`InMemoryLeaseBackend` in tests, or a `LeaseBackend` of your own), define the `LeaseBackend` bean yourself.
+
 ## Beans the Starter Creates
 
 | Bean | Condition |
 |---|---|
-| `LeaseBackend` (`JdbcLeaseBackend`, `RedisLeaseBackend` or `ZookeeperLeaseBackend`) | The backend is active and the application defines no `LeaseBackend`; JDBC needs a single `DataSource`, Redis a single `RedisConnectionFactory`; Zookeeper uses an `ACLProvider` and a `ZKClientConfig` bean when present |
+| `LeaseBackend` (`JdbcLeaseBackend`, `RedisLeaseBackend` or `ZookeeperLeaseBackend`) | The backend is active and the application defines no `LeaseBackend`; JDBC needs a single `DataSource`, Redis a single Lettuce `RedisConnectionFactory`; Zookeeper uses an `ACLProvider` and a `ZKClientConfig` bean when present |
 | `Simba` | A `LeaseBackend` bean exists; built with `simba.session.*` and every `SimbaEventListener` bean |
 | `SimbaLifecycle` | Closes the client on shutdown |
 | `SimbaScheduledBeanPostProcessor` | `simba.scheduling.enabled` |
@@ -72,14 +91,16 @@ client beyond the properties (executors, a fixed seed), define the `Simba` bean 
 
 `@SimbaScheduled` runs a bean method on the leader of an election; `@SimbaPartitioned` runs it for every partition of
 a group this node leads. Both start after the context refreshed and stop on shutdown. Their attributes and method
-signatures are on the [Leader Work](/guide/leader-work#spring-annotations) page. The lease names they elect (the
-`name` of `@SimbaScheduled`, `{group}.{partition}` of `@SimbaPartitioned`) and the groups must be unique across both
+signatures are on [Leader Work](/guide/leader-work#spring-annotations). The lease names they elect (the `name` of
+`@SimbaScheduled`, `{group}.{partition}` of `@SimbaPartitioned`) and the groups must be unique across both
 annotations: startup fails on a conflict.
 
 ## Shutdown Order
 
+Leader work must finish and hand over while the backend is still reachable, so shutdown runs in two phases:
+
 1. `SimbaScheduledBeanPostProcessor` (phase `DEFAULT_PHASE`) stops every annotated method: work is interrupted, and
-   each lease is released once its work exited (see [Handover Order](/guide/correctness#handover-order)).
+   each lease is released once its work exited (see [Handover Order](/guide/concepts#handover-order)).
 2. `SimbaLifecycle` (phase `DEFAULT_PHASE - 4096`) then closes the `Simba` client, which revokes every remaining term,
    closes the session and frees its leases, before lower-phase infrastructure such as connection factories stops.
 
@@ -101,7 +122,7 @@ val simba = Simba.builder()
 | Builder method | Default | Description |
 |---|---|---|
 | `backend(LeaseBackend)` | required | The backend; the client does not close it |
-| `config(SimbaConfig)` | `SimbaConfig.builder().build()` | Session timing, see [Timing](/guide/correctness#timing) |
+| `config(SimbaConfig)` | `SimbaConfig.builder().build()` | Session timing, see [Timing](/guide/concepts#timing) |
 | `listener(SimbaEventListener)` | none | Receives every [`SimbaEvent`](/guide/observability#events); may be called several times |
 | `ioExecutor(Executor)` | a virtual thread per call | Runs backend calls |
 | `callbackExecutor(Executor)` | virtual threads | Runs leadership callbacks, serially per election |

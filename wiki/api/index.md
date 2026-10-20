@@ -37,7 +37,7 @@ follow the values set. `build()` validates `renewInterval × 2 ≤ leaseDuration
 `leaseDuration × (1 − drift) − margin > renewInterval`; `toBuilder()` derives a variant. There is no public
 constructor: `SimbaConfig`, the events and the snapshots are plain classes with value equality (no `copy` or
 destructuring), so later versions can add properties compatibly. See
-[Timing](/guide/correctness#timing).
+[Timing](/guide/concepts#timing).
 
 ## Elections — `me.ahoo.simba`
 
@@ -95,7 +95,7 @@ overruns skips the missed starts.
 ### `RevokeReason`
 
 `STOPPED`, `STEPPED_DOWN`, `SESSION_EXPIRED`, `DEADLINE_PASSED`, `TAKEN_OVER`; see
-[Leases, Terms and Tokens](/guide/correctness#leases-terms-and-tokens).
+[Leases, Terms and Tokens](/guide/concepts#leases-terms-and-tokens).
 
 ## Locks — `me.ahoo.simba`
 

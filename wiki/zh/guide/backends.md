@@ -1,15 +1,31 @@
 ---
 title: 后端
-description: JDBC（MySQL、PostgreSQL）、Redis 和 Zookeeper 后端如何存储会话、租约和组成员，fencing token 从何而来，以及如何运维各个后端。
+description: 每个 Simba 后端必须提供什么，以及 JDBC（MySQL、PostgreSQL）、Redis 和 Zookeeper 后端如何提供：存储方式、在哪里测量时间、fencing token 从何而来，以及如何运维各个后端。
 ---
 
 # 后端
 
-每个后端都实现同一个 `LeaseBackend` SPI，并通过同一套 [TCK](/zh/guide/testing#backend-tck)，因此选举、锁和组在所有后端上的行为都相同。
-它们的区别在于存储方式、在哪里测量时间，以及 fencing token 的持久性。
+后端是节点之间达成一致的唯一场所。Simba 对它的要求很少，每一条都直接来自[模型](/zh/guide/concepts)：
 
-每个后端都遵循相同的规则：会话在其租约时长内未续约即过期；过期的会话永不复活；租约只在其会话存活期间属于该会话；租约的 token 大于零，
-随每个新任期严格递增且永不重置；所有剩余时间都由后端的时钟测量，并以时长的形式返回。
+| 要求 | 原因 |
+|---|---|
+| 会话在其租约时长内未续约即过期 | 崩溃节点的租约必须自行释放 |
+| 过期的会话永不复活 | 它的租约可能已经属于别人 |
+| 租约只在其会话存活期间属于该会话 | 所有权随存活结束 |
+| 租约的 token 大于零，随每个新任期严格递增且永不重置 | 资源通过比较 token 拒绝过期的持有者 |
+| 剩余时间由后端自己的时钟测量，并以时长的形式返回 | 节点从不与后端比较时间戳 |
+
+每个后端都实现同一个 `LeaseBackend` SPI，并通过同一套 [TCK](/zh/guide/testing#backend-tck)，因此选举、锁和组在所有后端上的行为都相同。
+不同的是各个存储*如何*满足这些要求，也因此决定了什么会破坏它们：
+
+| | JDBC | Redis | Zookeeper |
+|---|---|---|---|
+| 会话 | `simba_session` 中的一行 | 带 `PX` 的哈希 `simba:session:{sid}` | 一个 Zookeeper 会话 |
+| 租约 | `simba_lease` 中的一行，永不删除 | 哈希 `simba:lease:{name}`，永不过期 | 临时节点 `{root}/leases/{name}` |
+| 时钟 | 数据库 `now` | Redis `TIME` | Zookeeper 会话超时（服务器的流逝时间） |
+| Token | 行中的计数器，每个任期 `+1` | 哈希中的计数器，每个任期 `+1` | 节点的 `czxid` |
+| 释放广播 | 无 | 租约键上的 pub/sub | 节点 watch |
+| Token 持久性 | 数据库的提交 | 异步复制、内存 | 法定人数提交 |
 
 ## JDBC (MySQL 8, PostgreSQL 14+) {#jdbc-mysql-8-postgresql-14}
 
@@ -61,7 +77,7 @@ create table if not exists simba_member
 
 租约名称和组名都区分大小写（MySQL 上为二进制排序规则，PostgreSQL 上为 `"C"`）。
 
-### 工作原理 {#how-it-works}
+### 工作原理 {#jdbc-how-it-works}
 
 - 只有当 `session_id` 所指会话的 `expires_at` 在未来时，租约才属于该会话。获取是一条 upsert：当行空闲或其会话已过期时占有该行，并把
   `token` 加一。在 MySQL 上，`token` 的赋值在 `SET` 中排在最前，因为 MySQL 按从左到右的顺序、使用已更新的值求值 `SET`。
@@ -72,7 +88,7 @@ create table if not exists simba_member
   `purgeExpired()` 删除：它在 `openSession` 或 `keepAlive` 之后运行，每个 `purgeInterval`（默认一分钟）至多一次，每次至多 1000
   个会话，沿 `idx_session_expires` 索引查找。
 
-### 运维说明 {#operating-notes}
+### 运维说明 {#jdbc-operating-notes}
 
 - 释放不会通知任何人：正常停止后，候选者在下一次尝试（`renewInterval / 2` 加抖动）时接管。
 - 每条语句都有超时；starter 将其设为会话的续约间隔（`simba.jdbc.query-timeout`），超过之后引擎无论如何都会放弃该调用。
@@ -90,7 +106,7 @@ create table if not exists simba_member
 
 模块 `simba-redis`（与驱动无关，Lua 脚本位于 `RedisScripting` 端口之后）和 `simba-spring-redis`
 （`SpringRedisScripting`，Spring Data Redis 适配器）。`SpringRedisScripting` 需要 Spring Boot 默认的 Lettuce 客户端：
-使用 Jedis 时订阅会阻塞调用线程，也无法使用 `WAIT`，因此 starter 遇到非 Lettuce 的 `RedisConnectionFactory` 会启动失败：
+使用 Jedis 时订阅会阻塞调用线程，也无法使用 `WAIT`，因此 starter 遇到非 Lettuce 的 `RedisConnectionFactory` 会启动失败。
 
 ```kotlin
 val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
@@ -102,15 +118,19 @@ val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
 |---|---|---|
 | `simba:lease:{name}` | 哈希，永不过期 | `session`、`token`、`expires`（Redis `TIME`）；释放只清除 `session`，因此 token 永不重置 |
 | `simba:session:{sid}` | 哈希，`PX` = 租约时长 | 会话；一旦它消失，续约、获取和加入组都会失败 |
-| `simba:session:{sid}:leases` | 集合，同一槽 | 会话的租约 |
+| `simba:session:{sid}:leases` | 有序集合，同一槽 | 会话的租约键，以获取尝试时的 Redis 时间为分数 |
 | `simba:session:{sid}:groups` | 集合，同一槽 | 会话加入的组 |
 | `simba:group:{group}` | 有序集合 | 成员（会话 id），以 Redis 时间下的过期时刻为分数 |
 
 释放会在租约键的频道（`simba:lease:{name}`）上发布 `released`；这是唯一的广播，让候选者能够立即接管。所有时间判断都在脚本内使用 Redis `TIME`。
 
-租约会自行过期：新任期的持续时间与其会话相同，续约通过会话的租约索引延长该会话持有的每个租约，
-因此在续约途中获取的租约也会被延长。关闭会话时先删除会话，再释放其租约和组成员身份，最后删除索引，
-因此失败后重复关闭会把剩余工作做完。
+### 工作原理 {#redis-how-it-works}
+
+- 租约会自行过期：新任期的持续时间与其会话相同，续约通过会话的租约索引延长该会话持有的每个租约，
+  因此在续约途中获取的租约也会被延长。
+- 一旦会话哈希的 `PTTL` 降到 0，续约、获取和加入组都会失败。Redis 在那一毫秒内仍保留该键，所以单纯的 `PEXPIRE`
+  会让一个已经过期的会话复活。
+- 关闭会话时先删除会话，再释放其租约和组成员身份，最后删除索引，因此失败后重复关闭会把剩余工作做完。
 
 ### Cluster {#cluster}
 
@@ -119,15 +139,20 @@ val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
 （I/O 线程饥饿，或驱动在重连前一直扣着命令），这时会话可能已经死亡，而且这些节点的时钟可能与会话节点不同。
 节点之间只传递时长，因此节点时钟之间的固定偏差不会产生影响：
 
-- 获取和加入按租约节点自己的时钟授予一个完整的会话租期。在会话调用和租约调用之间运行的续约会延长会话，却延长不了会话尚未持有的租约，而任期是按这次续约的截止时刻采纳的；完整租期可以覆盖它。代价只涉及活性：如果会话在这期间死亡，授给它的租约最多比它多存活一个租期，在这段时间里占住这个名字（或留下一个过期的成员）。
-- 续约的后续脚本带上会话还剩的时长：续约后的剩余时长，减去客户端从会话调用返回起测得的时间。它们所在的节点按自己的 now 加上这个时长设上限，超过就不延长，因此租约至少与会话一样久，比会话多出的时间不超过脚本执行前的延迟。
-- 从发出会话调用起经过的时间达到会话剩余时长后，获取和加入不再发送任何脚本并失败。晚于这个时长才返回的获取会释放它开始的任期并失败，即使其他槽已经授予成功：续约会在尝试一个租期之后把丢失的租约从会话索引中移除，`owned` 就永远不会报告这样的任期。只有在这次释放失败或回复丢失时，租约才会一直不被报告，直到它自行过期。
+- 获取和加入按租约节点自己的时钟授予一个完整的会话租期。在会话调用和租约调用之间运行的续约会延长会话，却延长不了会话尚未持有的租约，
+  而任期是按这次续约的截止时刻采纳的；完整租期可以覆盖它。代价只涉及活性：如果会话在这期间死亡，授给它的租约最多比它多存活一个租期，
+  在这段时间里占住这个名字（或留下一个过期的成员）。
+- 续约的后续脚本带上会话还剩的时长：续约后的剩余时长，减去客户端从会话调用返回起测得的时间。它们所在的节点按自己的 now 加上这个时长设上限，
+  超过就不延长，因此租约至少与会话一样久，比会话多出的时间不超过脚本执行前的延迟。
+- 从发出会话调用起经过的时间达到会话剩余时长后，获取和加入不再发送任何脚本并失败。晚于这个时长才返回的获取会释放它开始的任期并失败，
+  即使其他槽已经授予成功：续约会在尝试一个租期之后把丢失的租约从会话索引中移除，`owned` 就永远不会报告这样的任期。只有在这次释放失败或回复丢失时，
+  租约才会一直不被报告，直到它自行过期。
 
 ### 主从切换后 token 回退 {#token-regression-after-a-failover}
 
 Redis 复制是异步的。当主节点在副本收到最新的 `token` 递增之前故障时，被提升的副本可能分配一个已经用过的 token，或更小的 token。
 此时检查 token 的资源可能接受一个任期在时间上更新但 token 更小的节点的写入，或拒绝合法的持有者。客户端无法阻止这种情况：
-确定性模拟会注入这类数据丢失，并确认 token 随之回退（`premise:tokenReset`），所以下面的缓解措施都在后端一侧。
+确定性模拟会注入这类数据丢失，并确认 token 随之回退（`premise:tokenReset`），所以下面的缓解措施都在后端一侧：
 
 - 设置 `simba.redis.wait-replicas`（构造参数 `waitReplicas`）：只有当这么多副本通过 `WAIT` 确认后，新任期才算数，否则获取失败。
   这会缩小窗口，但不能消除它，并且在 Cluster 上不可用。
@@ -137,9 +162,9 @@ Redis 复制是异步的。当主节点在副本收到最新的 `token` 递增�
 
 ### 内存淘汰 {#memory-eviction}
 
-租约 hash 永不过期，正是它的 `token` 字段保证了 token 递增。如果 Redis 在内存压力下淘汰了它（任何 `allkeys-*` 的
+租约哈希永不过期，正是它的 `token` 字段保证了 token 递增。如果 Redis 在内存压力下淘汰了它（任何 `allkeys-*` 的
 `maxmemory-policy`），该名称的下一次获取会从 token 1 重新开始：检查 token 的资源会拒绝新的持有者，或者让旧持有者更小的
-token 重新显得有效。会话 hash 带有 TTL，因此 `volatile-*` 策略可能淘汰它们，使会话提前结束。
+token 重新显得有效。会话哈希带有 TTL，因此 `volatile-*` 策略可能淘汰它们，使会话提前结束。
 
 - 让 Simba 使用的 Redis 采用 `maxmemory-policy noeviction`（Redis 的默认值），这样实例写满时写入会失败而不是丢弃键；
   Simba 随后报告调用失败，任期在截止时刻结束。
@@ -163,35 +188,42 @@ val backend = ZookeeperLeaseBackend("zk1:2181,zk2:2181,zk3:2181", root = "/simba
 
 `root` 默认为 `/simba`。
 
-### 工作原理 {#how-it-works-1}
+### 工作原理 {#zookeeper-how-it-works}
 
-- 一个 Simba 会话就是一个 Zookeeper 会话：后端为每个会话打开一个专用的 Zookeeper 客户端（不使用共享的 Curator 客户端），并且从不把它重连到另一个会话。
-  `SessionId` 是以 16 位十六进制数字表示的 Zookeeper 会话 id。
-- Token 是租约节点的 `czxid`：由于 zxid 是全局的，它在任期之间严格递增，但不连续。
+- **一个 Simba 会话就是一个 Zookeeper 会话。** 后端为每个会话打开一个专用的 Zookeeper 客户端（不使用共享的 Curator 客户端），
+  并且从不把它重连到另一个会话。`SessionId` 是以 16 位十六进制数字表示的 Zookeeper 会话 id。
+- **Token 是租约节点的 `czxid`**：由于 zxid 是全局的，它在任期之间严格递增，但不连续。
 - 释放会删除该节点；候选者 watch 该节点并立即接管。组成员的变化同样会被 watch，包括尚不存在的组被创建。
-- 名字从发出 create 的那一刻起就被视为"可能拥有"：即使 create 已在服务端成功而回复丢失（连接断开、超时），下一次续约在核实节点持有者后
+- 名字从发出 create 的那一刻起就被视为"可能拥有"：即使 create 已成功而回复丢失（连接断开、超时），下一次续约在核实节点持有者后
   仍会报告该租约，由引擎释放。同一会话的释放逐个执行。
 - Zookeeper 客户端会自行发送心跳，因此一个本地看门狗会关闭在租约时长内没有被续约的会话：停止续约的节点永远不会仅靠心跳保住自己的租约。
-- 只有 leader 会让会话过期；follower 在发现自己与 leader 失联之前（`syncLimit` 个 tick）会用本地状态应答读请求，并且只在下一次
-  ping 时才把会话的活动上报给 leader。因此续约会先经 leader 执行 `sync`，剩余时间为 `min(leaseDuration, 5/12 × 协商后的会话超时)`：
-  客户端至少每隔会话超时的三分之一发送一次请求，leader 每半个 tick（最多为会话超时的四分之一）ping 一次，所以 leader 最后一次看到该会话
-  不早于应答前会话超时的 `7/12`。在默认租约下，客户端因此大约每两秒续约一次，并且每个会话发布一次 `SessionLeaseShortened`。
-- 因此节点只能扛住约为会话超时 `5/12` 的停顿（GC、网络卡顿）而不丢失任期：默认 15 秒租约下约 6 秒，5.1 之前约为 15 秒；续约次数约为原来的
-  三倍，每次都多一个到 leader 的往返。`leaseDuration` 的含义不变（崩溃后其他节点在约一个租约时长内接管），所以不会放大会话超时：
-  如果更看重容忍停顿而不是故障转移时间，请调大 `simba.session.lease-duration`（例如设为 36 秒即可恢复 5.0 的容忍度，代价是崩溃后约 36 秒才会被接管）。
 - 客户端断开连接期间，或者在与 leader 失联的 follower 上，续约和获取都会失败，因此本地截止时刻会耗尽；当 Zookeeper 报告会话过期时，
   会话为 `Expired`。
 
-### 运维说明 {#operating-notes-1}
+### 为什么续约只留下超时的 5/12 {#why-a-keep-alive-leaves-5-12-of-the-timeout}
 
-- 请求的会话超时为 `leaseDuration`；集群会将其限制在 `[minSessionTimeout, maxSessionTimeout]` 之内（默认为 2 到 20 个 tick）。
-  崩溃后的故障转移需要协商后的超时时长。
+只有 Zookeeper leader 会让会话过期；follower 在发现自己与 leader 失联之前（`syncLimit` 个 tick）会用本地状态应答读请求，并且只在下一次
+ping 时才把会话的活动上报给 leader。因此 follower 上的一次成功读取并不能说明 leader 会怎么做。所以续约会先经 leader 执行 `sync`，
+并报告剩余时间 `min(leaseDuration, 5/12 × 协商后的会话超时)`：客户端至少每隔超时的三分之一发送一次请求，leader 每半个 tick
+（最多为超时的四分之一）ping 一次，所以在应答之前，leader 最后一次看到该会话距今最多为超时的 `7/12`。
+
+由此带来的影响：
+
+- 在默认租约下，客户端大约每两秒续约一次，并且每个会话发布一次 `SessionLeaseShortened`。
+- 节点只能扛住约为会话超时 `5/12` 的停顿（GC、网络卡顿）而保住任期：默认 15 秒租约下约 6 秒，5.1 之前约为 15 秒；
+  续约次数约为原来的三倍，每次都多一个到 leader 的往返。
+- `leaseDuration` 的含义不变（崩溃后其他节点在约一个租约时长内接管），所以不会放大会话超时。如果更看重容忍停顿而不是故障转移时间，
+  请调大 `simba.session.lease-duration`（例如设为 36 秒即可恢复 5.0 的容忍度，代价是崩溃后约 36 秒才会被接管）。
+
+### 运维说明 {#zookeeper-operating-notes}
+
+- 请求的会话超时为 `leaseDuration`；集群会将其限制在 `[minSessionTimeout, maxSessionTimeout]` 之内（默认为 2 到 20 个 tick）。崩溃后的故障转移需要协商后的超时时长。
 - `5/12` 这个界限要求 tick 不超过会话超时的一半，也就是 `minSessionTimeout` 不低于默认的两个 tick。请不要把服务端配置得比这更低。
-- 写入经法定人数提交，因此 leader 切换不会丢失 token；只有集群数据丢失或从更早的快照恢复时，token 才可能回退。
-  会话超时按服务器的流逝时间计算，因此集群主机的墙钟跳变不会缩短它们。
 - `simba.zookeeper.connection-timeout` 限制打开会话所需的最长时间，默认等于续约间隔，超过它引擎就会放弃这次调用。之后才连上的会话不会被续约，
   看门狗会在 `leaseDuration` 之后关闭它。
-- 组名遵循 `LeaseName` 的规则（1–128 个 `[A-Za-z0-9._:-]` 字符，且不能是 `.` 或 `..`），与所有后端一致。`members` 通过本节点上最近一次 join 或 leave 该组的会话的客户端读取，
+- 写入经法定人数提交，因此 leader 切换不会丢失 token；只有集群数据丢失或从更早的快照恢复时，token 才可能回退。
+  会话超时按服务器的流逝时间计算，因此集群主机的墙钟跳变不会缩短它们。
+- 组名遵循 `LeaseName` 的规则，与所有后端一致。`members` 通过本节点上最近一次 join 或 leave 该组的会话的客户端读取，
   因此这次变化一定出现在视图中（Zookeeper 按顺序处理同一会话的请求）；读取前先执行 `sync`，让 follower 追上 leader。leader 会在本地直接应答
   `sync`，所以其他节点的变化在 leader 上可能稍晚才出现，成员变化提示和定期刷新会补上。
 
@@ -213,12 +245,9 @@ val backend = ZookeeperLeaseBackend(
   `{root}/groups/{group}` 的 ACL 决定谁能创建或删除租约和成员：请用后端的身份创建它们，或自行设置其 ACL。
 - Spring Boot：`simba.zookeeper.auth.scheme` / `simba.zookeeper.auth.credentials` 和 `simba.zookeeper.acl`
   （`auto` 在配置了凭据后使节点仅创建者可用）；`ACLProvider` bean 会替换 ACL，`ZKClientConfig` bean 用于配置所有客户端
-  （见[配置](./configuration.md)）。
+  （见 [Spring Boot](/zh/guide/configuration#properties)）。
 
 ## 在 Spring Boot 中选择后端 {#selecting-a-backend-in-spring-boot}
 
-当后端模块在 classpath 上、`simba.enabled` 和 `simba.<backend>.enabled` 不为 `false`、并且 `simba.backend` 未设置或指向它时，
-对应后端的自动配置生效。除非应用自己定义了 `LeaseBackend` bean，否则它会定义该 bean。
-
-当 classpath 上有多个后端模块时，请设置 `simba.backend=jdbc|redis|zookeeper`；否则启动会失败，`simba.backend` 指向一个未生效的后端时也会失败。
-要使用 starter 不负责配置的后端（或你自己的 `LeaseBackend`），请自行定义 `LeaseBackend` bean。见 [Spring Boot](/zh/guide/configuration)。
+starter 会启用其模块在 classpath 上的后端；有多个时，请设置 `simba.backend`。具体规则见
+[Spring Boot](/zh/guide/configuration#selecting-the-backend)。

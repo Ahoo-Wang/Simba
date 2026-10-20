@@ -1,13 +1,46 @@
 ---
-title: Leader Work and Partitions
-description: Run work bound to a term with runWhileLeader, schedule it with fixed delay or rate, spread partitions over the live nodes with partition groups, and use @SimbaScheduled and @SimbaPartitioned.
+title: Elections and Leader Work
+description: Contend for leadership with elections, run work bound to a term with runWhileLeader, schedule it with fixed delay or rate, spread partitions over the live nodes with partition groups, and use @SimbaScheduled and @SimbaPartitioned.
 ---
 
-# Leader Work and Partitions
+# Elections and Leader Work
 
-Work started through Simba is **bound to one term**: it receives that `Term`, runs only while the term lasts, and is
-interrupted when the term ends. It never reads "the current leadership state", so a run that started in one term can
-never pick up the token of a later one.
+An **election** is the long-running form of a lease: the node contends for a name, holds a term while it can, and
+contends again whenever it loses one. What you usually want, though, is not "know that I lead" but "run this code only
+while I lead". Simba therefore offers four levels, each built on the one before:
+
+| Level | API | You get |
+|---|---|---|
+| Listen | `election.start(listener)` | `onElected` / `onRevoked`; the work is yours to start, stop and hand over |
+| Run | `election.runWhileLeader { term -> }` | A block per term, interrupted when the term ends, handed over in order |
+| Schedule | `election.schedule(schedule) { term -> }` | A loop per term on a fixed delay or rate |
+| Partition | `simba.group(name, n).schedule { term, partition -> }` | N elections spread over the live nodes |
+
+Prefer the highest level that fits. Work started through Simba is **bound to one term**: it receives that `Term`, runs
+only while the term lasts, and is interrupted when it ends. It never reads "the current leadership state", so a run
+that started in one term can never use the token of a later one, and `stop()` waits for it before releasing the lease
+([Handover Order](/guide/concepts#handover-order)).
+
+## Elections
+
+```kotlin
+val election = simba.election("order-dispatcher")
+election.start(object : LeadershipListener {
+    override fun onElected(term: Term) = dispatcher.start(term.token)
+    override fun onRevoked(term: Term, reason: RevokeReason) = dispatcher.stop()
+})
+```
+
+| Member | Behavior |
+|---|---|
+| `start(listener)` | Starts contending; throws `IllegalStateException` while the name is already started on this client |
+| `stop()` | Stops contending; the `CompletionStage` completes after the last `onRevoked` ran (at once when not started) |
+| `stepDown(cooldown)` | Gives up the current term and does not contend for `cooldown`; the election stays started |
+
+Handles returned by `simba.election(name)` for the same name share one election. Callbacks run one at a time per
+election and must stay short; see [Callbacks and Lifecycle](/guide/concepts#callbacks-and-lifecycle). With a bare
+listener nothing waits for your work before the lease is released, so prefer `runWhileLeader` for anything that runs
+for a while.
 
 ## Run While Leader
 
@@ -27,9 +60,11 @@ val task: LeaderTask = simba.election("ingest").runWhileLeader { term ->
   interruption or when `term.isValid` turns `false`.
 - A block that returns early keeps the term until it ends; the block does not run again until the next term.
 - Exceptions are logged and published as `SimbaEvent.WorkCompleted` with outcome `FAILED` (or `CANCELLED` once the term
-  has ended); they never affect the election.
+  has ended); they never affect the election. The exception is a `VirtualMachineError` (out of memory, stack
+  overflow): it ends the term's work, the election steps down for one lease duration, and the error is rethrown to the
+  work thread.
 - `task.stop()` stops the election and completes once the current work exited (or ran out of time) and the lease is
-  released; `task.close()` does the same and waits. See [Handover Order](/guide/correctness#handover-order).
+  released; `task.close()` does the same and waits.
 
 `runWhileLeader` and `schedule` throw `IllegalStateException` when the election is already started on this client.
 
@@ -51,13 +86,14 @@ simba.election("report").schedule(
 | `Schedule.fixedDelay(delay, initialDelay = 0)` | From the end of one run to the start of the next |
 | `Schedule.fixedRate(period, initialDelay = 0)` | Between scheduled starts; a run that overruns skips the missed starts instead of bursting |
 
-`initialDelay` counts from the start of each term. A failed run (an `Error` included) is logged and published, and the loop goes on; a `VirtualMachineError` ends the loop and steps the election down for one lease duration; the
-loop ends with its term. There is no thread pool per schedule.
+`initialDelay` counts from the start of each term, and the period must be positive. A failed run (an `Error` included)
+is logged and published, and the loop goes on; a `VirtualMachineError` ends the loop and steps the election down for
+one lease duration. The loop ends with its term. There is no thread pool per schedule.
 
 ## Partition Groups
 
-A partition group spreads `partitions` partitions over the live nodes of the group, each partition on exactly one
-node at a time:
+Some work splits into independent shards, and you want every live node to take a share, each shard on exactly one node
+at a time. A partition group spreads `partitions` partitions over the live nodes of the group:
 
 ```kotlin
 val task: GroupTask = simba.group("billing", partitions = 16)
@@ -68,19 +104,29 @@ val task: GroupTask = simba.group("billing", partitions = 16)
 task.partitions()   // partitions this node runs in its latest view
 ```
 
-How it works:
+It is built from parts you already know:
 
-1. The client's session joins the group on the backend; members are the group's live sessions, so membership needs no
+```mermaid
+graph LR
+    J["Each session joins<br>group 'billing'"] --> M["Members =<br>the group's live sessions"]
+    M --> A["Every node computes the same<br>rendezvous assignment<br>over the session ids"]
+    A --> C["A node contends only for<br>its partitions: lease 'billing.p'"]
+    A --> H["and hands over the ones<br>it no longer owns:<br>work first, then the lease"]
+```
+
+1. **Membership is the session.** The client's session joins the group on the backend, so membership needs no
    heartbeat of its own and disappears with the session.
-2. Every node computes the same assignment from the member list with rendezvous hashing (`PartitionAssignment`, over
-   session ids), so adding or removing a node moves only the partitions it gains or loses.
-3. Each partition `p` is an ordinary election of the lease `"{group}.{p}"`. A node contends only for the partitions
-   assigned to it, and hands over (work first, then the lease) the ones it no longer owns.
+2. **Assignment is computed, not negotiated.** Every node derives the same assignment from the member list with
+   rendezvous hashing (`PartitionAssignment`, over session ids), so a node joining or leaving moves only the partitions
+   it gains or loses.
+3. **Each partition is an ordinary election** of the lease `"{group}.{p}"`. A node contends only for the partitions
+   assigned to it and hands over the others with the usual [handover order](/guide/concepts#handover-order).
 4. The member view is refreshed on backend membership hints (Zookeeper) and every renew interval.
 
-The lease guarantees that a partition never has two valid terms at once, even while nodes disagree about the member
-list during a change; the assignment only decides who contends. Every member must use the same `partitions`. The
-group name follows the lease name rules, and `"{group}.{partitions - 1}"` must fit in 128 characters.
+While nodes disagree about the member list during a change, two of them may both want a partition, but the lease still
+lets at most one hold a valid term: the assignment only decides who *contends*. Every member must use the same
+`partitions`. The group name follows the lease name rules, and `"{group}.{partitions - 1}"` must fit in 128
+characters.
 
 `runWhileLeader { term, partition -> }` is available too. `GroupTask.stop()` leaves the group and stops every
 partition, completing once each one handed over, including partitions an earlier view moved away that are still
@@ -130,14 +176,15 @@ public class Billing {
 The method takes `(Term, int)`.
 
 String attributes of both annotations accept `${...}` placeholders, and durations use the Spring Boot formats (`10s`,
-`500ms`, `PT1M`). Methods start after the context refreshed and stop on shutdown before the client closes; see
-[Shutdown Order](/guide/configuration#shutdown-order). Disable them with `simba.scheduling.enabled=false`.
+`500ms`, `PT1M`). The lease names they elect and the groups share one namespace across both annotations: startup fails
+on a conflict. Methods start after the context refreshed and stop on shutdown before the client closes (see
+[Shutdown Order](/guide/configuration#shutdown-order)); disable them with `simba.scheduling.enabled=false`.
 
 ## Writing Good Leader Work
 
 - **Pass `term.token` to every write** the work makes to a shared resource. A paused node can still land a write after
-  its term ended; only a resource that checks the [fencing token](/guide/correctness#fencing-tokens) rejects it.
-- **Stop on interruption.** Blocking I/O that ignores interruption delays the handover up to the term's remaining
+  its term ended; only a resource that checks the [fencing token](/guide/correctness#the-fencing-protocol) rejects it.
+- **Stop on interruption.** Blocking I/O that ignores interruption delays the handover by up to the term's remaining
   time.
 - **Check before long steps:** `term.ensureValid(expectedStepDuration)` throws `TermExpiredException` instead of
   starting a step that would outlive the term.

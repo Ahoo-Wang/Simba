@@ -6,20 +6,22 @@ description: Map Simba 4.x APIs, properties, schema and Redis keys to Simba 5.0,
 # Migrating from 4.x to 5.0
 
 Simba 5 is a rewrite ([ADR 0010](https://github.com/Ahoo-Wang/Simba/blob/main/docs/adr/0010-simba-5-target-architecture.md)):
-one session per process instead of one lease per mutex, a `Term` object instead of owner state, and one engine for
-all three backends. It is **not compatible** with 4.x in source, in binary, or on the wire:
+one session per process instead of one lease per mutex, a `Term` object instead of owner state, and one engine for all
+three backends. It is **not compatible** with 4.x in source, in binary, or on the wire:
 
-- the JDBC tables, Redis keys and Zookeeper paths are different, so a 4.x node and a 5.x node do not see each other's
-  leases and would both lead;
+- the JDBC tables, Redis keys and Zookeeper paths are different;
 - the configuration properties and the Spring beans are different;
 - Java 21 is required, and the starter needs Spring Boot 4.1 or later;
 - the Redis backend is split: `simba-redis` alone only defines the `RedisScripting` port and cannot run. Depend on
   `simba-spring-redis` (Spring Data Redis with Lettuce, which brings `simba-redis`), or implement `RedisScripting` for
   another client.
 
-You therefore cannot roll the upgrade node by node. **Stop every node that contends for the same names, then start
-them on 5.0.** If a short double run would be harmful, make sure no 4.x node is running before the first 5.0 node
-starts.
+## Why Every Node Must Stop
+
+Mutual exclusion only works between nodes that look at the same lease. A 4.x node and a 5.0 node store their leases in
+different places, so each sees the name as free and both would lead. You therefore cannot roll this upgrade node by
+node: **stop every node that contends for the same names, then start them on 5.0.** If even a short double run would
+be harmful, make sure no 4.x node is running before the first 5.0 node starts.
 
 ## Steps
 

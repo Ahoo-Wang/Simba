@@ -11,9 +11,13 @@ pnpm install
 pnpm run dev          # Dev server
 pnpm run build        # Build; run before committing
 pnpm run preview      # Preview the build
-pnpm run fix:mermaid  # Validate and fix Mermaid syntax; run after editing diagrams
+pnpm run fix:mermaid  # Fix common Mermaid syntax issues; run after editing diagrams
+pnpm run check:mermaid # Parse every Mermaid diagram in headless Chrome ($CHROME_BIN, else Chrome on PATH or macOS)
 pnpm run sync:llms    # Regenerate llms-full.txt from the English pages
 ```
+
+The `Deploy Wiki to GitHub Pages` workflow builds the site and runs `check:mermaid` and `check:llms` on every pull
+request that touches `wiki/`, and deploys from `main`.
 
 ## Layout
 
@@ -22,13 +26,14 @@ page owns the topic.
 
 | Page | Owns |
 |---|---|
-| `guide/index.md` | What Simba guarantees and does not; choosing an API and a backend |
+| `guide/index.md` | Why Simba: the problem from first principles, what Simba guarantees and does not, choosing an API and a backend |
 | `guide/quick-start.md` | Dependencies, backend wiring, first code for each API, use without Spring |
-| `guide/correctness.md` | Sessions, local deadline, leases, terms, fencing tokens, timing, handover order, callbacks, failure modes |
-| `guide/backends.md` | Per-backend storage (schema, keys, paths), fencing source, operating notes, `simba.backend` selection |
-| `guide/configuration.md` | Spring Boot: every `simba.*` property, starter beans, shutdown order, `Simba.builder()` without Spring |
-| `guide/leader-work.md` | `runWhileLeader`, `Schedule`, partition groups, `@SimbaScheduled`, `@SimbaPartitioned` |
-| `guide/locks.md` | `lock(name)`, `LockTerm`, early loss |
+| `guide/concepts.md` | How Simba works: sessions, local deadline, leases, terms, tokens, candidates, election lifecycle, handover order, callbacks, timing |
+| `guide/correctness.md` | Fencing and failures: why validity is not enough, the fencing protocol and recipes, token sources, `ensureValid`, failure modes |
+| `guide/backends.md` | Backend requirements, per-backend storage (schema, keys, paths), fencing source, operating notes |
+| `guide/configuration.md` | Spring Boot: every `simba.*` property, `simba.backend` selection, starter beans, shutdown order, `Simba.builder()` without Spring |
+| `guide/leader-work.md` | Elections, `runWhileLeader`, `Schedule`, partition groups, `@SimbaScheduled`, `@SimbaPartitioned` |
+| `guide/locks.md` | `lock(name)` (blocking, async, coroutines), `LockTerm`, early loss |
 | `guide/observability.md` | Snapshot, events, metrics, alert rules, Actuator endpoint, health indicator |
 | `guide/testing.md` | In-memory backend, virtual time, simulation, `FencingSpec`, `LeaseBackendSpec` |
 | `guide/upgrading.md` | Versioning policy, upgrades within 5.x |
@@ -53,8 +58,13 @@ page owns the topic.
   (`https://github.com/Ahoo-Wang/Simba/blob/main/<path>`) without line anchors, which drift.
 - Verify every claim against the code. Never claim more than `../AGENTS.md` guarantees (e.g. no split-brain, or work
   continuing while the backend is down).
-- Mermaid: dark-mode colors (`#2d333b` fills, `#6d5dfc` borders, `#e6edf3` text), `<br>` not `<br/>`
-  (Vue compiler), and `autonumber` in sequence diagrams.
+- Start each page from the reader's problem and derive the mechanism from it; state the contract, then the details.
+- Add a diagram only when it explains a mechanism that prose explains worse (a sequence, a state machine, a data
+  flow). Diagrams render through `vitepress-plugin-mermaid` and `.vitepress/theme/Mermaid.vue` (as in CoCache): the
+  component follows the light/dark theme and adds zoom, pan and an expanded view, so never add `style`, `classDef` or
+  `linkStyle` lines. Use `<br>` not `<br/>` (Vue compiler), `autonumber` in sequence diagrams, and never `;` in
+  sequence-diagram message text. Run `pnpm run check:mermaid` after editing diagrams.
+- Write any text containing `<…>`, such as `CompletionStage<Void>`, in backticks; otherwise Vue parses it as HTML.
 
 ## Boundaries
 
