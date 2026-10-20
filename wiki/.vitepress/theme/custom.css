@@ -61,3 +61,28 @@
   --vp-font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   --vp-font-family-mono: 'JetBrains Mono', 'Fira Code', Menlo, Monaco, Consolas, 'Courier New', monospace;
 }
+
+/* Home hero animation: on narrow screens put it above the title, without the default image's negative margin */
+@media (max-width: 959px) {
+  .VPHero .image {
+    margin: 0 0 16px;
+  }
+
+  .VPHero .image-container {
+    width: min(320px, 100%);
+    height: auto;
+    aspect-ratio: 400 / 380;
+  }
+}
+
+/* Home hero animation: more room on wide screens (the default is 320px) */
+@media (min-width: 960px) {
+  .VPHero .image-container {
+    width: 420px;
+    height: 400px;
+  }
+
+  .VPHero .image-container .simba-hero {
+    max-width: 420px;
+  }
+}
