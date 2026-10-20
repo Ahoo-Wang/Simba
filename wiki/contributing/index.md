@@ -26,7 +26,7 @@ You need JDK 21 and Docker.
 
 | Module | Test infrastructure |
 |---|---|
-| `simba-core`, `simba-testing`, `simba-tck` | None |
+| `simba-core`, `simba-testing`, `simba-tck`, `simba-coroutines` | None |
 | `simba-zookeeper` | Embedded Curator `TestingServer` |
 | `simba-redis` (also covers `simba-spring-redis`) | Testcontainers `redis:7.4-alpine` (`RedisFixture`) |
 | `simba-jdbc` | Testcontainers `mysql:8.4` and `postgres:17` (`LeaseDatabaseFixture`) |

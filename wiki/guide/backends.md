@@ -121,16 +121,16 @@ val backend = RedisLeaseBackend(SpringRedisScripting(redisConnectionFactory))
 Release publishes `released` on the lease key's channel (`simba:lease:{name}`); it is the only broadcast and lets
 candidates take over at once. Every time decision uses Redis `TIME` inside the scripts.
 
-Leases expire on their own: a new term lasts as long as its session, and a
-keep-alive extends every lease the session holds, found through its lease index, so a lease acquired while a
-keep-alive was in flight is extended too. Closing a session deletes it first, then frees its leases and memberships,
-then drops its indexes, so a close repeated after a failure finishes the job.
+Leases expire on their own: a new term lasts as long as its session, and a keep-alive extends every lease the session
+holds, found through its lease index, so a lease acquired while a keep-alive was in flight is extended too. Closing a
+session deletes it first, then frees its leases and memberships, then drops its indexes, so a close repeated after a
+failure finishes the job.
 
 ### Cluster
 
 On a Redis Cluster (`RedisScripting.clustered`, or `simba.redis.route-by-slot=true`) every script call keeps to one
 hash slot: a call first touches the session's slot, then runs one script per slot of the remaining keys. Those later
-scripts can reach Redis long after the first one (a starved thread, a driver holding commands until it reconnects),
+scripts can reach Redis long after the first one (a starved I/O thread, a driver holding commands until it reconnects),
 when the session may have died, and their nodes' clocks may differ from the session node's. Only durations cross
 nodes, so a fixed skew between node clocks changes nothing:
 

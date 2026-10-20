@@ -55,7 +55,9 @@ implementation("me.ahoo.simba:simba-coroutines:${simbaVersion}")
 
 :::
 
-`simba-bom` aligns the versions of every Simba module. `simba-coroutines` (since 5.1) adds suspending lock calls, `withLock` and a `Flow` of events on top of any backend; see [Locks](/guide/locks#coroutines). Without Spring, depend on `simba-core` plus a backend module:
+`simba-bom` aligns the versions of every Simba module. `simba-coroutines` (since 5.1) adds suspending lock calls,
+`withLock` and a `Flow` of events on top of any backend; see [Locks](/guide/locks#coroutines). Without Spring, depend
+on `simba-core` plus a backend module:
 `simba-jdbc`, `simba-zookeeper`, or for Redis `simba-spring-redis` (which brings `simba-redis`). `simba-redis` alone
 only defines the `RedisScripting` port: use it without `simba-spring-redis` only with your own adapter for another
 Redis client.

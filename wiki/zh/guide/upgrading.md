@@ -39,3 +39,6 @@ Simba 在源码层面遵循 [语义化版本](https://semver.org/lang/zh-CN/)：
   [锁](/zh/guide/locks#without-blocking)。它们是默认方法，你自己的 `DistributedLock` 实现无需修改即可编译。
 - 新的可选模块 `simba-coroutines` 提供挂起版的锁调用、`withLock`、`Term.awaitRevoked()` 和 `SimbaEventFlow`；它依赖
   `kotlinx-coroutines-core`，`simba-core` 不依赖它。
+- `simba-testing`：`InMemoryLeaseBackend(ticker, selfExpiringLeases, sessionBoundGrants, sessionIds)` 可模拟 Redis
+  与会话绑定的授予；`SimulationParams` 新增 `sessionBoundGrants`、`truncatedGrantShare`、`meanInjectionInterval`、
+  `groupPartitions` 和 `earlyCloseShare`（参阅[测试](/zh/guide/testing#deterministic-simulation)）。已有的构造器和参数保持不变。

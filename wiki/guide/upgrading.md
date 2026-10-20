@@ -44,3 +44,7 @@ and you can roll an upgrade node by node. Release notes list every change:
   keep compiling unchanged.
 - The new optional module `simba-coroutines` adds suspending lock calls, `withLock`, `Term.awaitRevoked()` and
   `SimbaEventFlow`; it depends on `kotlinx-coroutines-core`, which `simba-core` does not.
+- `simba-testing`: `InMemoryLeaseBackend(ticker, selfExpiringLeases, sessionBoundGrants, sessionIds)` models Redis's
+  session-bound grants, and `SimulationParams` adds `sessionBoundGrants`, `truncatedGrantShare`,
+  `meanInjectionInterval`, `groupPartitions` and `earlyCloseShare` (see [Testing](/guide/testing#deterministic-simulation)).
+  The existing constructors and parameters are unchanged.
