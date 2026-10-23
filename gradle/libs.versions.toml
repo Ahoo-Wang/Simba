@@ -1,6 +1,6 @@
 [versions]
 # libraries
-spring-boot = "4.1.1"
+spring-boot = "4.1.2"
 testcontainers = "2.0.5"
 curator = "5.9.0"
 kotlin-logging = "8.0.4"
