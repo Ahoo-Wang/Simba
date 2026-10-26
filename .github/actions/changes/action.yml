@@ -14,7 +14,8 @@
 name: Changes
 description: >-
   Tells whether the build needs to run: false only for a pull request that changes documentation alone (wiki/**,
-  docs/**, skills/**, llms.txt, *.md). Every other event builds.
+  docs/**, skills/**, llms.txt, *.md, and the wiki's own workflow, which builds the wiki itself). Every other event
+  builds.
 inputs:
   token:
     description: Token that may read the pull request's files.
@@ -44,7 +45,7 @@ runs:
             code=false
             while IFS= read -r file; do
               case "$file" in
-                wiki/* | docs/* | skills/* | llms.txt | *.md) ;;
+                wiki/* | docs/* | skills/* | llms.txt | *.md | .github/workflows/deploy-wiki.yml) ;;
                 *) echo "Builds: $file is not documentation"; code=true; break ;;
               esac
             done <<< "$files"
