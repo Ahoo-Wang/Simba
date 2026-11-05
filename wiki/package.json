@@ -14,7 +14,7 @@
   },
   "packageManager": "pnpm@12.16.1",
   "devDependencies": {
-    "mermaid": "^12.2.0",
+    "mermaid": "^12.3.0",
     "sitemap": "^9.0.1",
     "svg-pan-zoom": "^3.6.2",
     "vitepress": "^1.6.4",
