@@ -3,7 +3,7 @@
 spring-boot = "4.1.2"
 testcontainers = "2.0.5"
 curator = "5.9.0"
-kotlin-logging = "8.0.4"
+kotlin-logging = "8.0.6"
 kotlinx-coroutines = "1.11.0"
 junit = "6.1.3"
 fluent-assert = "1.2.1"
