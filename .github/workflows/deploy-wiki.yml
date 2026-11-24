@@ -40,7 +40,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
         with:
-          version: 12.21.0
+          version: 12.23.0
 
       - name: Setup Pages
         if: ${{ github.event_name != 'pull_request' }}
